@@ -113,10 +113,10 @@
 //        value, declare `lend` so the change is visible at every call site.
 
 shape Order {
-  quantity: int
+  quantity: Int
 }
 
-function bumpQuantity(share pickle: Order) -> nothing {
+function bumpQuantity(share pickle: Order) -> Nothing {
   // WHY: ShareParamMutation — `pickle` is declared `share` (read-only); writing
   // a field of it contradicts the read-only borrow. Declare `lend pickle: Order`
   // to mutate. Bare `pickle: Order` would also compile (the compiler figures out lend).
@@ -140,11 +140,11 @@ function bumpQuantity(share pickle: Order) -> nothing {
 //        unchanged. Because `stamp` modifies `ticket`, this function lends it onward —
 //        declare `lend` so the write is visible at every call site.
 
-function stamp(order: Order) -> nothing {
+function stamp(order: Order) -> Nothing {
   order.quantity = order.quantity + 10
 }
 
-function relayOrder(share ticket: Order) -> nothing {
+function relayOrder(share ticket: Order) -> Nothing {
   // WHY: ShareParamMutation (transitive) — `ticket` is `share` (read-only) but `stamp`
   // mutates it. Declare `lend ticket: Order` to lend it onward for mutation.
   stamp(ticket)
@@ -160,15 +160,15 @@ function relayOrder(share ticket: Order) -> nothing {
 //
 // Diagnostic (WHAT / WHAT-INSTEAD / WHY):
 //   WHAT: `lineItems` is declared `share` — read-only — so its elements cannot be changed.
-//   WHAT INSTEAD: Change the parameter to `lend lineItems: array<int>` if this function
+//   WHAT INSTEAD: Change the parameter to `lend lineItems: Array<Int>` if this function
 //                 needs to modify it.
 //   WHY: A `share` parameter is a read-only borrow: the caller keeps ownership and trusts
 //        the value is unchanged after the call. When a function modifies a value, declare
 //        `lend` so the change is visible at every call site.
 
-function appendLineItem(share lineItems: array<int>) -> nothing {
+function appendLineItem(share lineItems: Array<Int>) -> Nothing {
   // WHY: ShareParamMutation (collection) — `.add()` appends in place, mutating the receiver.
-  // `lineItems` is `share` (read-only); declare `lend lineItems: array<int>` to grow it.
+  // `lineItems` is `share` (read-only); declare `lend lineItems: Array<Int>` to grow it.
   lineItems.add(42)
 }
 
@@ -189,7 +189,7 @@ function appendLineItem(share lineItems: array<int>) -> nothing {
 //        trusts the value is unchanged after the call. When a function modifies a
 //        value, declare `lend` so the change is visible at every call site.
 
-function discountSelf(share self: Order) -> nothing {
+function discountSelf(share self: Order) -> Nothing {
   // WHY: ShareParamMutation (share self) — `self` is `share` (read-only); writing a
   // field of the receiver contradicts the read-only borrow. Declare `lend self: Order`.
   self.quantity = self.quantity - 1
@@ -205,15 +205,15 @@ function discountSelf(share self: Order) -> nothing {
 //
 // Diagnostic (WHAT / WHAT-INSTEAD / WHY):
 //   WHAT: `prices` is declared `share` — read-only — so its elements cannot be changed.
-//   WHAT INSTEAD: Change the parameter to `lend prices: array<int>` if this function
+//   WHAT INSTEAD: Change the parameter to `lend prices: Array<Int>` if this function
 //                 needs to modify it.
 //   WHY: A `share` parameter is a read-only borrow: the caller keeps ownership and trusts
 //        the value is unchanged after the call. When a function modifies a value, declare
 //        `lend` so the change is visible at every call site.
 
-function overwriteFirst(share prices: array<int>) -> nothing {
+function overwriteFirst(share prices: Array<Int>) -> Nothing {
   // WHY: ShareParamMutation (element) — `prices[0] = ...` writes an element in place,
-  // mutating the receiver. `prices` is `share` (read-only); declare `lend prices: array<int>`.
+  // mutating the receiver. `prices` is `share` (read-only); declare `lend prices: Array<Int>`.
   prices[0] = 99
 }
 
@@ -234,11 +234,11 @@ function overwriteFirst(share prices: array<int>) -> nothing {
 //        the value is unchanged after the call. Passing it where the value will be modified
 //        would break that promise; declare `lend` so the change is visible at every call site.
 
-function applyDiscount(lend voucher: Order) -> nothing {
+function applyDiscount(lend voucher: Order) -> Nothing {
   voucher.quantity = voucher.quantity - 5
 }
 
-function forwardVoucher(share voucher: Order) -> nothing {
+function forwardVoucher(share voucher: Order) -> Nothing {
   // WHY: ShareParamMutation (escalation) — `voucher` is `share` (read-only) but
   // `applyDiscount` declares its parameter `lend`. Passing a read-only borrow where a
   // mutable borrow is required is a compile error. Declare `lend voucher: Order` to escalate.

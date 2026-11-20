@@ -1,5 +1,5 @@
 // Basic fixture for LSP lifecycle tests.
-function entrypoint() -> nothing {
-    let x: int = 42
+function entrypoint() -> Nothing {
+    let x: Int = 42
     print(x.toString())
 }

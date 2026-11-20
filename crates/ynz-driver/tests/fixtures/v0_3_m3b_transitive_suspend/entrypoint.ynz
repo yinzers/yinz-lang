@@ -3,11 +3,11 @@
 // Expected output: "delay done\ntask done\ncaller done"
 import { runTask } from `task_ops`
 
-function caller() -> nothing {
+function caller() -> Nothing {
   runTask()
   print(`caller done`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   caller()
 }

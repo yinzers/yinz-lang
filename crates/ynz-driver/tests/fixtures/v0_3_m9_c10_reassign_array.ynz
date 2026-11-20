@@ -2,9 +2,9 @@
 // iterated binding (twice per pass here). The old list lives until the loop ends; the second
 // list of each pass is released at once. Correct behavior: prints 3, 9, 1.
 
-function entrypoint() -> nothing {
-  let matrix: array<array<int>> = [[1, 2], [3, 4], [5, 6]]
-  let kept: array<array<int>> = []
+function entrypoint() -> Nothing {
+  let matrix: Array<Array<Int>> = [[1, 2], [3, 4], [5, 6]]
+  let kept: Array<Array<Int>> = []
   for (row in matrix) {
     kept.add(row.copy())
     matrix = [[9], [8]]

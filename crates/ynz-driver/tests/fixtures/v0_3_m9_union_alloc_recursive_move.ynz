@@ -6,10 +6,10 @@
 // allocations: 100 more than `v0_3_m9_union_alloc_recursive_chain.ynz`, one cell per move.
 
 shape End {
-  flag: boolean
+  flag: Boolean
 }
 shape Node {
-  value: int
+  value: Int
   next: Node | End
 }
 
@@ -21,7 +21,7 @@ function build() -> Node {
   return top
 }
 
-function length(share chain: Node | End) -> int {
+function length(share chain: Node | End) -> Int {
   if (chain) {
     is Node => {
       return 1 + length(chain.next)
@@ -33,7 +33,7 @@ function length(share chain: Node | End) -> int {
   return 0
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let total = 0
   let round = 0
   while (round < 100) {

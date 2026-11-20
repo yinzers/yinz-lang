@@ -27,13 +27,13 @@
 // (or per name+type), not once per name.
 
 shape Point {
-  x: int
-  y: int
+  x: Int
+  y: Int
 }
 
-function entrypoint() -> nothing {
-  let pts: array<Point> = [{ x: 111, y: 222 }]
-  let names: array<string> = [`anchor`, `harbor`]
+function entrypoint() -> Nothing {
+  let pts: Array<Point> = [{ x: 111, y: 222 }]
+  let names: Array<String> = [`anchor`, `harbor`]
   for (p in pts) {
     wait sleep(0)
     print(p.x.toString())

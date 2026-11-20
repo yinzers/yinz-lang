@@ -1,5 +1,5 @@
 // Card #419: an int literal under a `float` hint must be an f64 constant, not i64 bits.
-function entrypoint() -> nothing {
-  let whole: float = 2
+function entrypoint() -> Nothing {
+  let whole: Float = 2
   print(whole)
 }

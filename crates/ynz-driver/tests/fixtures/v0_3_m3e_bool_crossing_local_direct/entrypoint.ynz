@@ -5,13 +5,13 @@
 // Expected output: "before: true\nafter: true"
 import { fetchFlag } from `io_ops`
 
-function caller() -> nothing {
-  let flag: boolean = true
+function caller() -> Nothing {
+  let flag: Boolean = true
   print(`before: ${flag.toString()}`)
   fetchFlag()
   print(`after: ${flag.toString()}`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   caller()
 }

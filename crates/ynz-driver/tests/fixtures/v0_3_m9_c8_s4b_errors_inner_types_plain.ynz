@@ -6,58 +6,58 @@
 // allocation freed, clean under AddressSanitizer at both optimization levels.
 
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Thing = Tiny | Big
-shape Mixed = string | int
+shape Mixed = String | Int
 
-function aShape(n: int) -> Big errors {
+function aShape(n: Int) -> Big errors {
   let big: Big = { label: `s${n}`, count: n }
   return big
 }
-function aMaybeShape(n: int) -> maybe<Big> errors {
-  let items: array<Big> = [{ label: `ms${n}`, count: n }]
+function aMaybeShape(n: Int) -> Maybe<Big> errors {
+  let items: Array<Big> = [{ label: `ms${n}`, count: n }]
   let found = items.get(0)
   return found
 }
-function aUnion(n: int) -> Thing errors {
+function aUnion(n: Int) -> Thing errors {
   let big: Big = { label: `u${n}`, count: n }
   return big
 }
-function aMixed(n: int) -> Mixed errors {
+function aMixed(n: Int) -> Mixed errors {
   let text: Mixed = `mixed${n}`
   return text
 }
-function aMaybeString(n: int) -> maybe<string> errors {
-  let items: array<string> = [`m${n}`]
+function aMaybeString(n: Int) -> Maybe<String> errors {
+  let items: Array<String> = [`m${n}`]
   let found = items.get(0)
   return found
 }
-function aMaybeMixed(n: int) -> maybe<Mixed> errors {
+function aMaybeMixed(n: Int) -> Maybe<Mixed> errors {
   let text: Mixed = `mm${n}`
-  let items: array<Mixed> = []
+  let items: Array<Mixed> = []
   items.add(text)
   let found = items.get(0)
   return found
 }
-function anArray(n: int) -> array<string> errors {
-  let items: array<string> = [`a${n}`, `b`]
+function anArray(n: Int) -> Array<String> errors {
+  let items: Array<String> = [`a${n}`, `b`]
   return items
 }
-function aMap(n: int) -> map<string, string> errors {
-  let table: map<string, string> = {}
+function aMap(n: Int) -> Map<String, String> errors {
+  let table: Map<String, String> = {}
   table[`k`] = `v${n}`
   return table
 }
-function aBig(n: int) -> number errors {
+function aBig(n: Int) -> Number errors {
   return 123456789012345678901234567890123456789.5
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = aShape(1)
   let b = aMaybeShape(2)
   let c = aUnion(3)

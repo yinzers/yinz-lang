@@ -11,22 +11,22 @@
 // Expected output (byte-identical default vs --no-auto-parallel): done
 
 shape Box {
-  v: int
+  v: Int
 }
 
-function readBox(share b: Box) -> int {
-  let snapshot: int = b.v
+function readBox(share b: Box) -> Int {
+  let snapshot: Int = b.v
   wait sleep(150)
   return snapshot
 }
 
-function readBox2(share b: Box) -> int {
-  let snapshot: int = b.v
+function readBox2(share b: Box) -> Int {
+  let snapshot: Int = b.v
   wait sleep(150)
   return snapshot
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let p: Box = { v: 10 }
   let q: Box = { v: 20 }
   let a = readBox(p)

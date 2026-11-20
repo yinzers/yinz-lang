@@ -6,22 +6,22 @@
 // nowhere once dynamic dispatch is lowered).
 
 shape Printable {
-  display(share self, share extra: int) -> nothing
+  display(share self, share extra: Int) -> Nothing
 }
 
 shape Player follows Printable {
-  name: string
+  name: String
 }
 
-function display(share self: Player, share extra: int) -> nothing {
+function display(share self: Player, share extra: Int) -> Nothing {
   print(self.name)
 }
 
-function showDynamic(shown: dynamic Printable) -> nothing {
+function showDynamic(shown: dynamic Printable) -> Nothing {
   shown.display()
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let player: Player = { name: `hero` }
   showDynamic(player)
 }

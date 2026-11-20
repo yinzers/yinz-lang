@@ -6,12 +6,12 @@
 // is nothing to segment for: SoA buys zero cache locality, AoS stays optimal.
 // Asserted verdict: NoPerFieldLoopAccess.
 shape Point {
-  x: int
-  y: int
+  x: Int
+  y: Int
 }
 
-function entrypoint() -> nothing {
-  let pts: array<Point> = [
+function entrypoint() -> Nothing {
+  let pts: Array<Point> = [
     { x: 1, y: 2 },
     { x: 2, y: 4 },
     { x: 3, y: 6 },

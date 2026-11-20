@@ -3,15 +3,15 @@
 // No explicit `wait` tokens needed in outer or the entrypoint: the analysis infers it.
 // Expected: compiles clean; outer and inner both suspending under the transitive predicate.
 
-function inner() -> nothing {
+function inner() -> Nothing {
   sleep(50)
 }
 
-function outer() -> nothing {
+function outer() -> Nothing {
   inner()
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background outer()
   print(`scheduled outer`)
 }

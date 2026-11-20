@@ -6,17 +6,17 @@
 // Expected output (correct):
 //   3.14
 //   true
-function priceCall() -> number {
+function priceCall() -> Number {
   wait sleep(40)
   return 3.14
 }
 
-function flagFn() -> boolean {
+function flagFn() -> Boolean {
   wait sleep(40)
   return true
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let price = priceCall()
   let flag = flagFn()
   wait sleep(1)

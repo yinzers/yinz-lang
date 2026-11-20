@@ -3,17 +3,17 @@
 // Before: the parent read count 0 and the strings were never released.
 // Expected output: the count, then the last name.
 
-function build() -> fixed<string> {
+function build() -> Fixed<String> {
   wait sleep(1)
-  let names: fixed<string> = [`a`.toUpperCase(), `b`.toUpperCase()]
+  let names: Fixed<String> = [`a`.toUpperCase(), `b`.toUpperCase()]
   return names
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let task = background build()
   wait sleep(20)
   let got = task.receive()
-  let fallback: fixed<string> = [`x`, `y`]
+  let fallback: Fixed<String> = [`x`, `y`]
   let list = got.or(fallback)
   print(list.count())
   print(list[1].or(`?`))

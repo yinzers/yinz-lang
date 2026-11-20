@@ -11,35 +11,35 @@
 //
 // Expected output (one per line): 8, 3, 2, 12
 
-function callee(enter: boolean) -> int {
-  let kept: array<int> = [1, 2, 3]
-  let extra: array<int> = [4, 5]
+function callee(enter: Boolean) -> Int {
+  let kept: Array<Int> = [1, 2, 3]
+  let extra: Array<Int> = [4, 5]
   wait sleep(1)
   if (enter) {
-    let inner: array<int> = [6]
+    let inner: Array<Int> = [6]
     wait sleep(1)
     return kept.count() + extra.count() + inner.count() + 2
   }
   return kept.count()
 }
 
-function depth(level: int) -> int {
-  let mine: array<int> = [level, level]
+function depth(level: Int) -> Int {
+  let mine: Array<Int> = [level, level]
   wait sleep(1)
   if (level == 0) {
     return mine.count()
   }
-  let below: int = depth(level - 1)
+  let below: Int = depth(level - 1)
   return below + mine.count()
 }
 
-function entrypoint() -> nothing {
-  let entered: int = callee(true)
+function entrypoint() -> Nothing {
+  let entered: Int = callee(true)
   print(entered.toString())
-  let skipped: int = callee(false)
+  let skipped: Int = callee(false)
   print(skipped.toString())
-  let shallow: int = depth(0)
+  let shallow: Int = depth(0)
   print(shallow.toString())
-  let deep: int = depth(5)
+  let deep: Int = depth(5)
   print(deep.toString())
 }

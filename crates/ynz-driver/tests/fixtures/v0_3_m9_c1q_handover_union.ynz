@@ -2,23 +2,23 @@
 // Correct behavior: prints 2, N1, tiny.
 
 shape Big {
-  name: string
-  weight: int
+  name: String
+  weight: Int
 }
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Thing = Big | Tiny
 
-function entrypoint() -> nothing {
-  let matrix: array<Thing> = []
+function entrypoint() -> Nothing {
+  let matrix: Array<Thing> = []
   let first: Big = { name: `n1`.toUpperCase(), weight: 1 }
   matrix.add(first)
   let second: Big = { name: `n2`.toUpperCase(), weight: 2 }
   matrix.add(second)
   let third: Tiny = { flag: true }
   matrix.add(third)
-  let kept: array<Thing> = []
+  let kept: Array<Thing> = []
   let seen = 0
   for (row in matrix) {
     seen = seen + 1

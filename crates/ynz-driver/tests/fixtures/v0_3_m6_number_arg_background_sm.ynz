@@ -13,13 +13,13 @@
 // resume fn's number-param read (`sm_number_param_set` indirection) dereferences the
 // dangling pointer after the spawner's stack died — prints 0.000... instead of 4.5.
 
-function fetchNum(n: number) -> nothing {
+function fetchNum(n: Number) -> Nothing {
   wait sleep(5)
   print(n.toString())
 }
 
-function entrypoint() -> nothing {
-  let x: number = 4.5
+function entrypoint() -> Nothing {
+  let x: Number = 4.5
   background fetchNum(x)
   wait sleep(60)
 }

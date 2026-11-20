@@ -2,6 +2,6 @@
 // Cross-file CALLS ship in v0.2; this demonstrates export syntax + number<N> params.
 
 /// Multiply a high-precision value by a scale factor.
-export function scale(x: number<100>, factor: number<100>) -> number<100> {
+export function scale(x: Number<100>, factor: Number<100>) -> Number<100> {
   return x * factor
 }

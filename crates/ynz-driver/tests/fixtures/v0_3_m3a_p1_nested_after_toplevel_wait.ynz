@@ -5,7 +5,7 @@
 // the nested body, the alloca landed in a non-entry state block, and LLVM rejected
 // the IR with "Instruction does not dominate all uses".
 // Expected output: 42 then 100 (two separate prints)
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = 1
   wait sleep(5)
   if (a > 0) {

@@ -3,9 +3,9 @@
 // the two results stay separate, so the prints differ. Both print the same lines whether or
 // not the two calls run at the same time.
 
-function sumf(n: int) -> float {
-  let total: float = 0.0.toFloat()
-  let i: int = 0
+function sumf(n: Int) -> Float {
+  let total: Float = 0.0.toFloat()
+  let i: Int = 0
   while (i < n) {
     total = total + 1.5.toFloat()
     i = i + 1
@@ -13,7 +13,7 @@ function sumf(n: int) -> float {
   return total
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = sumf(2)
   let b = sumf(4)
   print(a)

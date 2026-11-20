@@ -6,8 +6,8 @@
 // Expected output:
 //   1
 //   closed twice ok
-function entrypoint() -> nothing {
-  let wire: channel<int> = channel<int>(2)
+function entrypoint() -> Nothing {
+  let wire: Channel<Int> = Channel<Int>(2)
   wire.send(1)
   wire.close()
   wire.close()

@@ -2,16 +2,16 @@
 // Expected output: 2.25, true, 1.5, 3, 9.5, 1.5, 3.75
 
 shape Base {
-  id: int
-  hidden secret: fixed<int, 2> = [7, 8]
+  id: Int
+  hidden secret: Fixed<Int, 2> = [7, 8]
 }
 shape Child extends Base {
-  vals: fixed<number, 2>
-  flags: fixed<boolean, 2>
-  floats: fixed<float, 2>
+  vals: Fixed<Number, 2>
+  flags: Fixed<Boolean, 2>
+  floats: Fixed<Float, 2>
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let child: Child = { id: 3, vals: [1.5, 2.25], flags: [true, false], floats: [0.5, 1.5] }
   print(child.vals[1].or(0.0))
   print(child.flags[0].or(false))
@@ -21,7 +21,7 @@ function entrypoint() -> nothing {
   twin.vals.set(0, 9.5)
   print(twin.vals[0].or(0.0))
   print(child.vals[0].or(0.0))
-  let total: number = 0.0
+  let total: Number = 0.0
   for (v in child.vals) {
     total = total + v
   }

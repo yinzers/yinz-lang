@@ -5,7 +5,7 @@
 // same mechanism M3b/M3e already established — this fixture is the FIRST to exercise it inside
 // a fused (dual-kind) parent frame.
 
-export function fetchRemote(n: int) -> int {
+export function fetchRemote(n: Int) -> Int {
   wait sleep(0)
   return n + 1
 }

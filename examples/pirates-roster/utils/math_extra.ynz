@@ -3,7 +3,7 @@
 
 // clamp a value into [low, high]. Used to keep stats inside reasonable bounds
 // (e.g., a batting average can't exceed 1.000 = 1000 thousandths).
-export function clamp(value: int, low: int, high: int) -> int {
+export function clamp(value: Int, low: Int, high: Int) -> Int {
   if (value < low) {
     return low
   }
@@ -14,7 +14,7 @@ export function clamp(value: int, low: int, high: int) -> int {
 }
 
 // square a number. Used in some Pirates-era statistics like SLG and OPS components.
-export function square(n: int) -> int {
+export function square(n: Int) -> Int {
   return n * n
 }
 

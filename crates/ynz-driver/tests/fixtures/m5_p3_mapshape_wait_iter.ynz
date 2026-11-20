@@ -4,15 +4,15 @@
 // re-created per body-bb entry and never get a frame slot). Iteration order
 // is insertion order.
 shape Part {
-  qty: int
-  price: int
+  qty: Int
+  price: Int
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let pa: Part = { qty: 1, price: 10 }
   let pb: Part = { qty: 2, price: 20 }
   let pc: Part = { qty: 3, price: 30 }
-  let stock: map<int, Part> = {}
+  let stock: Map<Int, Part> = {}
   stock.set(1, pa)
   stock.set(2, pb)
   stock.set(3, pc)
@@ -20,6 +20,6 @@ function entrypoint() -> nothing {
     print(entry.value.qty)
     wait sleep(5)
   }
-  let n: int = stock.count()
+  let n: Int = stock.count()
   print(n)
 }

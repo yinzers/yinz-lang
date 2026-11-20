@@ -3,6 +3,6 @@
 // NOT a silent SIGILL/abort (exit 132).
 import { doWork } from `b_ops`
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   doWork()
 }

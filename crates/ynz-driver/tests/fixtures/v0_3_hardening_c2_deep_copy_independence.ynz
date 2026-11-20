@@ -15,17 +15,17 @@
 //   original row 0 starts at 1
 //   clone row 0 starts at 99
 //   held copy is 2
-function entrypoint() -> nothing {
-  let inner: array<int> = [1, 2, 3]
-  let outer: array<array<int>> = [inner.copy()]
-  let clone: array<array<int>> = outer.copy()
-  let cloneRow: array<int> = clone[0].or(inner)
+function entrypoint() -> Nothing {
+  let inner: Array<Int> = [1, 2, 3]
+  let outer: Array<Array<Int>> = [inner.copy()]
+  let clone: Array<Array<Int>> = outer.copy()
+  let cloneRow: Array<Int> = clone[0].or(inner)
   cloneRow.set(0, 99)
-  let originalRow: array<int> = outer[0].or(inner)
+  let originalRow: Array<Int> = outer[0].or(inner)
   print(`original row 0 starts at ${originalRow[0].or(-1).toString()}`)
   print(`clone row 0 starts at ${cloneRow[0].or(-1).toString()}`)
 
-  let held: maybe<int> = inner[1]
-  let heldCopy: maybe<int> = held.copy()
+  let held: Maybe<Int> = inner[1]
+  let heldCopy: Maybe<Int> = held.copy()
   print(`held copy is ${heldCopy.or(-1).toString()}`)
 }

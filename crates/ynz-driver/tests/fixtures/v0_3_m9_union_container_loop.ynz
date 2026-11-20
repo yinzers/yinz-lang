@@ -8,15 +8,15 @@
 // `big m1`: ASan-clean, silently wrong.
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 
-function describe(share thing: Thing) -> string {
+function describe(share thing: Thing) -> String {
   if (thing) {
     is Tiny => {
       return `tiny`
@@ -28,8 +28,8 @@ function describe(share thing: Thing) -> string {
   return `none`
 }
 
-function entrypoint() -> nothing {
-  let things: array<Thing> = []
+function entrypoint() -> Nothing {
+  let things: Array<Thing> = []
   let round = 0
   while (round < 4) {
     if (round % 2 == 0) {
@@ -50,7 +50,7 @@ function entrypoint() -> nothing {
     }
     i = i + 1
   }
-  let held: map<string, Thing> = {}
+  let held: Map<String, Thing> = {}
   let k = 0
   while (k < 2) {
     let big: Big = { label: `m${k}`, count: k }

@@ -2,22 +2,22 @@
 /// A shape that `follows` a contract can be passed where `dynamic Contract` is expected.
 /// Without this coerce, the call site is a typeck error even when the shape satisfies the contract.
 shape Printable {
-  display(share self) -> nothing
+  display(share self) -> Nothing
 }
 
 shape Player follows Printable {
-  name: string
+  name: String
 }
 
-function display(share self: Player) -> nothing {
+function display(share self: Player) -> Nothing {
   print(self.name)
 }
 
-function showDynamic(d: dynamic Printable) -> nothing {
+function showDynamic(d: dynamic Printable) -> Nothing {
   print(`accepted`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let p: Player = { name: `hero` }
   showDynamic(p)
 }

@@ -6,11 +6,11 @@
 // belongs, read as a `Big` when the call fails.
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 
 function makeBig() -> Big errors {
@@ -18,10 +18,10 @@ function makeBig() -> Big errors {
   return big
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let s = `hello world`
   let part = s.substring(`a`, `b`)
-  let secret: sensitive string = sensitive(`hello world`)
+  let secret: sensitive String = sensitive(`hello world`)
   let secretPart = secret.substring(`a`, 2)
   let secretHas = secret.contains(4242)
   let tiny: Tiny = { flag: true }

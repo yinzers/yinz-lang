@@ -5,7 +5,7 @@
 // This fixture is the truncation guard: an 8-byte slot that stored raw i128
 // bits would silently truncate to 0 (or garbage) — the frame slot must hold
 // the 8-byte POINTER to the i128 alloca instead, not the i128 value itself.
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let x = 0.1 + 0.2
   wait sleep(5)
   print(x)

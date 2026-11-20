@@ -2,17 +2,17 @@
 // replace. The list's cells own the arrays moved into them, so the replaced one is freed.
 // Expected output: the sizes of the two arrays the list holds at the end.
 
-function entrypoint() -> nothing {
-  let first: array<int> = [1, 2]
-  let second: array<int> = [3]
-  let third: array<int> = [4, 5, 6]
-  let fourth: array<int> = [7]
-  let value: fixed<array<int> > = [first, second]
+function entrypoint() -> Nothing {
+  let first: Array<Int> = [1, 2]
+  let second: Array<Int> = [3]
+  let third: Array<Int> = [4, 5, 6]
+  let fourth: Array<Int> = [7]
+  let value: Fixed<Array<Int> > = [first, second]
   value.set(0, third)
   value[1] = fourth
-  let fallback: array<int> = []
-  let firstItem: array<int> = value[0].or(fallback)
-  let secondItem: array<int> = value[1].or(fallback)
+  let fallback: Array<Int> = []
+  let firstItem: Array<Int> = value[0].or(fallback)
+  let secondItem: Array<Int> = value[1].or(fallback)
   print(firstItem.count())
   print(secondItem.count())
 }

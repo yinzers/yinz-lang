@@ -18,20 +18,20 @@
 //
 // Expected output: consumed\ninspected\ndone
 shape Parcel {
-  id: int
+  id: Int
 }
 
-function consume(give p: Parcel) -> nothing {
+function consume(give p: Parcel) -> Nothing {
   wait sleep(100)
   print(`consumed`)
 }
 
-function inspect(share p: Parcel) -> nothing {
+function inspect(share p: Parcel) -> Nothing {
   wait sleep(10)
   print(`inspected`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a: Parcel = { id: 1 }
   let b: Parcel = { id: 2 }
   consume(a)

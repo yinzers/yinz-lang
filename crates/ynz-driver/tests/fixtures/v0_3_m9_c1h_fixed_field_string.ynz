@@ -5,17 +5,17 @@
 // Expected output: the count, then both names.
 
 shape Roster {
-  title: string
-  names: fixed<string, 2>
+  title: String
+  names: Fixed<String, 2>
 }
 
 function makeRoster() -> Roster {
-  let names: fixed<string> = [`amy`.toUpperCase(), `bob`]
+  let names: Fixed<String> = [`amy`.toUpperCase(), `bob`]
   let roster: Roster = { title: `crew`, names: names }
   return roster
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let roster = makeRoster()
   print(roster.names.count())
   print(roster.names[0].or(`?`))

@@ -9,13 +9,13 @@
 // Expected output:
 //   7
 //   done
-function pick() -> maybe<int> errors {
+function pick() -> Maybe<Int> errors {
   wait sleep(10)
-  let arr: array<int> = [7]
+  let arr: Array<Int> = [7]
   return arr.get(0)
 }
 
-function consume() -> nothing errors {
+function consume() -> Nothing errors {
   let h = background pick()
   let m = h.receive()
   if (m.exists()) {
@@ -24,7 +24,7 @@ function consume() -> nothing errors {
   print(`done`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = consume()
   if (r.failed()) {
     print(`failed`)

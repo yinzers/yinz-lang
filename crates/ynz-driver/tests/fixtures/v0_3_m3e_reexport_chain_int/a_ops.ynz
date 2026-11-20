@@ -6,7 +6,7 @@
 // so they fail if the resolver is bypassed and the local-fn fallback (which computes 32)
 // fires instead.
 
-export function getValue() -> int {
+export function getValue() -> Int {
   const offset = 7
   sleep(10)
   return offset

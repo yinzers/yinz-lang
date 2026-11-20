@@ -1,4 +1,4 @@
-function describe(x: int) -> nothing {
+function describe(x: Int) -> Nothing {
   if (x) {
     1 => {
       print(`one`)
@@ -15,7 +15,7 @@ function describe(x: int) -> nothing {
   }
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   describe(1)
   describe(2)
   describe(5)

@@ -1,8 +1,8 @@
 // Fixture (b): local mutated between two waits then read after both.
 // `count` is incremented between two suspensions — the final read must
 // see the cumulative mutation, not the initial value.
-function entrypoint() -> nothing {
-  let count: int = 0
+function entrypoint() -> Nothing {
+  let count: Int = 0
   wait sleep(5)
   count = count + 1
   wait sleep(5)

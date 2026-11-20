@@ -5,18 +5,18 @@
 // only), and `useBig` read the 1-byte `Tiny` as a 16-byte `Big` — it printed a stack address.
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 
-function useBig(share first: Big, share second: Big) -> int {
+function useBig(share first: Big, share second: Big) -> Int {
   return second.count
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let big: Big = { label: `hello`, count: 3 }
   let tiny: Tiny = { flag: true }
   print(big.useBig(tiny).toString())

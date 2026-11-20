@@ -7,16 +7,16 @@
 // copy, `found` aliases the shared buffer and silently reads the LAST iteration's
 // bytes (differential repro vs the pre-M5 pointer ABI: prints 3/30 instead of 1/10).
 shape Part {
-  qty: int
-  price: int
+  qty: Int
+  price: Int
 }
 
-function entrypoint() -> nothing {
-  let seed: int = 1
-  let qa: int = seed * 1
-  let qb: int = seed * 2
-  let qc: int = seed * 3
-  let parts: array<Part> = [
+function entrypoint() -> Nothing {
+  let seed: Int = 1
+  let qa: Int = seed * 1
+  let qb: Int = seed * 2
+  let qc: Int = seed * 3
+  let parts: Array<Part> = [
     { qty: qa, price: qa * 10 },
     { qty: qb, price: qb * 10 },
     { qty: qc, price: qc * 10 }

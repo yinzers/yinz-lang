@@ -3,8 +3,8 @@
 // Before: a `fixed<T>` parameter carried no length, so `count()` printed 0 and every read was `none`.
 // Expected output: each call's count, then the sum of each list.
 
-function describe(share values: fixed<int>) -> int {
-  let sum: int = 0
+function describe(share values: Fixed<Int>) -> Int {
+  let sum: Int = 0
   for (value in values) {
     sum = sum + value
   }
@@ -12,9 +12,9 @@ function describe(share values: fixed<int>) -> int {
   return sum
 }
 
-function entrypoint() -> nothing {
-  let pair: fixed<int> = [1, 2]
-  let triple: fixed<int> = [10, 20, 30]
+function entrypoint() -> Nothing {
+  let pair: Fixed<Int> = [1, 2]
+  let triple: Fixed<Int> = [10, 20, 30]
   let pairSum = describe(pair)
   let tripleSum = describe(triple)
   print(pairSum)

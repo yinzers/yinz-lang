@@ -5,7 +5,7 @@
 
 import { getValue } from `a_ops`
 
-export function doWork() -> int {
+export function doWork() -> Int {
   const v = getValue()
   return v
 }

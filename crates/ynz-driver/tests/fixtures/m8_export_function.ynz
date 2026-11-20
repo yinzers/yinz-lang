@@ -1,9 +1,9 @@
 // M8 fixture: export function syntax — library file (no entrypoint required).
 
-export function greet(name: string) -> string {
+export function greet(name: String) -> String {
   return `hello ${name}`
 }
 
-export function add(a: int, b: int) -> int {
+export function add(a: Int, b: Int) -> Int {
   return a + b
 }

@@ -12,16 +12,16 @@
 // before `pureCpu` begins. The output must be ordered: fetched\ncpu\ndone.
 //
 // Expected output: fetched\ncpu\ndone
-function fetcher() -> nothing {
+function fetcher() -> Nothing {
   wait sleep(10)
   print(`fetched`)
 }
 
-function pureCpu(n: int) -> int {
+function pureCpu(n: Int) -> Int {
   return n * 2
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   fetcher()
   let result = wait pureCpu(21)
   print(`cpu`)

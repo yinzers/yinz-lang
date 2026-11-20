@@ -7,19 +7,19 @@
 // string field read then dereferenced garbage bits (printed unprintable bytes).
 
 shape Circle {
-  radius: number
-  label: string
-  area: number
-  tag: string
+  radius: Number
+  label: String
+  area: Number
+  tag: String
 }
 
 shape Square {
-  side: number
+  side: Number
 }
 
 shape Figure = Circle | Square
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let c: Circle = { radius: 5.0, label: `round`, area: 78.5, tag: `t` }
   let fig: Figure = c
   if (fig) {

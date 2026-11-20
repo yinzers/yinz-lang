@@ -4,18 +4,18 @@
 // Correct behavior: does not compile; the refusal names the union, the parameter, what to
 // declare instead, and why.
 shape Circle {
-  radius: float
+  radius: Float
 }
 
 shape Tag {
-  name: string
+  name: String
 }
 
-function eat<T>(held: T) -> nothing {
+function eat<T>(held: T) -> Nothing {
   print(`ate`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let tag: Tag = { name: `boxed` }
   let choice: Circle | Tag = tag
   background eat(choice)

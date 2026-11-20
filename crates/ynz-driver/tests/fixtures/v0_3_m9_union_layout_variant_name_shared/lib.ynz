@@ -1,26 +1,26 @@
 // v0.3-M9 C1f security round 1 (#423): `Holder` keeps `Big | Tiny` inline; `Big` is exported.
 export shape Big {
-  first: int
-  second: int
-  third: int
-  fourth: int
-  fifth: int
-  label: string
+  first: Int
+  second: Int
+  third: Int
+  fourth: Int
+  fifth: Int
+  label: String
 }
 export shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Slot = Big | Tiny
 export shape Holder {
   slot: Big | Tiny
-  id: int
+  id: Int
 }
-export function fillHolder(lend holder: Holder) -> nothing {
+export function fillHolder(lend holder: Holder) -> Nothing {
   let big: Big = { first: 1, second: 2, third: 3, fourth: 4, fifth: 5, label: `lib` }
   let asSlot: Slot = big
   holder.slot = asSlot
 }
-export function show(share holder: Holder) -> string {
+export function show(share holder: Holder) -> String {
   let slot = holder.slot
   if (slot) {
     is Big => {

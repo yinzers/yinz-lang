@@ -10,8 +10,8 @@
 // Expected output:
 //   refused
 //   end
-function producer(lend wire: channel<array<int>>) -> nothing {
-  let rows: array<int> = [10, 20, 30]
+function producer(lend wire: Channel<Array<Int>>) -> Nothing {
+  let rows: Array<Int> = [10, 20, 30]
   wire.close()
   let sent = wire.send(rows)
   if (sent.failed()) {
@@ -19,8 +19,8 @@ function producer(lend wire: channel<array<int>>) -> nothing {
   }
 }
 
-function entrypoint() -> nothing {
-  let wire: channel<array<int>> = channel<array<int>>(2)
+function entrypoint() -> Nothing {
+  let wire: Channel<Array<Int>> = Channel<Array<Int>>(2)
   background producer(wire)
   wait sleep(40)
   let got = wire.receive()

@@ -3,14 +3,14 @@
 // payload: `nums.get(i)`'s per-site {flag, bits} envelope is overwritten every
 // iteration, so an escaping maybe binding must copy the envelope by value.
 // Unfixed code prints the LAST iteration's element (7), not the matched one (6).
-function entrypoint() -> nothing {
-  let seed: int = 1
-  let a: int = seed * 5
-  let b: int = seed * 6
-  let c: int = seed * 7
-  let nums: array<int> = [a, b, c]
+function entrypoint() -> Nothing {
+  let seed: Int = 1
+  let a: Int = seed * 5
+  let b: Int = seed * 6
+  let c: Int = seed * 7
+  let nums: Array<Int> = [a, b, c]
   let saved = nums.get(0)
-  let i: int = 0
+  let i: Int = 0
   while (i < nums.count()) {
     let m = nums.get(i)
     if (m.exists()) {

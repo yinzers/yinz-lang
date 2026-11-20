@@ -11,10 +11,10 @@
 //
 // WHY: `f32` is a deferred language feature (ships in v2+). The LSP marks it
 // deprecated in autocomplete AND shows hover content with:
-//   "Ships in: v2+  Substitute: float (f64)  Why deferred: ..."
+//   "Ships in: v2+  Substitute: Float (f64)  Why deferred: ..."
 // Try hovering over `f32` below to see the registry-driven hover popup.
 
-function deferredFeatureDemo() -> nothing {
+function deferredFeatureDemo() -> Nothing {
   let x: f32 = 1.0
 }
 
@@ -24,7 +24,7 @@ function deferredFeatureDemo() -> nothing {
 // The LSP hover over `type` shows: "Not a Yinz term: type → use shape instead"
 // The compiler error shows the three-part WHAT/WHAT-INSTEAD/WHY format.
 
-type Player = nothing
+type Player = Nothing
 
 // ─── Section 3: Type mismatch diagnostic ─────────────────────────────────────
 //
@@ -32,8 +32,8 @@ type Player = nothing
 // WHAT/WHAT-INSTEAD/WHY content flows from the compiler through the LSP
 // transform and renders as a squiggle in the editor.
 
-function typeMismatchDemo() -> nothing {
-  let score: int = `not an int`
+function typeMismatchDemo() -> Nothing {
+  let score: Int = `not an int`
 }
 
 // ─── Section 4: Autocomplete cursor positions ────────────────────────────────
@@ -42,7 +42,7 @@ function typeMismatchDemo() -> nothing {
 // Place your cursor after the `.` on the line below and trigger completion
 // (Ctrl+Space) to see all int primitive methods: toString, toFloat, abs, etc.
 
-function autocompleteDemo() -> nothing {
-  const score: int = 42
+function autocompleteDemo() -> Nothing {
+  const score: Int = 42
   const result = score.
 }

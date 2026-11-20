@@ -2,7 +2,7 @@
 // to the frame slot so the accumulated value survives the suspension.
 // `acc` starts at 0; the while loop adds 10 three times; after the wait acc=30.
 // Expected output: 30
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let acc = 0
   let i = 0
   while (i < 3) {

@@ -1,4 +1,4 @@
 /// Computes the square of x.
-function square(x: int) -> int {
+function square(x: Int) -> Int {
   return x * x
 }

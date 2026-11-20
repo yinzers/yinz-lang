@@ -2,11 +2,11 @@
 // and the string of the `maybe` they replace.
 // Expected output: the list's size.
 
-function entrypoint() -> nothing {
-  let labels: array<string> = [`a-${1}`, `b-${2}`]
-  let first: maybe<string> = labels.get(0)
-  let second: maybe<string> = labels.get(1)
-  let value: fixed<maybe<string> > = [first, second]
+function entrypoint() -> Nothing {
+  let labels: Array<String> = [`a-${1}`, `b-${2}`]
+  let first: Maybe<String> = labels.get(0)
+  let second: Maybe<String> = labels.get(1)
+  let value: Fixed<Maybe<String> > = [first, second]
   value.set(0, labels.get(1))
   value[1] = labels.get(0)
   print(value.count())

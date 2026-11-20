@@ -5,9 +5,9 @@
 // has no slot and would read garbage after resume.
 // See design/concurrency.md 'UnsupportedCrossingLocalType — map-entry-fields-after-wait'.
 // Workaround: read entry.value BEFORE the wait and bind to a separate let binding.
-function entrypoint() -> nothing {
-  let scores: map<string, int> = { `alice`: 90, `bob`: 85, `carol`: 95 }
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let scores: Map<String, Int> = { `alice`: 90, `bob`: 85, `carol`: 95 }
+  let total: Int = 0
   for (entry in scores) {
     wait sleep(5)
     total = total + entry.value

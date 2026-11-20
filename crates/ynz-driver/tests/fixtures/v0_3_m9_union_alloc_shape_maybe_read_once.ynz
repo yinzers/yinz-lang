@@ -1,19 +1,19 @@
 // v0.3-M9 C1f (#423) round 2: baseline of `v0_3_m9_union_alloc_shape_maybe_read.ynz`, one read.
 // Correct behavior: prints 1.
 shape End {
-  flag: boolean
+  flag: Boolean
 }
 shape Node {
-  value: int
+  value: Int
   next: Node | End
 }
 shape Holder {
   chain: Node | End
-  id: int
+  id: Int
 }
 shape Outer {
   inner: Holder
-  tag: int
+  tag: Int
 }
 
 function buildChain() -> Node {
@@ -30,8 +30,8 @@ function makeHolder() -> Holder {
   return holder
 }
 
-function entrypoint() -> nothing {
-  let holders: array<Holder> = []
+function entrypoint() -> Nothing {
+  let holders: Array<Holder> = []
   holders.add(makeHolder())
   let total = 0
   let round = 0

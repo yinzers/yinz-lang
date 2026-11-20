@@ -16,22 +16,22 @@
 // The test asserts byte-exact decimal128 stdout under default and --no-auto-parallel modes.
 //
 // Expected output: later\na:9999999999.000000001\nb:2.5
-function priceA() -> number errors {
+function priceA() -> Number errors {
   wait sleep(40)
   return 9999999999.000000001
 }
 
-function priceB() -> number errors {
+function priceB() -> Number errors {
   wait sleep(40)
   return 2.5
 }
 
-function later() -> nothing {
+function later() -> Nothing {
   wait sleep(10)
   print(`later`)
 }
 
-function run() -> nothing {
+function run() -> Nothing {
   let a = priceA()
   let b = priceB()
   wait later()
@@ -41,6 +41,6 @@ function run() -> nothing {
   print(`b:${bv.toString()}`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   run()
 }

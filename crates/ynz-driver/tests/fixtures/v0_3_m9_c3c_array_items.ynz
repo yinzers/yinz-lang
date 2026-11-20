@@ -5,15 +5,15 @@
 // Heap strings: 2 (the two interpolated items); every one is released by the task.
 // Expected output: the first item.
 
-function build(count: int) -> array<string> {
+function build(count: Int) -> Array<String> {
   return [`first-${count}`, `second-${count}`]
 }
 
-function show(names: array<string>) -> nothing {
+function show(names: Array<String>) -> Nothing {
   print(names[0].or(`none`))
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background show(build(1))
   wait sleep(80)
 }

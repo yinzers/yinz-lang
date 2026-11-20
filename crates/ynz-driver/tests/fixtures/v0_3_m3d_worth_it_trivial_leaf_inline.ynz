@@ -4,15 +4,15 @@
 // would cost more to coordinate than it saves. The output is identical to running them at the
 // same time — only the print values matter, never the order they were computed in.
 
-function double(n: int) -> int {
+function double(n: Int) -> Int {
   return n + n
 }
 
-function triple(n: int) -> int {
+function triple(n: Int) -> Int {
   return n + n + n
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = double(20)
   let b = triple(21)
   print(a)

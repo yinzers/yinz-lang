@@ -4,11 +4,11 @@
 // Expected: exits 0, prints "slow done\ncaller done".
 import { slow } from `slow_ops`
 
-function caller() -> nothing {
+function caller() -> Nothing {
   slow()
   print(`caller done`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   caller()
 }

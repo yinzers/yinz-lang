@@ -2,12 +2,12 @@
 // parameter is declared `give`, so the caller hands the array over and the union local owns it.
 // Expected output: `kept`.
 
-function keep<T>(give first: T) -> nothing {
-  let held: T | nothing = first
+function keep<T>(give first: T) -> Nothing {
+  let held: T | Nothing = first
   print(`kept`)
 }
 
-function entrypoint() -> nothing {
-  let rows: array<int> = [1, 2, 3]
+function entrypoint() -> Nothing {
+  let rows: Array<Int> = [1, 2, 3]
   keep(rows)
 }

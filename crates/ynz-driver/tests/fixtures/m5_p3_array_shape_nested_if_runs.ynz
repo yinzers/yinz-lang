@@ -6,18 +6,18 @@
 // Expected: total = 10+20 = 30.
 // See docs/internal/implementation/IMP-concurrency.md 'ArrayShapeRuntimeFieldWithWait — LIFTED'.
 shape Item {
-  id: int
-  qty: int
+  id: Int
+  qty: Int
 }
 
-function entrypoint() -> nothing {
-  let a: int = 10
-  let b: int = 20
-  let cond: boolean = true
+function entrypoint() -> Nothing {
+  let a: Int = 10
+  let b: Int = 20
+  let cond: Boolean = true
   if (cond) {
-    let items: array<Item> = [{ id: 1, qty: a }, { id: 2, qty: b }]
+    let items: Array<Item> = [{ id: 1, qty: a }, { id: 2, qty: b }]
     wait sleep(5)
-    let total: int = 0
+    let total: Int = 0
     for (it in items) {
       total = total + it.qty
     }

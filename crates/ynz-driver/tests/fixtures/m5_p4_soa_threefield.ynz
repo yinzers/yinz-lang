@@ -5,13 +5,13 @@
 // length (66 > 64) and every other criterion qualify. Asserted verdict:
 // FieldUnionTooWide { fields: ["a", "b", "c"] } (declared field order).
 shape Reading {
-  a: int
-  b: int
-  c: int
+  a: Int
+  b: Int
+  c: Int
 }
 
-function entrypoint() -> nothing {
-  let rs: array<Reading> = [
+function entrypoint() -> Nothing {
+  let rs: Array<Reading> = [
     { a: 1, b: 2, c: 3 },
     { a: 2, b: 4, c: 6 },
     { a: 3, b: 6, c: 9 },

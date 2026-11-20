@@ -1,4 +1,4 @@
-function crlf() -> nothing {
+function crlf() -> Nothing {
   let x = 1 // inline
   print(x)
 }

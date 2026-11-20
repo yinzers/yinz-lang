@@ -10,17 +10,17 @@
 // Bug 2 trigger: same class as MIN-1 but with reversed group-member declaration order.
 // Expected output (correct — same as MIN-1; correctness is independent of order):
 //   42
-function other() -> boolean {
+function other() -> Boolean {
   wait sleep(40)
   return true
 }
 
-function slowCall() -> int {
+function slowCall() -> Int {
   wait sleep(40)
   return 42
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let cond = other()
   let a = slowCall()
   wait sleep(1)

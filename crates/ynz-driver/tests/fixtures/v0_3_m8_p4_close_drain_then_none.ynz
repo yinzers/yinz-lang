@@ -9,14 +9,14 @@
 // Expected output:
 //   total: 10
 //   end
-function relayScores(lend wire: channel<int>) -> nothing {
+function relayScores(lend wire: Channel<Int>) -> Nothing {
   wire.send(2)
   wire.send(5)
   wire.send(3)
   wire.close()
 }
 
-function tallyScores(lend wire: channel<int>) -> int {
+function tallyScores(lend wire: Channel<Int>) -> Int {
   let total = 0
   let stillOpen = true
   while (stillOpen) {
@@ -29,8 +29,8 @@ function tallyScores(lend wire: channel<int>) -> int {
   return total
 }
 
-function entrypoint() -> nothing {
-  let wire: channel<int> = channel<int>(4)
+function entrypoint() -> Nothing {
+  let wire: Channel<Int> = Channel<Int>(4)
   background relayScores(wire)
   let total = tallyScores(wire)
   print(`total: ${total.toString()}`)

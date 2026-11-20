@@ -12,12 +12,12 @@
 // Expected: compile error "`xs` is declared `share` — read-only — so its elements cannot be
 // changed." Exit 1, empty stdout.
 
-function grow(share xs: array<int>) -> nothing {
+function grow(share xs: Array<Int>) -> Nothing {
   xs.add(7)
 }
 
-function entrypoint() -> nothing {
-  let nums: array<int> = [1, 2, 3]
+function entrypoint() -> Nothing {
+  let nums: Array<Int> = [1, 2, 3]
   grow(nums)
   print(`${nums.count().toString()}`)
 }

@@ -1,9 +1,9 @@
 shape Pair {
-  a: int
-  b: int
+  a: Int
+  b: Int
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   const p: Pair = { a: 1, b: 2 }
   p.a = 10
 }

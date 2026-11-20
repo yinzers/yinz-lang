@@ -1,9 +1,9 @@
-function panicking_work(n: int) -> int {
+function panicking_work(n: Int) -> Int {
   let x = 100 / n
   return x
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = panicking_work(0)
   let b = panicking_work(5)
   print(a)

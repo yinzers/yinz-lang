@@ -1,7 +1,7 @@
 // v0.3-M9 C6 borrow probe: a loop with a `wait` in its body (a state-machine loop): the loop
 // variable reads an array item the body overwrites before it reads the variable
-function entrypoint() -> nothing {
-  let items: array<string> = [`a-${1}`, `b-${2}`]
+function entrypoint() -> Nothing {
+  let items: Array<String> = [`a-${1}`, `b-${2}`]
   for (item in items) {
     items[0] = `z-${3}`
     wait sleep(1)

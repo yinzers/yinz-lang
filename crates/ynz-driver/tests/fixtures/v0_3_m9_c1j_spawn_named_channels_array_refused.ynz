@@ -5,24 +5,24 @@
 // Expected: a compile error naming the type and the line.
 
 shape Bag {
-  rows: array<channel<int>>
-  id: int
+  rows: Array<Channel<Int>>
+  id: Int
 }
 
-function f(rows: array<channel<int>>) -> nothing {
+function f(rows: Array<Channel<Int>>) -> Nothing {
   wait sleep(100)
   print(rows.count())
 }
 
-function launch() -> nothing {
-  let first: channel<int> = channel<int>(1)
-  let second: channel<int> = channel<int>(1)
-  let lines: array<channel<int>> = [first, second]
+function launch() -> Nothing {
+  let first: Channel<Int> = Channel<Int>(1)
+  let second: Channel<Int> = Channel<Int>(1)
+  let lines: Array<Channel<Int>> = [first, second]
   let bag: Bag = { rows: lines, id: 1 }
   background f(bag.rows)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   launch()
   wait sleep(300)
   print(`done`)

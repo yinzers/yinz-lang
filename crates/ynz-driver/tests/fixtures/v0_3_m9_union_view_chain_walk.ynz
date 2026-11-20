@@ -3,22 +3,22 @@
 // chain allocates nothing (Golden Rule 6). The recursive `sum` adds its own views.
 // Correct behavior: prints the sum of 0..99, `4950`.
 shape End {
-  flag: boolean
+  flag: Boolean
 }
 shape Node {
-  value: int
+  value: Int
   next: Node | End
 }
 shape Holder {
   chain: Node | End
-  id: int
+  id: Int
 }
 shape Crate {
   holder: Holder
-  tag: int
+  tag: Int
 }
 
-function sum(share head: Node | End) -> int {
+function sum(share head: Node | End) -> Int {
   if (head) {
     is Node => {
       let rest = head.next
@@ -31,7 +31,7 @@ function sum(share head: Node | End) -> int {
   return 0
 }
 
-function makeCrate(count: int) -> Crate {
+function makeCrate(count: Int) -> Crate {
   let stop: End = { flag: true }
   let list: Node | End = stop
   let index = 0
@@ -52,13 +52,13 @@ function makeShort() -> Node {
   return only
 }
 
-function total(share crate: Crate) -> int {
+function total(share crate: Crate) -> Int {
   let held = crate.holder
   let chain = held.chain
   return sum(chain)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let crate = makeCrate(100)
   print(total(crate))
 }

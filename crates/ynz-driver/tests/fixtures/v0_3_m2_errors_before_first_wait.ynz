@@ -7,7 +7,7 @@
 // Verifies that the error produced at resume_point=0 (state-0 before any
 // suspension) propagates correctly through the SM return slot.
 
-function earlyErrorSM(n: int) -> int errors {
+function earlyErrorSM(n: Int) -> Int errors {
     if (n > 0) {
         let r = __testFallibleAsync(true)
         return r
@@ -16,7 +16,7 @@ function earlyErrorSM(n: int) -> int errors {
     return 42
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     // n=1: takes the error branch before the wait fires.
     let x = earlyErrorSM(1)
     let v = x.or(99)

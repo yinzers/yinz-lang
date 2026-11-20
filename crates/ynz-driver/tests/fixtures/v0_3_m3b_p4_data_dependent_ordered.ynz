@@ -5,12 +5,12 @@
 // The auto-parallel pass must NOT group these as Parallel.
 //
 // Expected output: user:42\nprofile:42
-function fetcher(n: int) -> int {
+function fetcher(n: Int) -> Int {
   wait sleep(20)
   return n
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let userId = fetcher(42)
   let profileId = fetcher(userId)
   print(`user:${userId}`)

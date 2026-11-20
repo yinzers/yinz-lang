@@ -1,8 +1,8 @@
 // WHY: int literal index-assigned as a `map<string, number>` VALUE
 // (`prices[`a`] = 5`) — the hinted value infer silently passes typeck.
 // Pre-fix: codegen ICE panic.
-function entrypoint() -> nothing {
-  let prices: map<string, number> = {`a`: 1.5}
+function entrypoint() -> Nothing {
+  let prices: Map<String, Number> = {`a`: 1.5}
   prices[`a`] = 5
   let got = prices.get(`a`)
   print(got.or(0.0))

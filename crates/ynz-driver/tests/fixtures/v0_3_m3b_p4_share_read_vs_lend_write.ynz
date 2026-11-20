@@ -19,20 +19,20 @@
 //
 // Expected output: w\nr\ndone
 shape Holder {
-  v: int
+  v: Int
 }
 
-function writeVal(lend h: Holder) -> nothing {
+function writeVal(lend h: Holder) -> Nothing {
   wait sleep(100)
   print(`w`)
 }
 
-function readVal(share h: Holder) -> nothing {
+function readVal(share h: Holder) -> Nothing {
   wait sleep(10)
   print(`r`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let h: Holder = { v: 0 }
   writeVal(h)
   readVal(h)

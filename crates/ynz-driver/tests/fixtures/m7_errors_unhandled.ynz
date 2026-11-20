@@ -3,15 +3,15 @@
 // propagated (no `errors` on caller), nor handled via `.or()` or `.failed()`.
 // Tests the "unhandled errors call" diagnostic from M7 P3a safety invariant.
 
-function readConfig() -> string errors {
+function readConfig() -> String errors {
   return `config data`
 }
 
-function badCaller() -> nothing {
+function badCaller() -> Nothing {
   let cfg = readConfig()
   print(cfg)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   badCaller()
 }

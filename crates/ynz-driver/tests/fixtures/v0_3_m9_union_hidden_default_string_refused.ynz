@@ -3,15 +3,15 @@
 // used to compile, and reading the field then SIGSEGVed on the raw int.
 
 shape Holder {
-  name: string
-  hidden extra: string = 4096
+  name: String
+  hidden extra: String = 4096
 }
 
-function peek(share self: Holder) -> string {
+function peek(share self: Holder) -> String {
   return self.extra
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let holder: Holder = { name: `a` }
   print(holder.peek())
 }

@@ -8,17 +8,17 @@
 options Level { low, high }
 
 shape Point {
-  x: int
-  y: float
+  x: Int
+  y: Float
 }
 
-function entrypoint() -> nothing {
-  let count: int = 42
-  let ratio: float = (3).toFloat()
-  let price: number = 9.5
-  let flag: boolean = true
+function entrypoint() -> Nothing {
+  let count: Int = 42
+  let ratio: Float = (3).toFloat()
+  let price: Number = 9.5
+  let flag: Boolean = true
   let level: Level = Level.high
-  let name: string = `yinz`
+  let name: String = `yinz`
 
   print(count)
   print(ratio)

@@ -10,7 +10,7 @@
 //   24.50
 //   31.75
 //   24.50
-function fetchPrice(which: int) -> number errors {
+function fetchPrice(which: Int) -> Number errors {
   wait sleep(1)
   if (which == 0) {
     return 24.50
@@ -21,7 +21,7 @@ function fetchPrice(which: int) -> number errors {
   return 12.25
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let p1 = fetchPrice(0)
   let p2 = fetchPrice(1)
   let p3 = fetchPrice(0)

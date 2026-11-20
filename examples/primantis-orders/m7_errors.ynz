@@ -8,31 +8,31 @@
 // Positive reference functions are included to confirm happy paths still hold.
 // ────── errors keyword diagnostics ──────
 
-function readFile(path: string) -> string errors {
+function readFile(path: String) -> String errors {
   return `file contents`
 }
 
-function safeDivide(a: int, b: int) -> int errors {
+function safeDivide(a: Int, b: Int) -> Int errors {
   return a / b
 }
 
 // WHY: calling an errors-capable function inside a non-errors context without
 // handling the result — compiler must reject the unhandled call.
-function noErrorsContext() -> nothing {
+function noErrorsContext() -> Nothing {
   let x = readFile(`test.txt`)
   print(x)
 }
 
-// WHY: .or() on a non-errors value — int does not have .or()
-function badOr() -> nothing {
-  let x: int = 42
+// WHY: .or() on a non-errors value — Int does not have .or()
+function badOr() -> Nothing {
+  let x: Int = 42
   let y = x.or(0)
   print(y.toString())
 }
 
-// WHY: .failed() on a non-errors value — boolean does not have .failed()
-function badFailed() -> nothing {
-  let x: boolean = true
+// WHY: .failed() on a non-errors value — Boolean does not have .failed()
+function badFailed() -> Nothing {
+  let x: Boolean = true
   if (x.failed()) {
     print(`wrong`)
   }
@@ -41,30 +41,30 @@ function badFailed() -> nothing {
 // ────── string diagnostics ──────
 
 // WHY: string mutation via bracket assignment — strings are not mutable by index
-function stringMutation() -> nothing {
+function stringMutation() -> Nothing {
   let s = `hello`
   s[0] = `H`
 }
 
-// WHY: .contains() on a non-string type — int has no .contains()
-function badContains() -> nothing {
-  let n: int = 42
+// WHY: .contains() on a non-String type — Int has no .contains()
+function badContains() -> Nothing {
+  let n: Int = 42
   let r = n.contains(`4`)
   print(r.toString())
 }
 
 // ────── iterable diagnostics ──────
 
-// WHY: iterating over a non-iterable type — int cannot be used in a for loop
-function iterateInt() -> nothing {
-  let n: int = 5
+// WHY: iterating over a non-iterable type — Int cannot be used in a for loop
+function iterateInt() -> Nothing {
+  let n: Int = 5
   for (x in n) {
     print(x.toString())
   }
 }
 
-// WHY: iterating over boolean — not iterable
-function iterateBool() -> nothing {
+// WHY: iterating over Boolean — not iterable
+function iterateBool() -> Nothing {
   for (x in true) {
     print(x.toString())
   }
@@ -73,13 +73,13 @@ function iterateBool() -> nothing {
 // ────── positive reference cases ──────
 
 // WHY: positive — errors auto-propagation inside an errors context is valid.
-function outer() -> string errors {
+function outer() -> String errors {
   let inner = readFile(`log.txt`)
   return inner
 }
 
-// WHY: positive — .split() returns array<string>; calling .count() on it compiles.
-function splitCount() -> nothing {
+// WHY: positive — .split() returns Array<String>; calling .count() on it compiles.
+function splitCount() -> Nothing {
   const csv = `a,b,c`
   const parts = csv.split(`,`)
   const partCount = parts.count()
@@ -87,7 +87,7 @@ function splitCount() -> nothing {
 }
 
 // WHY: positive — all M7 features compile and run correctly.
-function m7AllFeaturesOk() -> nothing {
+function m7AllFeaturesOk() -> Nothing {
   const s = `Hello, World!`
   print(s.toLowerCase())
   const hasWorld = s.contains(`World`)
@@ -106,7 +106,7 @@ function m7AllFeaturesOk() -> nothing {
   print(count.toString())
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   splitCount()
   m7AllFeaturesOk()
 }

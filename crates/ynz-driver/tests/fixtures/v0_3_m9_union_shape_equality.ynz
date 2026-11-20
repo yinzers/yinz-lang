@@ -7,11 +7,11 @@
 // `tiny same true`, `end`; clean under AddressSanitizer at both optimization levels.
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  count: int
-  weight: int
+  count: Int
+  weight: Int
 }
 shape Thing = Tiny | Big
 
@@ -19,7 +19,7 @@ shape Holder {
   slot: Tiny | Big
 }
 
-function build_big(count: int) -> Holder {
+function build_big(count: Int) -> Holder {
   let big: Big = { count: count, weight: 7 }
   let holder: Holder = { slot: big }
   return holder
@@ -31,15 +31,15 @@ function build_tiny() -> Holder {
   return holder
 }
 
-function clobber(depth: int) -> int {
+function clobber(depth: Int) -> Int {
   let tripled = depth * 3
   let shifted = tripled + 11
   let scaled = shifted * 5
   return scaled - tripled
 }
 
-function entrypoint() -> nothing {
-  let known: array<Holder> = []
+function entrypoint() -> Nothing {
+  let known: Array<Holder> = []
   known.add(build_big(1))
   let noise = clobber(4)
   print(`big same ${known.contains(build_big(1))}`)

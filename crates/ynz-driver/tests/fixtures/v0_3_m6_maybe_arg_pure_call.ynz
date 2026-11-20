@@ -10,14 +10,14 @@
 // parent returns Pending, its stack dies, and the resumed child dereferences the dangling
 // envelope — NONDETERMINISTIC 13-15-digit pointer garbage instead of 42.
 
-function pick(m: maybe<int>) -> int {
+function pick(m: Maybe<Int>) -> Int {
   wait sleep(10)
   return m.or(0)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   wait sleep(1)
-  let m: maybe<int> = `42`.toInt()
+  let m: Maybe<Int> = `42`.toInt()
   const v = wait pick(m)
   print(v.toString())
 }

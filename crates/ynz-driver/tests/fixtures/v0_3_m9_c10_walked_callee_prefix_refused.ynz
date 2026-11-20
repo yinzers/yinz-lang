@@ -1,16 +1,16 @@
 // v0.3-M9 C10: the body passes a PREFIX of the walked place (`outer`, while walking
 // `outer.inner.rows`) to a callee that assigns `inner` of its parameter. Refused at the call.
 shape Inner {
-  rows: array<array<int>>
+  rows: Array<Array<Int>>
 }
 shape Outer {
   inner: Inner
 }
-function replaceInner(lend outer: Outer) -> nothing {
+function replaceInner(lend outer: Outer) -> Nothing {
   let fresh: Inner = { rows: [[9]] }
   outer.inner = fresh
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let outer: Outer = { inner: { rows: [[1], [2], [3]] } }
   let total = 0
   for (row in outer.inner.rows) {

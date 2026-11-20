@@ -16,17 +16,17 @@
 //   10
 //   20
 shape Part {
-  qty: int
-  price: int
+  qty: Int
+  price: Int
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let pa: Part = { qty: 10, price: 100 }
   let pb: Part = { qty: 20, price: 200 }
-  let stock: map<int, Part> = {}
+  let stock: Map<Int, Part> = {}
   stock.set(1, pa)
   stock.set(2, pb)
-  let saved: array<MapEntry<int, Part>> = []
+  let saved: Array<MapEntry<Int, Part>> = []
   for (entry in stock) {
     saved.add(entry)
   }

@@ -1,10 +1,10 @@
 // Card #419: an int literal in a `float` shape field must be an f64 constant.
 shape Reading {
-  label: string
-  celsius: float
+  label: String
+  celsius: Float
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let reading: Reading = { label: `probe`, celsius: 4 }
   print(reading.celsius)
 }

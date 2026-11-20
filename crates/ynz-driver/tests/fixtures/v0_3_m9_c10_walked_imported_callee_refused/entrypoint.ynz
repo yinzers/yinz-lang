@@ -1,7 +1,7 @@
 // v0.3-M9 C10: an imported callee that assigns the walked field: refused at the call.
 import { Holder, reset } from `holder_ops`
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let holder: Holder = { rows: [[1], [2], [3]] }
   let total = 0
   for (row in holder.rows) {

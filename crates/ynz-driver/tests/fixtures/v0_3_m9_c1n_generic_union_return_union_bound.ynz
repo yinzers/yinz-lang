@@ -6,16 +6,16 @@
 // Expected output: `hello`.
 
 shape Big {
-  label: string
-  items: array<int>
+  label: String
+  items: Array<Int>
 }
 shape Tiny {
-  count: int
+  count: Int
 }
-function wrap<T>(give item: T) -> T | nothing {
+function wrap<T>(give item: T) -> T | Nothing {
   return item
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let big: Big = { label: `hello`.toUpperCase(), items: [1] }
   let choice: Big | Tiny = big
   let got = wrap(choice)

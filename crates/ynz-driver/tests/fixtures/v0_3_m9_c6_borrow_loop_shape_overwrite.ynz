@@ -2,11 +2,11 @@
 // The reader keeps the value it read after the place is overwritten: no freed memory is read.
 
 shape Tag {
-  name: string
-  id: int
+  name: String
+  id: Int
 }
-function entrypoint() -> nothing {
-  let tags: array<Tag> = [{ name: `a-${1}`, id: 1 }]
+function entrypoint() -> Nothing {
+  let tags: Array<Tag> = [{ name: `a-${1}`, id: 1 }]
   for (tag in tags) {
     tags[0] = { name: `b-${2}`, id: 2 }
     print(tag.name)

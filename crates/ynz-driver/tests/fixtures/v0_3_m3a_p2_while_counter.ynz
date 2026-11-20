@@ -3,8 +3,8 @@
 // across each suspension (frame-backed via P1 slot machinery) and that exactly N
 // iterations execute (no double-execution or skipped iterations).
 // Expected output: 0\n1\n2
-function entrypoint() -> nothing {
-  let i: int = 0
+function entrypoint() -> Nothing {
+  let i: Int = 0
   while (i < 3) {
     print(i.toString())
     wait sleep(5)

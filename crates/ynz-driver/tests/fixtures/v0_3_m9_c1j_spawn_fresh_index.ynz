@@ -3,16 +3,16 @@
 // statement, and the task keeps its own copy of the element.
 // Expected output: the element, then `done`.
 
-function show(item: maybe<string>) -> nothing {
+function show(item: Maybe<String>) -> Nothing {
   print(item.or(`?`))
 }
 
-function make() -> array<string> {
-  let names: array<string> = [`a`.toUpperCase(), `b`.toUpperCase()]
+function make() -> Array<String> {
+  let names: Array<String> = [`a`.toUpperCase(), `b`.toUpperCase()]
   return names
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background show(make()[0])
   wait sleep(50)
   print(`done`)

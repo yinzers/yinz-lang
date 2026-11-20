@@ -1,17 +1,17 @@
-function ping(n: int) -> int {
+function ping(n: Int) -> Int {
   if (n <= 0) {
     return 0
   }
   return pong(n - 1)
 }
 
-function pong(n: int) -> int {
+function pong(n: Int) -> Int {
   if (n <= 0) {
     return 0
   }
   return ping(n - 1)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   print(ping(5))
 }

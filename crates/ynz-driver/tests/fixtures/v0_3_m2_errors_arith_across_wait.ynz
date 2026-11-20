@@ -9,17 +9,17 @@
 // Error path:  __testFallibleAsync(true) returns an error; compute() propagates
 //              the error; .or(99) falls back to 99.
 
-function computeSuccess() -> int errors {
+function computeSuccess() -> Int errors {
   let v = wait __testFallibleAsync(false)
   return v + 10
 }
 
-function computeError() -> int errors {
+function computeError() -> Int errors {
   let v = wait __testFallibleAsync(true)
   return v + 10
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let ok = computeSuccess()
   print(`success=${ok.or(0).toString()}`)
   let err = computeError()

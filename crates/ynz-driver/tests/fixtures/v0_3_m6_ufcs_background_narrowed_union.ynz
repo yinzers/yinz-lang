@@ -14,26 +14,26 @@
 // SEPARATE pre-existing global `float.toString` bug (prints 0.0) — kept copy-safe.
 
 shape Circle {
-  radius: int
+  radius: Int
 }
 
 shape Square {
-  side: int
+  side: Int
 }
 
 shape Figure = Circle | Square
 
-function haul(give self: Circle) -> nothing {
+function haul(give self: Circle) -> Nothing {
   wait sleep(20)
   print(self.radius.toString())
 }
 
-function mend(give self: Square) -> nothing {
+function mend(give self: Square) -> Nothing {
   wait sleep(20)
   print(self.side.toString())
 }
 
-function spawnStatementForm() -> nothing {
+function spawnStatementForm() -> Nothing {
   let c: Circle = { radius: 5 }
   let fig: Figure = c
   if (fig) {
@@ -47,7 +47,7 @@ function spawnStatementForm() -> nothing {
   wait sleep(120)
 }
 
-function spawnHandleForm() -> nothing {
+function spawnHandleForm() -> Nothing {
   let s: Square = { side: 2 }
   let shp: Figure = s
   if (shp) {
@@ -61,7 +61,7 @@ function spawnHandleForm() -> nothing {
   wait sleep(120)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   spawnStatementForm()
   spawnHandleForm()
   print(`done`)

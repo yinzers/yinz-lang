@@ -4,14 +4,14 @@
 // functions — a function with no suspension has no crossing locals.
 //
 // Regression guard: `printVal(3)` → `2` (inner shadow) then `1` (outer local), exit 0.
-function printVal(n: int) -> nothing {
-  let x: int = 1
+function printVal(n: Int) -> Nothing {
+  let x: Int = 1
   if (n > 0) {
-    let x: int = 2
+    let x: Int = 2
     print(x.toString())
   }
   print(x.toString())
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   printVal(3)
 }

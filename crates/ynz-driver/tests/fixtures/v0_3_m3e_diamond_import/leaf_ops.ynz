@@ -3,6 +3,6 @@
 // frame_layouts_query(D) must be memoized (salsa) and produce the same layout for both
 // A's and B's frames.
 
-export function suspend() -> nothing {
+export function suspend() -> Nothing {
   sleep(10)
 }

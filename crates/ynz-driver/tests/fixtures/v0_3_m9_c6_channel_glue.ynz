@@ -3,11 +3,11 @@
 // (the array and the strings it owns), not a flat array drop.
 // Expected output: the received count.
 
-function entrypoint() -> nothing {
-  let wire: channel<array<string>> = channel<array<string>>(2)
-  let items: array<string> = [`a`, `b`]
+function entrypoint() -> Nothing {
+  let wire: Channel<Array<String>> = Channel<Array<String>>(2)
+  let items: Array<String> = [`a`, `b`]
   wire.send(items)
   let got = wire.receive()
-  let received: array<string> = got.or([])
+  let received: Array<String> = got.or([])
   print(received.count())
 }

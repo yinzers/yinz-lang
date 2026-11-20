@@ -6,25 +6,25 @@
 // the fixed write sites' Maybe arm to the ONE stable-bits choke point
 // (value_to_stable_bits: heap-cloned envelope + shape payload per write).
 shape Part {
-  qty: int
-  price: int
+  qty: Int
+  price: Int
 }
 
-function entrypoint() -> nothing {
-  let seed: int = 1
-  let qa: int = seed * 1
-  let qb: int = seed * 2
-  let qc: int = seed * 3
-  let parts: array<Part> = [
+function entrypoint() -> Nothing {
+  let seed: Int = 1
+  let qa: Int = seed * 1
+  let qb: Int = seed * 2
+  let qc: Int = seed * 3
+  let parts: Array<Part> = [
     { qty: qa, price: qa * 10 },
     { qty: qb, price: qb * 10 },
     { qty: qc, price: qc * 10 }
   ]
-  let empty: maybe<Part> = parts[9]
-  let cells: fixed<maybe<Part> > = [empty.copy(), empty.copy()]
-  let i: int = 0
+  let empty: Maybe<Part> = parts[9]
+  let cells: Fixed<Maybe<Part> > = [empty.copy(), empty.copy()]
+  let i: Int = 0
   while (i < 3) {
-    let cur: maybe<Part> = parts[i]
+    let cur: Maybe<Part> = parts[i]
     if (i == 0) {
       cells.set(0, cur.copy())
     }
@@ -35,7 +35,7 @@ function entrypoint() -> nothing {
   }
   let e0 = cells[0]
   if (e0.exists()) {
-    let g0: maybe<Part> = e0.value
+    let g0: Maybe<Part> = e0.value
     if (g0.exists()) {
       print(g0.value.qty)
       print(g0.value.price)
@@ -43,7 +43,7 @@ function entrypoint() -> nothing {
   }
   let e1 = cells[1]
   if (e1.exists()) {
-    let g1: maybe<Part> = e1.value
+    let g1: Maybe<Part> = e1.value
     if (g1.exists()) {
       print(g1.value.qty)
       print(g1.value.price)

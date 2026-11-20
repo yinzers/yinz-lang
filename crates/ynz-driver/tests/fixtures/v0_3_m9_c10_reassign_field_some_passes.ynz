@@ -2,10 +2,10 @@
 // the loop with the field already replaced. Correct behavior: prints 6, 3.
 
 shape Holder {
-  rows: array<array<int>>
+  rows: Array<Array<Int>>
 }
 
-function walk(start: Holder) -> int {
+function walk(start: Holder) -> Int {
   let holder: Holder = start.copy()
   let total = 0
   let pass = 0
@@ -25,7 +25,7 @@ function walk(start: Holder) -> int {
   return total + holder.rows.count()
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a: Holder = { rows: [[1], [2], [3]] }
   let b: Holder = { rows: [[1], [1]] }
   print(walk(a))

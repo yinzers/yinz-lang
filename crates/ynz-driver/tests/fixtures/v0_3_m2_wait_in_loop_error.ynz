@@ -1,5 +1,5 @@
-function entrypoint() -> nothing {
-  let i: int = 0
+function entrypoint() -> Nothing {
+  let i: Int = 0
   while (i < 3) {
     wait sleep(100)
     i = i + 1

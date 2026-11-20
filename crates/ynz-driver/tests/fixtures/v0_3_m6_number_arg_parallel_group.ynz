@@ -11,20 +11,20 @@
 // third staging loop the Phase 1b fix missed. The parent returns Pending, its stack dies,
 // and each resumed child dereferences its dangling temp — garbage instead of 2.5/4.5.
 
-function grow(n: number) -> number {
+function grow(n: Number) -> Number {
   wait sleep(10)
   return n
 }
 
-function shrink(m: number) -> number {
+function shrink(m: Number) -> Number {
   wait sleep(10)
   return m
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   wait sleep(1)
-  let x: number = 2.5
-  let y: number = 4.5
+  let x: Number = 2.5
+  let y: Number = 4.5
   const a = grow(x)
   const b = shrink(y)
   print(a.toString())

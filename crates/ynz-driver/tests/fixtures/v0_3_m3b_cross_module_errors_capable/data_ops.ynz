@@ -3,7 +3,7 @@
 // {i64, i64} return ABI (errors_result_type), not the ptr fallback.
 // Expected: fetchData() returns 42 on the success path.
 
-export function fetchData() -> int errors {
+export function fetchData() -> Int errors {
   sleep(10)
   return 42
 }

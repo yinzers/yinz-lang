@@ -13,10 +13,10 @@
 // fetchScoutGrade suspends while the scout's report arrives over the wire.
 // playerName is a crossing local: it lives across the suspension boundary and
 // is read again after resume to build the summary string.
-export function fetchScoutGrade(playerName: string, atBats: int) -> string {
+export function fetchScoutGrade(playerName: String, atBats: Int) -> String {
   // Simulate an async network fetch for the scouting report.
   wait sleep(20)
-  let grade: string = `B`
+  let grade: String = `B`
   if (atBats > 350) {
     grade = `A`
   }
@@ -27,9 +27,9 @@ export function fetchScoutGrade(playerName: string, atBats: int) -> string {
 // rankRoster fetches scouting grades for every player in the list and returns
 // the count that earned an A. Demonstrates a cross-module suspending call
 // inside a while loop — the loop counter and accumulator cross every suspension.
-export function rankRoster(names: array<string>, atBats: array<int>) -> int {
-  let aGrades: int = 0
-  let i: int = 0
+export function rankRoster(names: Array<String>, atBats: Array<Int>) -> Int {
+  let aGrades: Int = 0
+  let i: Int = 0
   while (i < names.count()) {
     let foundName = names[i]
     let name = foundName.or(`unknown`)

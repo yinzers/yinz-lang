@@ -8,15 +8,15 @@
 // Before: the success word was a heap envelope plus a heap payload (two counted cells).
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 
-function describe(share thing: Thing) -> string {
+function describe(share thing: Thing) -> String {
   if (thing) {
     is Tiny => {
       return `tiny`
@@ -28,7 +28,7 @@ function describe(share thing: Thing) -> string {
   return `none`
 }
 
-function makeBig(count: int) -> Thing errors {
+function makeBig(count: Int) -> Thing errors {
   let big: Big = { label: `made`, count: count }
   return big
 }
@@ -42,17 +42,17 @@ function passThrough(share thing: Thing) -> Thing errors {
   return thing
 }
 
-function relay(count: int) -> Thing errors {
+function relay(count: Int) -> Thing errors {
   let inner = makeBig(count)
   return inner
 }
 
-function clobber(depth: int) -> int {
+function clobber(depth: Int) -> Int {
   let filler: Big = { label: `filler`, count: depth }
   return filler.count
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let first = makeBig(1)
   let second = makeTiny()
   let ignored = clobber(7)

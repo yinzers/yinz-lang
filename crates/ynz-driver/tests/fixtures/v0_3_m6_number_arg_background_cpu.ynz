@@ -13,7 +13,7 @@
 // SPAWNER-STACK i128 temp; the spawner suspends, its stack dies, and the task
 // dereferences the dangling pointer — prints 0.000... instead of 2.5.
 
-function report(n: number) -> nothing {
+function report(n: Number) -> Nothing {
   let total = 0
   let i = 0
   while (i < 3000000) {
@@ -23,8 +23,8 @@ function report(n: number) -> nothing {
   print(n.toString())
 }
 
-function entrypoint() -> nothing {
-  let x: number = 2.5
+function entrypoint() -> Nothing {
+  let x: Number = 2.5
   background report(x)
   wait sleep(60)
 }

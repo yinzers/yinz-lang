@@ -30,8 +30,8 @@
 // legitimate-inverse pattern.
 
 shape Cargo {
-  weight: int
-  tag: int
+  weight: Int
+  tag: Int
 }
 
 function identity<T>(give value: T) -> T {
@@ -42,23 +42,23 @@ function makeCargo() -> Cargo {
   return { weight: 111, tag: 222 }
 }
 
-function haul(self: Cargo) -> nothing {
+function haul(self: Cargo) -> Nothing {
   sleepBlocking(150)
   print(`haul: ${self.weight}/${self.tag}`)
 }
 
-function spawner() -> nothing {
+function spawner() -> Nothing {
   background identity(wait makeCargo()).haul()
 }
 
-function stomp() -> nothing {
+function stomp() -> Nothing {
   let junkA: Cargo = { weight: 777777, tag: 777888 }
   let junkB: Cargo = { weight: 888777, tag: 888888 }
-  let sum: int = junkA.weight + junkB.tag
+  let sum: Int = junkA.weight + junkB.tag
   print(`stomp: ${sum}`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   spawner()
   stomp()
   stomp()

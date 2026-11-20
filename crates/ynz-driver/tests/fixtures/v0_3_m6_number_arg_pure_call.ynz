@@ -8,14 +8,14 @@
 // returns Pending, its stack dies, and the resumed child dereferences the dangling temp —
 // deterministic 0.000... (freed/zeroed memory), probe-confirmed on the pre-fix tree.
 
-function grow(n: number) -> number {
+function grow(n: Number) -> Number {
   wait sleep(10)
   return n
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   wait sleep(1)
-  let x: number = 2.5
+  let x: Number = 2.5
   const y = wait grow(x)
   print(y.toString())
 }

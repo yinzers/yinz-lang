@@ -11,9 +11,9 @@
 //   6
 //   15
 
-function addf(n: int) -> float {
-  let total: float = 0.0.toFloat()
-  let i: int = 0
+function addf(n: Int) -> Float {
+  let total: Float = 0.0.toFloat()
+  let i: Int = 0
   while (i < n) {
     total = total + 1.5.toFloat()
     i = i + 1
@@ -21,9 +21,9 @@ function addf(n: int) -> float {
   return total
 }
 
-function addf2(n: int) -> float {
-  let total: float = 0.0.toFloat()
-  let i: int = 0
+function addf2(n: Int) -> Float {
+  let total: Float = 0.0.toFloat()
+  let i: Int = 0
   while (i < n) {
     total = total + 2.5.toFloat()
     i = i + 1
@@ -31,8 +31,8 @@ function addf2(n: int) -> float {
   return total
 }
 
-function combine() -> float {
-  let result: float = 0.0.toFloat()
+function combine() -> Float {
+  let result: Float = 0.0.toFloat()
   let go = true
   if (go) {
     let lo = addf(4)
@@ -43,7 +43,7 @@ function combine() -> float {
   return result
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = combine()
   print(r)
 }

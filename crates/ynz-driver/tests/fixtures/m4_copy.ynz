@@ -1,14 +1,14 @@
 shape Coord {
-  x: int
-  y: int
+  x: Int
+  y: Int
 }
 
-function show(share self: Coord) -> nothing {
+function show(share self: Coord) -> Nothing {
   print(self.x)
   print(self.y)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a: Coord = { x: 10, y: 20 }
   let b = a.copy()
   b.show()

@@ -8,22 +8,22 @@
 // Expected output (correct — cond is always true, so both print):
 //   42
 //   99
-function slowCall() -> int {
+function slowCall() -> Int {
   wait sleep(40)
   return 42
 }
 
-function otherInt() -> int {
+function otherInt() -> Int {
   wait sleep(40)
   return 99
 }
 
-function flag() -> boolean {
+function flag() -> Boolean {
   wait sleep(1)
   return true
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = slowCall()
   let b = otherInt()
   let cond = flag()

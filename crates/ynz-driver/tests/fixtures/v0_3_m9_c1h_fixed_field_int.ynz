@@ -5,17 +5,17 @@
 // Expected output: the count, then the first and last item.
 
 shape Bag {
-  label: string
-  items: fixed<int, 3>
+  label: String
+  items: Fixed<Int, 3>
 }
 
 function makeBag() -> Bag {
-  let numbers: fixed<int> = [1, 2, 3]
+  let numbers: Fixed<Int> = [1, 2, 3]
   let bag: Bag = { label: `bag`, items: numbers }
   return bag
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let bag = makeBag()
   print(bag.items.count())
   print(bag.items[0].or(-1))

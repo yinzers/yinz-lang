@@ -10,14 +10,14 @@
 // calls until the coercion point covered substituted parameters.
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 
-function describe(share thing: Big | nothing) -> string {
+function describe(share thing: Big | Nothing) -> String {
   if (thing) {
     is Big => {
       return thing.label
@@ -26,7 +26,7 @@ function describe(share thing: Big | nothing) -> string {
   return `absent`
 }
 
-function pick<T>(share first: T | nothing, share second: T) -> T | nothing {
+function pick<T>(share first: T | Nothing, share second: T) -> T | Nothing {
   return first
 }
 
@@ -34,7 +34,7 @@ function pickOrTiny<T>(share first: T | Tiny, share second: T) -> T | Tiny {
   return first
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let big: Big = { label: `hello`, count: 3 }
   print(describe(pick(big, big)))
   let out = pickOrTiny(big, big)

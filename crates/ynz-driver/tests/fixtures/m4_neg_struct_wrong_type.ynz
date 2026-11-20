@@ -1,8 +1,8 @@
 shape Box {
-  value: int
+  value: Int
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let b: Box = { value: `hello` }
   print(b.value)
 }

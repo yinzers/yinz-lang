@@ -10,15 +10,15 @@
 // defaults are lowered as defaults, so the gate matches that scope. The int→number
 // COERCION stays deferred to 2026-07-04-v0-3-hotfix-int-literal-number.
 shape Ledger {
-  label: string
-  hidden cache: number = 5
+  label: String
+  hidden cache: Number = 5
 }
 
-function getCache(share self: Ledger) -> number {
+function getCache(share self: Ledger) -> Number {
   return self.cache
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let l: Ledger = { label: `owed` }
   print(l.getCache())
 }

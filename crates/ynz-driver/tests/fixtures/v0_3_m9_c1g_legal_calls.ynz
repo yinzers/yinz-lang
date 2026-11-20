@@ -6,27 +6,27 @@
 //   ten / 7 / two / 3 / 9 / 6
 
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 
 function same<T>(share first: T, share second: T) -> T {
   return second
 }
 
-function labelled<T>(share first: T, share extra: Big) -> int {
+function labelled<T>(share first: T, share extra: Big) -> Int {
   return extra.count
 }
 
-function sumCounts(share first: Big, share second: Big) -> int {
+function sumCounts(share first: Big, share second: Big) -> Int {
   return first.count + second.count
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let first: Big = { label: `one`, count: 3 }
   let second: Big = { label: `two`, count: 6 }
-  let number: int = 7
-  let other: int = 9
+  let number: Int = 7
+  let other: Int = 9
   print(same(`ten`, `ten`))
   print(same(number, number).toString())
   print(same<Big>(first, second).label)

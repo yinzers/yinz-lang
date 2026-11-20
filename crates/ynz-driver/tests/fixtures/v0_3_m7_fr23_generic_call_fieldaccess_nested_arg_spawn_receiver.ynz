@@ -22,40 +22,40 @@
 // sentinel values.
 
 shape Cargo {
-  weight: int
-  tag: int
+  weight: Int
+  tag: Int
 }
 
 function identity<T>(give value: T) -> T {
   return value
 }
 
-function haul(self: Cargo) -> nothing {
+function haul(self: Cargo) -> Nothing {
   sleepBlocking(150)
   print(`haul: ${self.weight}/${self.tag}`)
 }
 
-function spawner() -> nothing {
-  let ships: array<Cargo> = [{ weight: 111, tag: 222 }, { weight: 333, tag: 444 }]
-  let first: maybe<Cargo> = ships[0]
+function spawner() -> Nothing {
+  let ships: Array<Cargo> = [{ weight: 111, tag: 222 }, { weight: 333, tag: 444 }]
+  let first: Maybe<Cargo> = ships[0]
   if (first.exists()) {
     background identity(first.value.copy()).haul()
   }
 }
 
-function stomp() -> nothing {
-  let junk: array<Cargo> = [{ weight: 777777, tag: 777888 }, { weight: 888777, tag: 888888 }]
-  let ja: maybe<Cargo> = junk[0]
-  let jb: maybe<Cargo> = junk[1]
+function stomp() -> Nothing {
+  let junk: Array<Cargo> = [{ weight: 777777, tag: 777888 }, { weight: 888777, tag: 888888 }]
+  let ja: Maybe<Cargo> = junk[0]
+  let jb: Maybe<Cargo> = junk[1]
   if (ja.exists()) {
     if (jb.exists()) {
-      let sum: int = ja.value.weight + jb.value.tag
+      let sum: Int = ja.value.weight + jb.value.tag
       print(`stomp: ${sum}`)
     }
   }
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   spawner()
   stomp()
   stomp()

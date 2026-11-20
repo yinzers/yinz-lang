@@ -5,11 +5,11 @@
 // which includes imported shapes — verified correct by the frame_layouts_query fix.
 
 export shape Coord {
-  x: int
-  y: int
-  z: int
+  x: Int
+  y: Int
+  z: Int
 }
 
-export function fetchData() -> nothing {
+export function fetchData() -> Nothing {
   sleep(10)
 }

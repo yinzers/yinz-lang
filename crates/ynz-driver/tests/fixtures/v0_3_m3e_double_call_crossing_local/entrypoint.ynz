@@ -3,8 +3,8 @@
 // Expected output: "start: 7\nmid: 7\nend: 7"
 import { doTick } from `io_ops`
 
-function caller() -> nothing {
-  let counter: int = 7
+function caller() -> Nothing {
+  let counter: Int = 7
   print(`start: ${counter.toString()}`)
   doTick()
   print(`mid: ${counter.toString()}`)
@@ -12,6 +12,6 @@ function caller() -> nothing {
   print(`end: ${counter.toString()}`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   caller()
 }

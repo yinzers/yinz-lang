@@ -12,12 +12,12 @@
 // Expected: no stdout (compile error, no binary produced).
 // Expected: no LLVM ICE text ("Instruction does not dominate" / "LLVM ERROR") in stderr.
 // Expected: no binary produced (SIGSEGV is impossible when no binary exists).
-function sleepWithMaybe() -> nothing {
-  let m: maybe<int> = `42`.toInt()
+function sleepWithMaybe() -> Nothing {
+  let m: Maybe<Int> = `42`.toInt()
   wait sleep(5)
   print(m.or(0).toString())
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   sleepWithMaybe()
 }

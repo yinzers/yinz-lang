@@ -11,22 +11,22 @@
 // Expected output (byte-identical default vs --no-auto-parallel): done
 
 shape Box {
-  v: int
+  v: Int
 }
 
-function peek(b: Box) -> int {
-  let snapshot: int = b.v
+function peek(b: Box) -> Int {
+  let snapshot: Int = b.v
   wait sleep(150)
   return snapshot
 }
 
-function peek2(b: Box) -> int {
-  let snapshot: int = b.v
+function peek2(b: Box) -> Int {
+  let snapshot: Int = b.v
   wait sleep(150)
   return snapshot
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let p: Box = { v: 3 }
   let q: Box = { v: 4 }
   let a = peek(p)

@@ -7,7 +7,7 @@
 // v0.3-M6 store-site stopgap: the shared int-literal→`number` gate now REJECTS this
 // with a clean teaching error (`NumberSlotRole::StoreBinding`). The int→number
 // COERCION stays deferred to 2026-07-04-v0-3-hotfix-int-literal-number.
-function entrypoint() -> nothing {
-  let x: number = 5
+function entrypoint() -> Nothing {
+  let x: Number = 5
   print(x)
 }

@@ -14,13 +14,13 @@
 // Expected output: three "IMPORTED-OK" lines + "main-done"
 import { compute as doWork } from `work_ops`
 
-function doWork(lend done: channel<int>) -> nothing {
+function doWork(lend done: Channel<Int>) -> Nothing {
   print(`LOCAL-BUG`)
   done.send(1)
 }
 
-function entrypoint() -> nothing {
-  let done: channel<int> = channel<int>(3)
+function entrypoint() -> Nothing {
+  let done: Channel<Int> = Channel<Int>(3)
   background doWork(done)
   background doWork(done)
   background doWork(done)

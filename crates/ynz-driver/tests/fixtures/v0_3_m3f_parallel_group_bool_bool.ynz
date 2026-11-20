@@ -7,17 +7,17 @@
 // Expected output (correct — first returns true, second returns false):
 //   true
 //   false
-function flagA() -> boolean {
+function flagA() -> Boolean {
   wait sleep(40)
   return true
 }
 
-function flagB() -> boolean {
+function flagB() -> Boolean {
   wait sleep(40)
   return false
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = flagA()
   let b = flagB()
   wait sleep(1)

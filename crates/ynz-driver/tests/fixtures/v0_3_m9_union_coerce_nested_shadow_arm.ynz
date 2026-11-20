@@ -5,18 +5,18 @@
 // `big hello` for the call that skips the inner block, then `end`; clean under ASan.
 // Pre-fix failure: does not compile (`Thing values do not have fields` on the outer `t.label`).
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
+  label: String
 }
 shape Other {
-  n: int
+  n: Int
 }
 shape Thing = Tiny | Big
 shape Wrap = Big | Other
 
-function describe(share t: Thing) -> string {
+function describe(share t: Thing) -> String {
   if (t) {
     is Big => {
       return `big ${t.label}`
@@ -28,7 +28,7 @@ function describe(share t: Thing) -> string {
   return `none`
 }
 
-function viaWrap(share w: Wrap) -> string {
+function viaWrap(share w: Wrap) -> String {
   if (w) {
     is Big => {
       return `wbig`
@@ -40,7 +40,7 @@ function viaWrap(share w: Wrap) -> string {
   return `none`
 }
 
-function outer(share t: Thing, share flag: boolean) -> string {
+function outer(share t: Thing, share flag: Boolean) -> String {
   if (t) {
     is Big => {
       if (flag) {
@@ -66,7 +66,7 @@ function outer(share t: Thing, share flag: boolean) -> string {
   return `none`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let big: Big = { label: `hello` }
   let t: Thing = big
   print(outer(t, true))

@@ -9,8 +9,8 @@
 // Expected output:
 //   refused
 //   end
-function entrypoint() -> nothing {
-  let wire: channel<int> = channel<int>(2)
+function entrypoint() -> Nothing {
+  let wire: Channel<Int> = Channel<Int>(2)
   wire.close()
   let sent = wire.send(7)
   if (sent.failed()) {

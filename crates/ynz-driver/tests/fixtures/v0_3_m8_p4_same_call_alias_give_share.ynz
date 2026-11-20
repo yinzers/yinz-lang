@@ -7,15 +7,15 @@
 // over and is refused on its own (`ConsumedByStore`).
 // RED today: compiles. GREEN: refused with the use-after-give error naming `other` and `rows`.
 shape Rows {
-  items: array<int>
+  items: Array<Int>
 }
 
-function mix(give owner: Rows, share piece: array<int>) -> nothing {
+function mix(give owner: Rows, share piece: Array<Int>) -> Nothing {
   print(`${owner.items.count()} ${piece.count()}`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let rows: Rows = { items: [1, 2, 3] }
-  let other: array<int> = rows.items
+  let other: Array<Int> = rows.items
   mix(rows, other)
 }

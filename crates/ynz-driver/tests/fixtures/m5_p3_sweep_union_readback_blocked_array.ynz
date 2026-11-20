@@ -13,19 +13,19 @@
 // (or land the FRAGO-grade loud-reject gate). See value_to_stable_bits'
 // KNOWN-HOLE doc.
 shape Circle {
-  radius: float
+  radius: Float
 }
 
 shape Square {
-  side: float
+  side: Float
 }
 
 shape Figure = Circle | Square
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let c: Circle = { radius: 3.0 }
   let fig: Figure = c
-  let figs: array<Figure> = [fig]
+  let figs: Array<Figure> = [fig]
   let g = figs[0]
   if (g.exists()) {
     let f2: Figure = g.value

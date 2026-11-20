@@ -4,11 +4,11 @@
 // Pre-fix failure: compiled; the caller read the returned union envelope as a `Big`.
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 
@@ -16,7 +16,7 @@ function asBig(share t: Thing) -> Big {
   return t
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let big: Big = { label: `hello`, count: 3 }
   let thing: Thing = big
   let back = asBig(thing)

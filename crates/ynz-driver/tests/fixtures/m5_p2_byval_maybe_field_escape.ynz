@@ -4,35 +4,35 @@
 // the LAST iteration's envelope + payload. Locks store_field's Maybe arm
 // (heap-cloned envelope + payload).
 shape Part {
-  qty: int
-  price: int
+  qty: Int
+  price: Int
 }
 
 shape Holder {
-  found: maybe<Part>
+  found: Maybe<Part>
 }
 
-function entrypoint() -> nothing {
-  let seed: int = 1
-  let qa: int = seed * 1
-  let qb: int = seed * 2
-  let qc: int = seed * 3
-  let parts: array<Part> = [
+function entrypoint() -> Nothing {
+  let seed: Int = 1
+  let qa: Int = seed * 1
+  let qb: Int = seed * 2
+  let qc: Int = seed * 3
+  let parts: Array<Part> = [
     { qty: qa, price: qa * 10 },
     { qty: qb, price: qb * 10 },
     { qty: qc, price: qc * 10 }
   ]
-  let empty: maybe<Part> = parts[9]
+  let empty: Maybe<Part> = parts[9]
   let holder: Holder = { found: empty.copy() }
-  let i: int = 0
+  let i: Int = 0
   while (i < 3) {
-    let cur: maybe<Part> = parts[i]
+    let cur: Maybe<Part> = parts[i]
     if (i == 0) {
       holder.found = cur.copy()
     }
     i = i + 1
   }
-  let got: maybe<Part> = holder.found
+  let got: Maybe<Part> = holder.found
   if (got.exists()) {
     print(got.value.qty)
     print(got.value.price)

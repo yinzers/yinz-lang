@@ -10,16 +10,16 @@
 //      form `heal(p, 20)` produces. Yinz enforces shared-wording: both call forms
 //      yield byte-identical diagnostics per design/ide-hints.md.
 shape Player {
-  health: int
+  health: Int
 }
 
-function heal(lend self: Player, amount: int) -> nothing {
+function heal(lend self: Player, amount: Int) -> Nothing {
   self.health = self.health + amount
 }
 
 // Trigger: UFCS dot-call on const binding with a lend-receiver function.
 // CODE ACTION: "Declare `p` with `let` if you need `heal` to modify it."
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   const p: Player = { health: 100 }
   p.heal(10)   // ERROR: `p` is `const` — `heal` needs to mutate it but `const` blocks mutation.
 }

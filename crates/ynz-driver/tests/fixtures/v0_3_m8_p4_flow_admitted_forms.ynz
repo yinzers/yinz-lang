@@ -18,8 +18,8 @@
 //   0
 //   5
 //   end
-function makeRows(n: int) -> array<int> {
-  let out: array<int> = []
+function makeRows(n: Int) -> Array<Int> {
+  let out: Array<Int> = []
   let i = 0
   while (i < n) {
     out.add(i)
@@ -28,22 +28,22 @@ function makeRows(n: int) -> array<int> {
   return out
 }
 
-function producer(lend wire: channel<array<int>>) -> nothing {
-  let owned: array<int> = [1, 2, 3]
+function producer(lend wire: Channel<Array<Int>>) -> Nothing {
+  let owned: Array<Int> = [1, 2, 3]
   wire.send(owned)
-  let keep: array<int> = [1, 2, 3, 4]
+  let keep: Array<Int> = [1, 2, 3, 4]
   wire.send(keep.copy())
   wire.send(keep)
   wire.send([1, 2])
-  let empty: array<int> = []
+  let empty: Array<Int> = []
   wire.send(empty)
   let fresh = makeRows(5)
   wire.send(fresh)
   wire.close()
 }
 
-function entrypoint() -> nothing {
-  let wire: channel<array<int>> = channel<array<int>>(8)
+function entrypoint() -> Nothing {
+  let wire: Channel<Array<Int>> = Channel<Array<Int>>(8)
   background producer(wire)
   let stillOpen = true
   while (stillOpen) {

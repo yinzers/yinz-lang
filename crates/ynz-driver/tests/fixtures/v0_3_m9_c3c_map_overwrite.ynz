@@ -7,18 +7,18 @@
 // task's ladder releases the 2 the map still owns. Total 4 allocated, 4 released.
 // Expected output: the entry count (the key was overwritten, not added).
 
-function build(count: int) -> map<string, string> {
-  let firstValue: string = `first-${count}`
-  let table: map<string, string> = { `k`: firstValue }
+function build(count: Int) -> Map<String, String> {
+  let firstValue: String = `first-${count}`
+  let table: Map<String, String> = { `k`: firstValue }
   table.set(`k`, `second`)
   return table
 }
 
-function show(table: map<string, string>) -> nothing {
+function show(table: Map<String, String>) -> Nothing {
   print(table.count())
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background show(build(1))
   wait sleep(80)
 }

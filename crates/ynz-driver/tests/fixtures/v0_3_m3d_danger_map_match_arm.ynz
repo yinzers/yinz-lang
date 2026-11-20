@@ -9,9 +9,9 @@
 //   3
 //   5
 
-function build(n: int) -> map<int, int> {
-  let m: map<int, int> = {}
-  let i: int = 0
+function build(n: Int) -> Map<Int, Int> {
+  let m: Map<Int, Int> = {}
+  let i: Int = 0
   while (i < n) {
     m.set(i, i * 10)
     i = i + 1
@@ -19,9 +19,9 @@ function build(n: int) -> map<int, int> {
   return m
 }
 
-function build2(n: int) -> map<int, int> {
-  let m: map<int, int> = {}
-  let i: int = 0
+function build2(n: Int) -> Map<Int, Int> {
+  let m: Map<Int, Int> = {}
+  let i: Int = 0
   while (i < n) {
     m.set(i, i * 20)
     i = i + 1
@@ -29,7 +29,7 @@ function build2(n: int) -> map<int, int> {
   return m
 }
 
-function combine() -> int {
+function combine() -> Int {
   let pick = 1
   let loCount = 0
   let hiCount = 0
@@ -49,7 +49,7 @@ function combine() -> int {
   return hiCount
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = combine()
   print(r)
 }

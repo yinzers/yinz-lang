@@ -5,11 +5,11 @@
 // inner `let n = 99` then silently clobbers the outer `n`, making the condition
 // `n > 0` always true (inner n resets to 99 on each iteration) → infinite loop.
 // This fixture MUST produce a clean compile error (exit 1), never infinite-loop.
-function entrypoint() -> nothing {
-  let n: int = 3
-  let acc: int = 0
+function entrypoint() -> Nothing {
+  let n: Int = 3
+  let acc: Int = 0
   while (n > 0) {
-    let n: int = 99
+    let n: Int = 99
     wait sleep(5)
     n = n - 1
   }

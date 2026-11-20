@@ -1,12 +1,12 @@
 // v0.3-M9 C1f (#423): the int baseline of v0_3_m9_union_alloc_wait_arg.ynz: the same calls with
 // an `int` argument. Its allocation count is the one a union argument must not exceed.
 
-function slowWeigh(seed: int) -> int {
+function slowWeigh(seed: Int) -> Int {
   wait sleep(0)
   return seed % 2 + seed
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let total = 0
   let round = 0
   while (round < 100) {

@@ -5,17 +5,17 @@
 // `wait` on `processor` forces it to complete before `print`.
 //
 // Expected output: result:99\ndone
-function fetch() -> int {
+function fetch() -> Int {
   wait sleep(10)
   return 99
 }
 
-function processor(n: int) -> int {
+function processor(n: Int) -> Int {
   wait sleep(10)
   return n
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let raw = fetch()
   let result = wait processor(raw)
   print(`result:${result}`)

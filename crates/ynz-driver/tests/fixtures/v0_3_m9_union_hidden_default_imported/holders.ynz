@@ -3,23 +3,23 @@
 // which must reach the field inside its tagged envelope.
 
 export shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 
 export shape Holder {
-  name: string
-  hidden count: int = 5
-  hidden extra: Big | int = 4096
+  name: String
+  hidden count: Int = 5
+  hidden extra: Big | Int = 4096
 }
 
 // Hidden fields are read only by functions taking the shape as `self`, so the readers live here.
-export function peekCount(share self: Holder) -> int {
+export function peekCount(share self: Holder) -> Int {
   return self.count
 }
 
-export function peekExtra(share self: Holder) -> string {
-  let slot: Big | int = self.extra
+export function peekExtra(share self: Holder) -> String {
+  let slot: Big | Int = self.extra
   if (slot) {
     is Big => {
       return `big ${slot.label}`

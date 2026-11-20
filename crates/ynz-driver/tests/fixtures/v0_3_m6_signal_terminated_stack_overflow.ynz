@@ -18,11 +18,11 @@
 // must survive the callee to add 1), so the stack grows and the kernel SIGSEGV fires at
 // EVERY optimization tier (verified: exit 139 at both --no-optimize and the optimized
 // default). The feature under test — signal reporting, not stack behavior — is unchanged.
-function recurse(n: int) -> int {
+function recurse(n: Int) -> Int {
   let deeper = recurse(n + 1)
   return deeper + 1
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   recurse(0)
 }

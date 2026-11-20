@@ -8,8 +8,8 @@
 // Rejected as "a `maybe<int>` value cannot yet cross a `wait`" on every tree from the
 // crossing analysis's introduction until this dispatch.
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   wait sleep(1)
-  let m: maybe<int> = `42`.toInt()
+  let m: Maybe<Int> = `42`.toInt()
   print(m.or(0).toString())
 }

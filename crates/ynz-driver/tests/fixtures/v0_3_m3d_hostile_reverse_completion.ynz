@@ -12,7 +12,7 @@
 //   12497500
 //   3
 
-function light(n: int) -> int {
+function light(n: Int) -> Int {
   let t = 0
   let i = 0
   while (i < n) {
@@ -22,7 +22,7 @@ function light(n: int) -> int {
   return t
 }
 
-function heavy(n: int) -> int {
+function heavy(n: Int) -> Int {
   let t = 0
   let i = 0
   while (i < n) {
@@ -32,7 +32,7 @@ function heavy(n: int) -> int {
   return t
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = heavy(5000)
   let b = light(3)
   print(a)

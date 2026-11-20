@@ -16,19 +16,19 @@
 //   55
 //   55
 //   89
-function fib(n: int) -> int {
+function fib(n: Int) -> Int {
   if (n < 2) {
     return n
   }
   return fib(n - 1) + fib(n - 2)
 }
 
-function worker() -> nothing {
+function worker() -> Nothing {
   wait sleep(0)
   print(fib(10))
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = fib(10)
   let b = fib(11)
   wait worker()

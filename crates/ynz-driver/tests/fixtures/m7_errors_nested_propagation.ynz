@@ -3,21 +3,21 @@
 // If any level's propagation is broken, the result would be 0 (fallback) instead of 42.
 // Tests the multi-hop cascade from M7 P4a acceptance criteria.
 
-function level3() -> int errors {
+function level3() -> Int errors {
   return 42
 }
 
-function level2() -> int errors {
+function level2() -> Int errors {
   let x = level3()
   return x
 }
 
-function level1() -> int errors {
+function level1() -> Int errors {
   let y = level2()
   return y
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let result = level1().or(0)
   print(result.toString())
 }

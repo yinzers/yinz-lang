@@ -6,15 +6,15 @@
 // parameters and silently dropped the difference).
 
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 
-function useBig(share first: Big, share second: Big) -> int {
+function useBig(share first: Big, share second: Big) -> Int {
   return second.count
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let big: Big = { label: `hello`, count: 3 }
   print(big.useBig().toString())
 }

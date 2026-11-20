@@ -12,7 +12,7 @@
 // (target/p2b-probe/a_bug.ynz, gitignored). Closes M8 FR #11(a).
 //
 // When C1's fix lands: exit 0, stdout exactly "3\nend\n".
-function consumer(wire: channel<array<int>>) -> nothing {
+function consumer(wire: Channel<Array<Int>>) -> Nothing {
   let got = wire.receive()
   if (got.exists()) {
     let rows = got.value
@@ -20,9 +20,9 @@ function consumer(wire: channel<array<int>>) -> nothing {
   }
 }
 
-function entrypoint() -> nothing {
-  let wire: channel<array<int>> = channel<array<int>>(4)
-  let rows: array<int> = [10, 20, 30]
+function entrypoint() -> Nothing {
+  let wire: Channel<Array<Int>> = Channel<Array<Int>>(4)
+  let rows: Array<Int> = [10, 20, 30]
   background consumer(wire)
   wait sleep(20)
   wire.send(rows)

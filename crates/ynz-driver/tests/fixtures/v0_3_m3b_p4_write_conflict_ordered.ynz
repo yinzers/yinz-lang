@@ -12,20 +12,20 @@
 //
 // Expected output: final:20
 shape Acc {
-  value: int
+  value: Int
 }
 
-function writeA(lend c: Acc, n: int) -> nothing {
+function writeA(lend c: Acc, n: Int) -> Nothing {
   wait sleep(20)
   c.value = n
 }
 
-function writeB(lend c: Acc, n: int) -> nothing {
+function writeB(lend c: Acc, n: Int) -> Nothing {
   wait sleep(20)
   c.value = n
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let c: Acc = { value: 0 }
   writeA(c, 10)
   writeB(c, 20)

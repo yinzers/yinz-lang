@@ -1,5 +1,5 @@
-function entrypoint() -> nothing {
-  let arr: array<int> = [1, 2, 3]
+function entrypoint() -> Nothing {
+  let arr: Array<Int> = [1, 2, 3]
   arr.add(4)
   print(arr.count())
   print(arr[0].or(-1))

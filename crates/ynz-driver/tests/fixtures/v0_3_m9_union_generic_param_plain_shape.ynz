@@ -9,15 +9,15 @@
 // card (the refusal said so).
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 
-function describe(share t: Thing) -> string {
+function describe(share t: Thing) -> String {
   if (t) {
     is Tiny => {
       return `tiny`
@@ -33,11 +33,11 @@ function same<T>(share first: T, share second: T) -> T {
   return second
 }
 
-function declared<T>(share t: Thing, share extra: T) -> string {
+function declared<T>(share t: Thing, share extra: T) -> String {
   return describe(t)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let big: Big = { label: `hello`, count: 3 }
   let tiny: Tiny = { flag: true }
   let thing: Thing = tiny.copy()

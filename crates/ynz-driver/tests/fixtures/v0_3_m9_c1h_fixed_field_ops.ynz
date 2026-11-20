@@ -2,24 +2,24 @@
 // Expected output: 3, 15, 3, X, y, 3, 7, 9, 100, q, 7, -5, p
 
 shape Bag {
-  label: string
-  items: fixed<int, 3>
-  names: fixed<string, 2>
+  label: String
+  items: Fixed<Int, 3>
+  names: Fixed<String, 2>
 }
 
-function total(share xs: fixed<int>) -> int {
-  let sum: int = 0
+function total(share xs: Fixed<Int>) -> Int {
+  let sum: Int = 0
   for (x in xs) {
     sum = sum + x
   }
   return sum
 }
 
-function sizeThree(share xs: fixed<int, 3>) -> int {
+function sizeThree(share xs: Fixed<Int, 3>) -> Int {
   return xs.count()
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let bag: Bag = { label: `a`, items: [4, 5, 6], names: [`x`.toUpperCase(), `y`] }
   print(bag.items.count())
   print(total(bag.items))
@@ -29,13 +29,13 @@ function entrypoint() -> nothing {
   }
   let copyOfList = bag.items
   print(copyOfList.count())
-  let other: fixed<int> = [7, 8, 9]
+  let other: Fixed<Int> = [7, 8, 9]
   bag.items = other
   print(bag.items[0].or(-1))
   print(bag.items[2].or(-1))
   bag.items.set(1, 100)
   print(bag.items[1].or(-1))
-  let names: fixed<string> = [`p`, `q`]
+  let names: Fixed<String> = [`p`, `q`]
   bag.names = names
   print(bag.names[1].or(`?`))
   let twin = bag.copy()

@@ -8,21 +8,21 @@
 // Expected output: `ate` three times, then `end`.
 
 shape Big {
-  label: string
-  items: array<int>
+  label: String
+  items: Array<Int>
 }
 
-function eat<T>(give item: T | nothing, give other: T) -> nothing {
-  let held: T | nothing = item
+function eat<T>(give item: T | Nothing, give other: T) -> Nothing {
+  let held: T | Nothing = item
   print(`ate`)
 }
 
-function entrypoint() -> nothing {
-  let text: string = `hello`.toUpperCase()
-  let moreText: string = `bye`.toUpperCase()
+function entrypoint() -> Nothing {
+  let text: String = `hello`.toUpperCase()
+  let moreText: String = `bye`.toUpperCase()
   eat(text, moreText)
-  let numbers: array<int> = [1, 2, 3]
-  let moreNumbers: array<int> = [4]
+  let numbers: Array<Int> = [1, 2, 3]
+  let moreNumbers: Array<Int> = [4]
   eat(numbers, moreNumbers)
   let big: Big = { label: `hello`.toUpperCase(), items: [1] }
   let bigger: Big = { label: `bye`.toUpperCase(), items: [2] }

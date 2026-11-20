@@ -6,15 +6,15 @@
 // `{tag, data}` and printed `none`.
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 
-function describe(share t: Thing) -> string {
+function describe(share t: Thing) -> String {
   if (t) {
     is Tiny => {
       return `tiny`
@@ -26,10 +26,10 @@ function describe(share t: Thing) -> string {
   return `none`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let big: Big = { label: `hello`, count: 3 }
   let tiny: Tiny = { flag: true }
-  let empty: maybe<Thing> = none
+  let empty: Maybe<Thing> = none
   print(describe(empty.or(big)))
   print(describe(empty.or(tiny)))
   print(`end`)

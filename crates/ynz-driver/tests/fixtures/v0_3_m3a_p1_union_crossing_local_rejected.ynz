@@ -12,16 +12,16 @@
 // Expected: no stdout (compile error, no binary produced).
 // Expected: no LLVM ICE text in stderr.
 shape Circle {
-  radius: float
+  radius: Float
 }
 
 shape Square {
-  side: float
+  side: Float
 }
 
 shape Figure = Circle | Square
 
-function sleepWithUnion(v: int) -> nothing {
+function sleepWithUnion(v: Int) -> Nothing {
   let c: Circle = { radius: 3.0 }
   let fig: Figure = c
   wait sleep(5)
@@ -31,6 +31,6 @@ function sleepWithUnion(v: int) -> nothing {
   }
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   sleepWithUnion(1)
 }

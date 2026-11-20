@@ -5,11 +5,11 @@
 // Expected output: `A`.
 
 shape Holder {
-  label: string
-  name: string | nothing
+  label: String
+  name: String | Nothing
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let holder: Holder = { label: `a`.toUpperCase(), name: `bob`.toUpperCase() }
   print(holder.label)
 }

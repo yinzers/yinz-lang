@@ -7,15 +7,15 @@
 // Expected output: `HELLO`, `end`.
 
 shape Big {
-  label: string
-  items: array<int>
+  label: String
+  items: Array<Int>
 }
 
 function pick<T, U>(give first: T, share second: U) -> T | U {
   return first
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let first: Big = { label: `hello`.toUpperCase(), items: [1] }
   let second: Big = { label: `bye`.toUpperCase(), items: [2] }
   let chosen = pick(first, second)

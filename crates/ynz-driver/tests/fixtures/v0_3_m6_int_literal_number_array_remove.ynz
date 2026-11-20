@@ -2,8 +2,8 @@
 // must render the same teaching error as the other elem slots. (That `remove`
 // has no codegen lowering AT ALL yet is a separate, recorded out-of-scope gap —
 // the typeck gate fires first either way.)
-function entrypoint() -> nothing {
-  let prices: array<number> = [1.5]
+function entrypoint() -> Nothing {
+  let prices: Array<Number> = [1.5]
   prices.remove(5)
   print(prices.count())
 }

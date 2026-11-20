@@ -3,11 +3,11 @@
 // After the failed() check, `result` is narrowed to success type (string) by typeck.
 // If error-bit extraction is broken, .failed() would return true and `error!` would print.
 
-function readConfig() -> string errors {
+function readConfig() -> String errors {
   return `hello`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let result = readConfig()
   if (result.failed()) {
     print(`error!`)

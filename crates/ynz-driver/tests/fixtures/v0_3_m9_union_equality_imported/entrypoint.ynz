@@ -4,8 +4,8 @@
 // under AddressSanitizer at -O0 and -O2.
 import { Holder, makeBig, makeTiny } from `lib`
 
-function entrypoint() -> nothing {
-  let known: array<Holder> = []
+function entrypoint() -> Nothing {
+  let known: Array<Holder> = []
   let first = makeBig(1)
   let firstCopy = first.copy()
   known.add(firstCopy)

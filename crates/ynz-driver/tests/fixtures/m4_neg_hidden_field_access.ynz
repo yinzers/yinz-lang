@@ -1,9 +1,9 @@
 shape Wallet {
-  owner: string
-  hidden balance: int = 0
+  owner: String
+  hidden balance: Int = 0
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let w: Wallet = { owner: `Alice` }
   print(w.balance)
 }

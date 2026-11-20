@@ -9,14 +9,14 @@
 // param_has_nested_let_shadow catches this regardless of crossing position.
 //
 // Must exit 1 (compile error), NOT `99\ngarbage`. No ICE text.
-function f(p: int) -> nothing {
+function f(p: Int) -> Nothing {
   if (p > 0) {
-    let p: int = 99
+    let p: Int = 99
     print(p.toString())
     wait sleep(5)
   }
   print(p.toString())
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   f(7)
 }

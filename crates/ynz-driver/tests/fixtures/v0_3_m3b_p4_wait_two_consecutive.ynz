@@ -5,17 +5,17 @@
 // They run sequentially: alpha, then beta.
 //
 // Expected output: alpha\nbeta\ndone
-function alpha() -> nothing {
+function alpha() -> Nothing {
   wait sleep(5)
   print(`alpha`)
 }
 
-function beta() -> nothing {
+function beta() -> Nothing {
   wait sleep(5)
   print(`beta`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   wait alpha()
   wait beta()
   print(`done`)

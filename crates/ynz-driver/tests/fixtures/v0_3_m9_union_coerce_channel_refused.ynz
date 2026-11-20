@@ -5,22 +5,22 @@
 // Correct behavior: does not compile.
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 
-function producer(lend wire: channel<Thing>) -> nothing {
+function producer(lend wire: Channel<Thing>) -> Nothing {
   let big: Big = { label: `hello`, count: 3 }
   wire.send(big)
   wire.close()
 }
 
-function entrypoint() -> nothing {
-  let wire: channel<Thing> = channel<Thing>(2)
+function entrypoint() -> Nothing {
+  let wire: Channel<Thing> = Channel<Thing>(2)
   background producer(wire)
   print(`end`)
 }

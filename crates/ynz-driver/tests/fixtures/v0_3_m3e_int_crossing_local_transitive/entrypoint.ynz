@@ -5,13 +5,13 @@
 // Expected output: "before: 42\nafter: 42"
 import { runJob } from `task_ops`
 
-function caller() -> nothing {
-  let count: int = 42
+function caller() -> Nothing {
+  let count: Int = 42
   print(`before: ${count.toString()}`)
   runJob()
   print(`after: ${count.toString()}`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   caller()
 }

@@ -6,8 +6,8 @@
 // panicked the code generator (index past the argument list) and `xs.count(1)` dropped its
 // argument without a word.
 
-function entrypoint() -> nothing {
-  let xs: array<int> = [1, 2, 3]
+function entrypoint() -> Nothing {
+  let xs: Array<Int> = [1, 2, 3]
   xs.add()
   let found = xs.get()
   let total = xs.count(1)

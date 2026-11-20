@@ -9,7 +9,7 @@
 // Expected: exit code 1, diagnostic mentions the type and suspension.
 // Expected: no stdout (compile error, no binary produced).
 shape Player {
-  health: int
+  health: Int
 }
 
 function sleepingShape() -> Player {
@@ -18,7 +18,7 @@ function sleepingShape() -> Player {
   return p
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   const p = sleepingShape()
   print(p.health.toString())
 }

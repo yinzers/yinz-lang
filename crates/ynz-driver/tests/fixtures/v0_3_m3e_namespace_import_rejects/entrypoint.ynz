@@ -3,6 +3,6 @@
 // Yinz limitation, not wired yet. The call never reaches codegen, so no SIGILL is possible.
 import ops from `task_ops`
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   ops.runTask()
 }

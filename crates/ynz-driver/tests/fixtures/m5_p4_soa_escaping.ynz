@@ -7,11 +7,11 @@
 // its own declined row — Escapes { how: "function parameter — cross-function by
 // definition (D4)" } (params are recorded, never silently absent).
 shape Point {
-  x: int
-  y: int
+  x: Int
+  y: Int
 }
 
-function sumX(share pts: array<Point>) -> int {
+function sumX(share pts: Array<Point>) -> Int {
   let total = 0
   for (p in pts) {
     total = total + p.x
@@ -19,8 +19,8 @@ function sumX(share pts: array<Point>) -> int {
   return total
 }
 
-function entrypoint() -> nothing {
-  let pts: array<Point> = [
+function entrypoint() -> Nothing {
+  let pts: Array<Point> = [
     { x: 1, y: 2 },
     { x: 2, y: 4 },
     { x: 3, y: 6 },

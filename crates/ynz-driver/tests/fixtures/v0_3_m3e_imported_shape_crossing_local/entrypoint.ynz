@@ -6,12 +6,12 @@
 // even when the shape type originates in another module.
 import { Coord, fetchData } from `shapes_lib`
 
-function caller() -> nothing {
+function caller() -> Nothing {
   let pt: Coord = { x: 1, y: 2, z: 3 }
   fetchData()
   print(`x: ${pt.x.toString()}, y: ${pt.y.toString()}, z: ${pt.z.toString()}`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   caller()
 }

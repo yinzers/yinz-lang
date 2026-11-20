@@ -6,14 +6,14 @@
 // optimization levels.
 
 shape End {
-  flag: boolean
+  flag: Boolean
 }
 shape Node {
-  value: int
+  value: Int
   next: Node | End
 }
 
-function sum(share head: Node) -> int {
+function sum(share head: Node) -> Int {
   let total = head.value
   let rest = head.next
   if (rest) {
@@ -27,7 +27,7 @@ function sum(share head: Node) -> int {
   return total
 }
 
-function depth(share head: Node) -> int {
+function depth(share head: Node) -> Int {
   let rest = head.next
   if (rest) {
     is Node => {
@@ -48,13 +48,13 @@ function build() -> Node {
   return first
 }
 
-function clobber(seed: int) -> int {
+function clobber(seed: Int) -> Int {
   let plusOne = seed + 1
   let doubled = plusOne * 2
   return doubled + plusOne
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let list = build()
   let scratch = clobber(5)
   print(sum(list))

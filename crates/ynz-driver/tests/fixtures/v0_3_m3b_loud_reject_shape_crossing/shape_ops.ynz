@@ -4,11 +4,11 @@
 // so the importer cannot safely reconstruct the frame layout from the scalar size.
 
 shape Item {
-  x: int
-  y: int
+  x: Int
+  y: Int
 }
 
-export function processItem() -> nothing {
+export function processItem() -> Nothing {
   let item: Item = { x: 1, y: 2 }
   sleep(10)
   print(`${item.x}`)

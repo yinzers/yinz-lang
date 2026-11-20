@@ -8,11 +8,11 @@
 // first read of its tag (address 0x5).
 
 shape Circle {
-  radius: float
+  radius: Float
 }
-shape Mixed = Circle | int
+shape Mixed = Circle | Int
 
-function show(share fig: Mixed) -> string {
+function show(share fig: Mixed) -> String {
   if (fig) {
     is Circle => {
       return `circle`
@@ -28,7 +28,7 @@ function makeCircle() -> Circle {
   return made
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let circle: Circle = { radius: 2.0 }
   let number: Mixed = 5
   print(show(circle))

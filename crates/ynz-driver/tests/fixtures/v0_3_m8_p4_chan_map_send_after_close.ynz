@@ -7,8 +7,8 @@
 // Expected output:
 //   refused
 //   end
-function producer(lend wire: channel<map<string, int>>) -> nothing {
-  let table: map<string, int> = {}
+function producer(lend wire: Channel<Map<String, Int>>) -> Nothing {
+  let table: Map<String, Int> = {}
   table.set(`a`, 1)
   wire.close()
   let sent = wire.send(table)
@@ -17,8 +17,8 @@ function producer(lend wire: channel<map<string, int>>) -> nothing {
   }
 }
 
-function entrypoint() -> nothing {
-  let wire: channel<map<string, int>> = channel<map<string, int>>(2)
+function entrypoint() -> Nothing {
+  let wire: Channel<Map<String, Int>> = Channel<Map<String, Int>>(2)
   background producer(wire)
   wait sleep(40)
   let got = wire.receive()

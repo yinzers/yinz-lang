@@ -3,13 +3,13 @@
 // Before: the strings were never released.
 // Expected output: done
 
-function build() -> fixed<string> {
+function build() -> Fixed<String> {
   wait sleep(1)
-  let names: fixed<string> = [`a`.toUpperCase(), `b`.toUpperCase()]
+  let names: Fixed<String> = [`a`.toUpperCase(), `b`.toUpperCase()]
   return names
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let task = background build()
   wait sleep(20)
   print(`done`)

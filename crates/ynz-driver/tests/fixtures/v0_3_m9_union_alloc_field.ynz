@@ -4,22 +4,22 @@
 // Correct behavior: prints the sum; the heap allocation count is 0 (the counter test pins it).
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  count: int
-  weight: int
+  count: Int
+  weight: Int
 }
 
 shape Holder {
-  index: int
+  index: Int
   slot: Tiny | Big
-  hidden extra: Big | int = 4096
+  hidden extra: Big | Int = 4096
 }
 
-function weigh(share self: Holder) -> int {
+function weigh(share self: Holder) -> Int {
   let slot: Tiny | Big = self.slot
-  let extra: Big | int = self.extra
+  let extra: Big | Int = self.extra
   let total = 0
   if (slot) {
     is Tiny => {
@@ -40,7 +40,7 @@ function weigh(share self: Holder) -> int {
   return total
 }
 
-function build(seed: int) -> Holder {
+function build(seed: Int) -> Holder {
   if (seed % 2 == 0) {
     let tiny: Tiny = { flag: true }
     let holder: Holder = { index: seed, slot: tiny }
@@ -51,7 +51,7 @@ function build(seed: int) -> Holder {
   return holder
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let total = 0
   let round = 0
   while (round < 300) {

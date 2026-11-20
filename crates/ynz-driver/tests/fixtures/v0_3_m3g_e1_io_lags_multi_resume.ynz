@@ -24,7 +24,7 @@
 // Expected output (both modes — default and --no-auto-parallel):
 //   4954
 
-function crunch(seed: int) -> int {
+function crunch(seed: Int) -> Int {
   let total = 0
   let i = 0
   while (i < 100) {
@@ -34,12 +34,12 @@ function crunch(seed: int) -> int {
   return total + seed
 }
 
-function fetchSlow(seed: int) -> int {
+function fetchSlow(seed: Int) -> Int {
   wait sleep(150)
   return seed + 1
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = crunch(1)
   let b = fetchSlow(2)
   print(a + b)

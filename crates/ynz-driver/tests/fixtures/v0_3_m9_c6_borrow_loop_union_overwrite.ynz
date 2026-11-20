@@ -1,14 +1,14 @@
 // v0.3-M9 C6 borrow probe: a loop variable of a union with a string variant reads an item the body overwrites
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  name: string
-  weight: int
+  name: String
+  weight: Int
 }
 shape Thing = Tiny | Big
 
-function describe(share thing: Thing) -> string {
+function describe(share thing: Thing) -> String {
   if (thing) {
     is Big => {
       return thing.name
@@ -20,10 +20,10 @@ function describe(share thing: Thing) -> string {
   return `none`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let big: Big = { name: `big-${1}`, weight: 5 }
   let first: Thing = big
-  let things: array<Thing> = [first]
+  let things: Array<Thing> = [first]
   for (thing in things) {
     let replacement: Big = { name: `other-${2}`, weight: 6 }
     let wrapped: Thing = replacement

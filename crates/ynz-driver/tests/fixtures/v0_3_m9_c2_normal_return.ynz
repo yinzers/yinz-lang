@@ -9,28 +9,28 @@
 //
 // Expected output (one per line): 5, 2, 9
 
-function tail() -> int {
-  let first: array<int> = [1, 2, 3]
-  let second: array<int> = [4, 5]
+function tail() -> Int {
+  let first: Array<Int> = [1, 2, 3]
+  let second: Array<Int> = [4, 5]
   return first.count() + second.count()
 }
 
-function fallthrough() -> nothing {
-  let only: array<int> = [8, 9]
+function fallthrough() -> Nothing {
+  let only: Array<Int> = [8, 9]
   print(only.count().toString())
 }
 
-function tailSuspending() -> int {
-  let first: array<int> = [1, 2, 3]
+function tailSuspending() -> Int {
+  let first: Array<Int> = [1, 2, 3]
   wait sleep(1)
-  let second: array<int> = [4, 5]
+  let second: Array<Int> = [4, 5]
   wait sleep(1)
   return first.count() + second.count() + second[0].or(0)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   print(tail().toString())
   fallthrough()
-  let value: int = tailSuspending()
+  let value: Int = tailSuspending()
   print(value.toString())
 }

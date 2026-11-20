@@ -10,12 +10,12 @@
 //
 // Expected: exit code 1, diagnostic says "cannot yet return" and mentions "{ health: int }".
 // Expected: no stdout (compile error, no binary produced).
-function sleepingAnon() -> { health: int } {
+function sleepingAnon() -> { health: Int } {
   wait sleep(5)
   return { health: 42 }
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   const r = sleepingAnon()
   print(r.health.toString())
 }

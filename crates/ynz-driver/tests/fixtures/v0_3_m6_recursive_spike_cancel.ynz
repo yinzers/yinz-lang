@@ -31,7 +31,7 @@
 // Negative control (YNZ_SKIP_RECURSION_DROP=1): the chain walk is skipped entirely, so
 // handle_alloc > handle_free proves the walk is the mechanism responsible for the cleanup.
 
-function burn(seed: int) -> int {
+function burn(seed: Int) -> Int {
   let total = 0
   let i = 0
   while (i < 100) {
@@ -42,7 +42,7 @@ function burn(seed: int) -> int {
   return total + seed
 }
 
-function looper() -> nothing {
+function looper() -> Nothing {
   let go = true
   if (go) {
     let lo = burn(3)
@@ -52,7 +52,7 @@ function looper() -> nothing {
   looper()
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background looper()
   wait sleep(1000)
   print(`done`)

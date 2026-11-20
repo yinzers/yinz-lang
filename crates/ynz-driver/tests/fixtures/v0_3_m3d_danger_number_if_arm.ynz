@@ -13,9 +13,9 @@
 //   6.0
 //   15.0
 
-function addUp(n: int) -> number {
-  let total: number = 0.0
-  let i: int = 0
+function addUp(n: Int) -> Number {
+  let total: Number = 0.0
+  let i: Int = 0
   while (i < n) {
     total = total + 1.5
     i = i + 1
@@ -23,9 +23,9 @@ function addUp(n: int) -> number {
   return total
 }
 
-function addDouble(n: int) -> number {
-  let total: number = 0.0
-  let i: int = 0
+function addDouble(n: Int) -> Number {
+  let total: Number = 0.0
+  let i: Int = 0
   while (i < n) {
     total = total + 2.5
     i = i + 1
@@ -33,8 +33,8 @@ function addDouble(n: int) -> number {
   return total
 }
 
-function combine() -> number {
-  let result: number = 0.0
+function combine() -> Number {
+  let result: Number = 0.0
   let go = true
   if (go) {
     let lo = addUp(4)
@@ -45,7 +45,7 @@ function combine() -> number {
   return result
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = combine()
   print(r)
 }

@@ -6,17 +6,17 @@
 // CONTRACT CELL (RED until P2 step 3): `contains` on array<Shape> asserts VALUE
 // equality (field-wise) — see m5_p2_byval_shape_literal.ynz for the recorded decision.
 shape Part {
-  qty: int
-  price: int
+  qty: Int
+  price: Int
 }
 
-function entrypoint() -> nothing {
-  let seed: int = 1
-  let qa: int = seed * 1
-  let qb: int = seed * 2
-  let qc: int = seed * 3
-  let qd: int = seed * 4
-  let parts: array<Part> = [
+function entrypoint() -> Nothing {
+  let seed: Int = 1
+  let qa: Int = seed * 1
+  let qb: Int = seed * 2
+  let qc: Int = seed * 3
+  let qd: Int = seed * 4
+  let parts: Array<Part> = [
     { qty: qa, price: qa * 10 },
     { qty: qb, price: qb * 10 },
     { qty: qc, price: qc * 10 }
@@ -46,26 +46,26 @@ function entrypoint() -> nothing {
   if (l.exists()) {
     print(l.value.qty)
   }
-  let cq: int = seed * 2
+  let cq: Int = seed * 2
   let needlePresent: Part = { qty: cq, price: cq * 10 }
   print(parts.contains(needlePresent))
-  let aq: int = seed * 9
+  let aq: Int = seed * 9
   let needleAbsent: Part = { qty: aq, price: 99 }
   print(parts.contains(needleAbsent))
-  let sq: int = seed * 5
+  let sq: Int = seed * 5
   parts[1] = { qty: sq, price: sq * 10 }
   let s1 = parts[1]
   if (s1.exists()) {
     print(s1.value.qty)
   }
-  let tq: int = seed * 6
+  let tq: Int = seed * 6
   let pt: Part = { qty: tq, price: tq * 10 }
   parts.set(2, pt)
   let s2 = parts[2]
   if (s2.exists()) {
     print(s2.value.price)
   }
-  let total: int = 0
+  let total: Int = 0
   for (p in parts) {
     total = total + p.qty
   }

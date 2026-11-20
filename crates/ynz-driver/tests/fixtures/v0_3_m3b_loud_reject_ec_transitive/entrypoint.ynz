@@ -3,7 +3,7 @@
 // Expected output: "got: 42"
 import { compute } from `ec_ops`
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let result = compute()
   let v = result.or(0)
   print(`got: ${v}`)

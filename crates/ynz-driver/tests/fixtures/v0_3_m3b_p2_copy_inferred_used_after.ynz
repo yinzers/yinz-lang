@@ -5,13 +5,13 @@
 // `caller sees: 42` must appear after `after spawn`, proving the caller still holds
 // the original value. The task also prints `task ran: 42` from its copy.
 
-function processTask(id: int) -> nothing {
+function processTask(id: Int) -> Nothing {
   sleepBlocking(10)
   print(`task ran: ${id}`)
 }
 
-function entrypoint() -> nothing {
-  let taskId: int = 42
+function entrypoint() -> Nothing {
+  let taskId: Int = 42
   print(`before spawn`)
   background processTask(taskId)
   // taskId IS read after this point — compiler infers .copy

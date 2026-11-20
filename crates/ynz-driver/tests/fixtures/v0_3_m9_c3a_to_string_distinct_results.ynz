@@ -4,21 +4,21 @@
 //
 // Expected output: 111 222 7.5 9 3.25 4.75 (one per line)
 
-function entrypoint() -> nothing {
-  let firstInt: int = 111
-  let secondInt: int = 222
-  let firstIntText: string = firstInt.toString()
-  let secondIntText: string = secondInt.toString()
+function entrypoint() -> Nothing {
+  let firstInt: Int = 111
+  let secondInt: Int = 222
+  let firstIntText: String = firstInt.toString()
+  let secondIntText: String = secondInt.toString()
 
-  let firstFloat: float = 7.5
-  let secondFloat: float = (9).toFloat()
-  let firstFloatText: string = firstFloat.toString()
-  let secondFloatText: string = secondFloat.toString()
+  let firstFloat: Float = 7.5
+  let secondFloat: Float = (9).toFloat()
+  let firstFloatText: String = firstFloat.toString()
+  let secondFloatText: String = secondFloat.toString()
 
-  let firstNumber: number = 3.25
-  let secondNumber: number = 4.75
-  let firstNumberText: string = firstNumber.toString()
-  let secondNumberText: string = secondNumber.toString()
+  let firstNumber: Number = 3.25
+  let secondNumber: Number = 4.75
+  let firstNumberText: String = firstNumber.toString()
+  let secondNumberText: String = secondNumber.toString()
 
   print(firstIntText)
   print(secondIntText)

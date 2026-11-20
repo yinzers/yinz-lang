@@ -4,17 +4,17 @@
 // for the entire tree — NOT one per call.
 // Expected alloc count: 1 (the root frame for the task tree).
 
-function inner() -> int {
+function inner() -> Int {
   wait sleep(1)
   return 1
 }
 
-function outer() -> int {
+function outer() -> Int {
   let v = inner()
   return v
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = outer()
   print(`result: ${r.toString()}`)
 }

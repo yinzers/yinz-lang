@@ -7,21 +7,21 @@
 // 1, `let shown = text` at its last use moves 0. Total 2+1+1+1+0+1+1+0 = 7.
 // Expected output: one value per line below.
 
-function pick(names: array<string>, index: int) -> string {
+function pick(names: Array<String>, index: Int) -> String {
   return names[index].or(`none`)
 }
 
-function build(count: int) -> string {
-  let text: string = `built-${count}`
+function build(count: Int) -> String {
+  let text: String = `built-${count}`
   return text
 }
 
-function echoed(label: string) -> string {
+function echoed(label: String) -> String {
   return label
 }
 
-function entrypoint() -> nothing {
-  let names: array<string> = [`a`, `b`]
+function entrypoint() -> Nothing {
+  let names: Array<String> = [`a`, `b`]
   let inside = pick(names, 0)
   let outside = pick(names, 9)
   let built = build(2)
@@ -30,8 +30,8 @@ function entrypoint() -> nothing {
   print(outside)
   print(built)
   print(again)
-  let count: int = 12
-  let text: string = count.toString()
-  let shown: string = text
+  let count: Int = 12
+  let text: String = count.toString()
+  let shown: String = text
   print(shown)
 }

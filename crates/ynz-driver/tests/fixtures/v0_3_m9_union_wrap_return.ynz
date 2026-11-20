@@ -10,15 +10,15 @@
 // the caller's `is` arm picked the wrong variant or read stack memory that was already dead.
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 
-function describe(share t: Thing) -> string {
+function describe(share t: Thing) -> String {
   if (t) {
     is Tiny => {
       return `tiny`
@@ -60,12 +60,12 @@ function makeLater() -> Thing {
   return tiny
 }
 
-function clobberStack(share depth: int) -> int {
+function clobberStack(share depth: Int) -> Int {
   let filler: Big = { label: `filler`, count: depth }
   return filler.count
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let fromBig = makeBig()
   let fromTiny = makeTiny()
   let fromLocal = makeFromLocalUnion()

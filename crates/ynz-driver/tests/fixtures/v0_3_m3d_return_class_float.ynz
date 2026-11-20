@@ -4,9 +4,9 @@
 //
 // Each function loops, so it does enough work to be worth running alongside the other.
 
-function sumf(n: int) -> float {
-  let total: float = 0.0.toFloat()
-  let i: int = 0
+function sumf(n: Int) -> Float {
+  let total: Float = 0.0.toFloat()
+  let i: Int = 0
   while (i < n) {
     total = total + 1.5.toFloat()
     i = i + 1
@@ -14,9 +14,9 @@ function sumf(n: int) -> float {
   return total
 }
 
-function sumf2(n: int) -> float {
-  let total: float = 0.0.toFloat()
-  let i: int = 0
+function sumf2(n: Int) -> Float {
+  let total: Float = 0.0.toFloat()
+  let i: Int = 0
   while (i < n) {
     total = total + 2.5.toFloat()
     i = i + 1
@@ -24,7 +24,7 @@ function sumf2(n: int) -> float {
   return total
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = sumf(4)
   let b = sumf2(6)
   print(a)

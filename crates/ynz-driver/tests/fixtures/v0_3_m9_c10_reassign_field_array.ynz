@@ -2,10 +2,10 @@
 // started with, as a loop over a binding does. Correct behavior: prints 6, 1.
 
 shape Holder {
-  rows: array<array<int>>
+  rows: Array<Array<Int>>
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let holder: Holder = { rows: [[1], [2], [3]] }
   let total = 0
   for (row in holder.rows) {

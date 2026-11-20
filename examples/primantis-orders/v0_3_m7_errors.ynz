@@ -8,30 +8,30 @@
 
 // An order slip a worker reads while another parameter of the SAME call rewrites it.
 shape OrderSlip {
-  quantity: int
+  quantity: Int
 }
 
 // A sandwich order holding a nested slip — the whole-vs-part overlap trigger below.
 shape SandwichOrder {
-  table: int
+  table: Int
   slip: OrderSlip
 }
 
-function copyQuantity(share source: OrderSlip, lend target: OrderSlip) -> nothing {
+function copyQuantity(share source: OrderSlip, lend target: OrderSlip) -> Nothing {
   target.quantity = source.quantity
 }
 
-function swapQuantities(lend first: OrderSlip, lend second: OrderSlip) -> nothing {
-  let held: int = first.quantity
+function swapQuantities(lend first: OrderSlip, lend second: OrderSlip) -> Nothing {
+  let held: Int = first.quantity
   first.quantity = second.quantity
   second.quantity = held
 }
 
-function tallyOrder(lend whole: SandwichOrder, share part: OrderSlip) -> nothing {
+function tallyOrder(lend whole: SandwichOrder, share part: OrderSlip) -> Nothing {
   whole.table = whole.table + part.quantity
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let slip: OrderSlip = { quantity: 2 }
   let order: SandwichOrder = { table: 6, slip: { quantity: 3 } }
 

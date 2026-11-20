@@ -8,9 +8,9 @@
 // inside a function. When a future slice adds error-raising, a companion fixture covers the
 // case where one of the two functions fails.
 
-function compute(n: int) -> int errors {
-  let total: int = 0
-  let i: int = 0
+function compute(n: Int) -> Int errors {
+  let total: Int = 0
+  let i: Int = 0
   while (i < n) {
     total = total + i
     i = i + 1
@@ -18,9 +18,9 @@ function compute(n: int) -> int errors {
   return total
 }
 
-function compute2(n: int) -> int errors {
-  let total: int = 0
-  let i: int = 0
+function compute2(n: Int) -> Int errors {
+  let total: Int = 0
+  let i: Int = 0
   while (i < n) {
     total = total + i * 2
     i = i + 1
@@ -28,7 +28,7 @@ function compute2(n: int) -> int errors {
   return total
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = compute(4)
   let b = compute2(5)
   print(a.or(-1))

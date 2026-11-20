@@ -2,14 +2,14 @@
 // countdown(n) recursively suspends at each level.
 // Used by cancellation-no-leak test.
 
-function countdown(n: int) -> nothing {
+function countdown(n: Int) -> Nothing {
   if (n > 0) {
     wait sleep(100)
     countdown(n - 1)
   }
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background countdown(3)
   print(`launched`)
 }

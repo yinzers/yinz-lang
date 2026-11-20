@@ -4,7 +4,7 @@
 // nothing leaked it, so the call is refused.
 // Expected: a compile error naming the type, the reason and the owned-copy recovery.
 
-function crunch(rows: fixed<array<string>, 2>) -> nothing {
+function crunch(rows: Fixed<Array<String>, 2>) -> Nothing {
   wait sleep(30)
   for (row in rows) {
     print(row.count())
@@ -12,17 +12,17 @@ function crunch(rows: fixed<array<string>, 2>) -> nothing {
 }
 
 shape Crate {
-  rows: fixed<array<string>, 2>
+  rows: Fixed<Array<String>, 2>
 }
 
 function make() -> Crate {
-  let first: array<string> = [`a`.toUpperCase()]
-  let second: array<string> = [`b`.toUpperCase(), `c`.toUpperCase()]
+  let first: Array<String> = [`a`.toUpperCase()]
+  let second: Array<String> = [`b`.toUpperCase(), `c`.toUpperCase()]
   let crate: Crate = { rows: [first, second] }
   return crate
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background crunch(make().rows)
   wait sleep(100)
   print(`done`)

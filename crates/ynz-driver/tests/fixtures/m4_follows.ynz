@@ -1,18 +1,18 @@
 shape Printable {
-  display(share self) -> nothing
+  display(share self) -> Nothing
 }
 
 shape Point follows Printable {
-  x: int
-  y: int
+  x: Int
+  y: Int
 }
 
-function display(share self: Point) -> nothing {
+function display(share self: Point) -> Nothing {
   print(self.x)
   print(self.y)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let p: Point = { x: 3, y: 4 }
   p.display()
 }

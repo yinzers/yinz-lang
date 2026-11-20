@@ -5,12 +5,12 @@
 // Both `before spawn` and `task ran` must appear; `after spawn` is printed on main
 // immediately. The task takes the `id` value and prints it.
 
-function processTask(id: int) -> nothing {
+function processTask(id: Int) -> Nothing {
   print(`task ran: ${id}`)
 }
 
-function entrypoint() -> nothing {
-  let taskId: int = 42
+function entrypoint() -> Nothing {
+  let taskId: Int = 42
   print(`before spawn`)
   background processTask(taskId)
   // taskId is NOT read after this point — compiler infers .give

@@ -9,12 +9,12 @@
 //
 // Expected output (one per line): 15, 18, 0, 1, 2, 3
 
-function looped() -> int {
-  let kept: array<int> = [9, 9, 9]
-  let i: int = 0
-  let total: int = 0
+function looped() -> Int {
+  let kept: Array<Int> = [9, 9, 9]
+  let i: Int = 0
+  let total: Int = 0
   while (i < 3) {
-    let per: array<int> = [i, i + 1]
+    let per: Array<Int> = [i, i + 1]
     total = total + per.count() + kept.count()
     i = i + 1
   }
@@ -22,11 +22,11 @@ function looped() -> int {
   return total + kept.count()
 }
 
-function loopedSuspending() -> int {
-  let kept: array<int> = [9, 9, 9]
-  let i: int = 0
+function loopedSuspending() -> Int {
+  let kept: Array<Int> = [9, 9, 9]
+  let i: Int = 0
   while (i < 3) {
-    let per: array<int> = [i, i + 1]
+    let per: Array<Int> = [i, i + 1]
     wait sleep(1)
     print(per[0].or(-1).toString())
     i = i + 1
@@ -34,9 +34,9 @@ function loopedSuspending() -> int {
   return kept.count()
 }
 
-function entrypoint() -> nothing {
-  let plain: int = looped()
+function entrypoint() -> Nothing {
+  let plain: Int = looped()
   print(plain.toString())
-  let suspended: int = loopedSuspending()
+  let suspended: Int = loopedSuspending()
   print(suspended.toString())
 }

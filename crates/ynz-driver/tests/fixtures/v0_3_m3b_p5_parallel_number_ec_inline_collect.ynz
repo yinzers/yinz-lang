@@ -14,17 +14,17 @@
 // The test asserts byte-exact decimal128 stdout under default and --no-auto-parallel modes.
 //
 // Expected output: a:9999999999.000000001\nb:2.5
-function priceA() -> number errors {
+function priceA() -> Number errors {
   wait sleep(5)
   return 9999999999.000000001
 }
 
-function priceB() -> number errors {
+function priceB() -> Number errors {
   wait sleep(5)
   return 2.5
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = priceA()
   let b = priceB()
   let av = a.or(0.0)

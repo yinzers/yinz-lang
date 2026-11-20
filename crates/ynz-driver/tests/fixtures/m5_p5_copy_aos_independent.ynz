@@ -14,12 +14,12 @@
 //   nums: 105
 //   copy: 6
 shape Part {
-  id: int
-  qty: int
+  id: Int
+  qty: Int
 }
 
-function entrypoint() -> nothing {
-  let a: array<Part> = [{ id: 1, qty: 10 }, { id: 2, qty: 20 }]
+function entrypoint() -> Nothing {
+  let a: Array<Part> = [{ id: 1, qty: 10 }, { id: 2, qty: 20 }]
   let b = a.copy()
   a[0] = { id: 1, qty: 99 }
   let sa = 0
@@ -33,7 +33,7 @@ function entrypoint() -> nothing {
   print(`a: ${sa}`)
   print(`b: ${sb}`)
 
-  let nums: array<int> = [1, 2, 3]
+  let nums: Array<Int> = [1, 2, 3]
   let numsCopy = nums.copy()
   nums[0] = 100
   let sn = 0

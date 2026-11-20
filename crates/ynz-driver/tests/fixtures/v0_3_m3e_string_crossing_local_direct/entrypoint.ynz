@@ -5,13 +5,13 @@
 // Expected output: "before: hello\nafter: hello"
 import { fetchData } from `io_ops`
 
-function caller() -> nothing {
-  const name: string = `hello`
+function caller() -> Nothing {
+  const name: String = `hello`
   print(`before: ${name}`)
   fetchData()
   print(`after: ${name}`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   caller()
 }

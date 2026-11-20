@@ -3,17 +3,17 @@
 // holds, so nothing points at what the scope exit frees.
 import { firstRow } from `helpers`
 
-function pick(condition: boolean) -> int {
-  let held: maybe<array<int>> = none
+function pick(condition: Boolean) -> Int {
+  let held: Maybe<Array<Int>> = none
   if (condition) {
-    let local: array<array<int>> = [[1, 2]]
+    let local: Array<Array<Int>> = [[1, 2]]
     held = firstRow(local)
   }
   return held.or([0]).count()
 }
 
-function entrypoint() -> nothing {
-  let total: int = 0
+function entrypoint() -> Nothing {
+  let total: Int = 0
   for (pass in range(0, 20)) {
     total = total + pick(true) + pick(false)
   }

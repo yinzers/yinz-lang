@@ -5,15 +5,15 @@
 // Pre-fix failure: the bare shape pointer was stored as the map value.
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 
-function describe(share thing: Thing) -> string {
+function describe(share thing: Thing) -> String {
   if (thing) {
     is Tiny => {
       return `tiny`
@@ -25,10 +25,10 @@ function describe(share thing: Thing) -> string {
   return `none`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let tiny: Tiny = { flag: true }
   let big: Big = { label: `hello`, count: 3 }
-  let things: map<string, Thing> = {}
+  let things: Map<String, Thing> = {}
   things.set(`a`, tiny)
   things.set(`b`, big)
   let first = things.get(`a`)

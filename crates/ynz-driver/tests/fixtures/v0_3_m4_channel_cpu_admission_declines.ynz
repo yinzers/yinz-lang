@@ -15,21 +15,21 @@
 //
 // Expected output (both modes — default and --no-auto-parallel):
 //   32
-function pump(seed: int) -> int {
-  let ch: channel<int> = channel<int>(4)
+function pump(seed: Int) -> Int {
+  let ch: Channel<Int> = Channel<Int>(4)
   ch.send(seed)
   let got = ch.receive()
   let value = got.or(0)
   return value + 1
 }
 
-function host() -> int {
+function host() -> Int {
   let a = pump(10)
   let b = pump(20)
   return a + b
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = host()
   print(r.toString())
 }

@@ -8,19 +8,19 @@
 // SILENT compile-and-run fails the pin, forcing the union-marshalling question
 // to be answered consciously. See value_to_stable_bits' KNOWN-HOLE doc.
 shape Circle {
-  radius: float
+  radius: Float
 }
 
 shape Square {
-  side: float
+  side: Float
 }
 
 shape Figure = Circle | Square
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let c: Circle = { radius: 3.0 }
   let fig: Figure = c
-  let figs: map<int, Figure> = {}
+  let figs: Map<Int, Figure> = {}
   figs.set(1, fig)
   let g = figs.get(1)
   if (g.exists()) {

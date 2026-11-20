@@ -7,16 +7,16 @@
 // Pre-fix (bd1ce3e): internal compiler error "fit 2 of them equally, with no exact match".
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 function pickA<T>(share first: T | Tiny, share second: T) -> T | Tiny {
   return second
 }
-function show(share picked: Big | Tiny) -> nothing {
+function show(share picked: Big | Tiny) -> Nothing {
   if (picked) {
     is Big => {
       print(picked.label)
@@ -26,7 +26,7 @@ function show(share picked: Big | Tiny) -> nothing {
     }
   }
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let big: Big = { label: `hello`, count: 3 }
   let tiny: Tiny = { flag: true }
   let u: Big | Tiny = big.copy()

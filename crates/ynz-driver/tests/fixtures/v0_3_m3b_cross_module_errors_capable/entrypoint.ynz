@@ -3,12 +3,12 @@
 // Expected output: "got: 42"
 import { fetchData } from `data_ops`
 
-function caller() -> nothing {
+function caller() -> Nothing {
   const result = fetchData()
   const v = result.or(0)
   print(`got: ${v}`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   caller()
 }

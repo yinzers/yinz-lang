@@ -8,16 +8,16 @@
 // `Expr::Call`-shaped inners only — a MethodCall inner has no UFCS-resolved spawn path.
 
 shape Ship {
-  name: string
-  cargo: int
+  name: String
+  cargo: Int
 }
 
-function haul(give self: Ship) -> nothing {
+function haul(give self: Ship) -> Nothing {
   wait sleep(20)
   print(self.name)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let ship: Ship = { name: `Mon`, cargo: 10 }
   background ship.haul()
   wait sleep(120)

@@ -7,12 +7,12 @@
 
 options Color { red, green }
 
-function readConfig() -> string errors {
+function readConfig() -> String errors {
   return `ok`
 }
 
-function entrypoint() -> nothing {
-  let secret: sensitive string = sensitive(`hello`)
+function entrypoint() -> Nothing {
+  let secret: sensitive String = sensitive(`hello`)
   let part = secret.substring(1)
   let has = secret.contains()
   let fallback = readConfig().or()

@@ -16,9 +16,9 @@
 //   6.0
 //   waited
 
-function priceA(n: int) -> number errors {
-  let total: number = 0.0
-  let i: int = 0
+function priceA(n: Int) -> Number errors {
+  let total: Number = 0.0
+  let i: Int = 0
   while (i < n) {
     total = total + 1.5
     i = i + 1
@@ -26,12 +26,12 @@ function priceA(n: int) -> number errors {
   return total
 }
 
-function fetch(n: int) -> string {
+function fetch(n: Int) -> String {
   wait sleep(0)
   return `waited`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = priceA(4)
   let b = fetch(4)
   print(a.or(0.0))

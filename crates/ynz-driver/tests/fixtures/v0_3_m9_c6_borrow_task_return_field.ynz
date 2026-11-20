@@ -2,19 +2,19 @@
 // The reader keeps the value it read after the place is overwritten: no freed memory is read.
 
 shape Bucket {
-  rows: array<int>
-  id: int
+  rows: Array<Int>
+  id: Int
 }
-function pick(bucket: Bucket) -> array<int> {
+function pick(bucket: Bucket) -> Array<Int> {
   wait sleep(1)
   return bucket.rows
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let bucket: Bucket = { rows: [10, 20, 30], id: 1 }
   let handle = background pick(bucket)
   wait sleep(50)
   let got = handle.receive()
-  let fallback: array<int> = []
+  let fallback: Array<Int> = []
   let pickedArray = got.or(fallback)
   print(pickedArray.count())
   print(pickedArray[0].or(-1))

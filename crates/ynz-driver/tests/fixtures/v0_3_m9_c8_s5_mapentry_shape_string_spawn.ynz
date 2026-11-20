@@ -2,22 +2,22 @@
 // the value's shape cell and the string the shape holds are all freed by the ladder, for a plain
 // task (CPU arm) and a suspending task (state-machine ladder).
 shape Part {
-  name: string
-  qty: int
+  name: String
+  qty: Int
 }
 
-function readLater(entry: MapEntry<int, Part>) -> nothing {
+function readLater(entry: MapEntry<Int, Part>) -> Nothing {
   sleepBlocking(30)
   print(entry.value.name)
 }
 
-function readLaterWait(entry: MapEntry<int, Part>) -> nothing {
+function readLaterWait(entry: MapEntry<Int, Part>) -> Nothing {
   wait sleep(30)
   print(entry.value.name)
 }
 
-function entrypoint() -> nothing {
-  let stock: map<int, Part> = {}
+function entrypoint() -> Nothing {
+  let stock: Map<Int, Part> = {}
   stock.set(1, { name: `a${1}`, qty: 10 })
   for (entry in stock) {
     background readLater(entry)

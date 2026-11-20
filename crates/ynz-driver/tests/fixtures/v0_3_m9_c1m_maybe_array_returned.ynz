@@ -5,14 +5,14 @@
 // was right.
 // Expected output: `true`.
 
-function firstRow() -> maybe<array<int>> {
-  let row: array<int> = [1, 2, 3]
-  let rows: array<array<int>> = [row]
+function firstRow() -> Maybe<Array<Int>> {
+  let row: Array<Int> = [1, 2, 3]
+  let rows: Array<Array<Int>> = [row]
   let picked = rows.get(0)
   return picked
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let built = firstRow()
   print(built.exists())
 }

@@ -2,7 +2,7 @@
 
 import { capitalize } from `shared/announcements`
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let special = `primanti's coleslaw sandwich`
   let headline = capitalize(special)
   print(`Tonight's special: ${headline}!`)

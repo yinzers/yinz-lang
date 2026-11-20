@@ -11,23 +11,23 @@
 // The test asserts byte-identical stdout under default and --no-auto-parallel modes.
 //
 // Expected output: a:7\nb:8
-function priceA() -> int {
+function priceA() -> Int {
   wait sleep(40)
   return 7
 }
 
-function priceB() -> int {
+function priceB() -> Int {
   wait sleep(40)
   return 8
 }
 
-function run() -> nothing {
+function run() -> Nothing {
   let a = priceA()
   let b = priceB()
   print(`a:${a.toString()}`)
   print(`b:${b.toString()}`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   run()
 }

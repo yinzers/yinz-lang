@@ -9,22 +9,22 @@
 // Expected output:
 //   4
 //   end
-function hopC(lend wire: channel<array<int>>, give rows: array<int>) -> nothing {
+function hopC(lend wire: Channel<Array<Int>>, give rows: Array<Int>) -> Nothing {
   wire.send(rows)
 }
 
-function hopB(lend wire: channel<array<int>>, give rows: array<int>) -> nothing {
+function hopB(lend wire: Channel<Array<Int>>, give rows: Array<Int>) -> Nothing {
   hopC(wire, rows)
 }
 
-function hopA(lend wire: channel<array<int>>, give rows: array<int>) -> nothing {
+function hopA(lend wire: Channel<Array<Int>>, give rows: Array<Int>) -> Nothing {
   hopB(wire, rows)
   wire.close()
 }
 
-function entrypoint() -> nothing {
-  let wire: channel<array<int>> = channel<array<int>>(2)
-  let rows: array<int> = [4, 5, 6, 7]
+function entrypoint() -> Nothing {
+  let wire: Channel<Array<Int>> = Channel<Array<Int>>(2)
+  let rows: Array<Int> = [4, 5, 6, 7]
   wait hopA(wire, rows)
   let got = wire.receive()
   if (got.exists()) {

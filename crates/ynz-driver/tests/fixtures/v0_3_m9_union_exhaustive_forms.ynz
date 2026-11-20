@@ -7,15 +7,15 @@
 // Correct behavior: compiles and prints `circle`, `circle`, `square`, `circle`, `end`.
 
 shape Circle {
-  radius: float
+  radius: Float
 }
 shape Square {
-  side: float
+  side: Float
 }
-shape WithInt = Circle | int
+shape WithInt = Circle | Int
 shape Pair = Circle | Square
 
-function withElse(share fig: WithInt) -> string {
+function withElse(share fig: WithInt) -> String {
   if (fig) {
     is Circle => {
       return `circle`
@@ -27,7 +27,7 @@ function withElse(share fig: WithInt) -> string {
   return `unreachable`
 }
 
-function bothShapes(share fig: Pair) -> string {
+function bothShapes(share fig: Pair) -> String {
   if (fig) {
     is Circle => {
       return `circle`
@@ -39,7 +39,7 @@ function bothShapes(share fig: Pair) -> string {
   return `unreachable`
 }
 
-function onlyIfPresent(share fig: Circle | nothing) -> string {
+function onlyIfPresent(share fig: Circle | Nothing) -> String {
   if (fig) {
     is Circle => {
       return `circle`
@@ -48,7 +48,7 @@ function onlyIfPresent(share fig: Circle | nothing) -> string {
   return `absent`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let circle: Circle = { radius: 2.0 }
   let square: Square = { side: 3.0 }
   let mixed: WithInt = circle.copy()
@@ -57,7 +57,7 @@ function entrypoint() -> nothing {
   print(bothShapes(first))
   let second: Pair = square
   print(bothShapes(second))
-  let optional: Circle | nothing = circle
+  let optional: Circle | Nothing = circle
   print(onlyIfPresent(optional))
   print(`end`)
 }

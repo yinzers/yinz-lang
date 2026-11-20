@@ -11,14 +11,14 @@
 // Expected output (both modes):
 //   999
 //   89
-function fib(n: int) -> int {
+function fib(n: Int) -> Int {
   if (n < 2) {
     return n
   }
   return fib(n - 1) + fib(n - 2)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = fib(10)
   let b = fib(11)
   a = 999

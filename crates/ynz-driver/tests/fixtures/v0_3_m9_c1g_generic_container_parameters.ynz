@@ -10,32 +10,32 @@
 // version of the comparison; `pickArray` failed in codegen ("cannot alloca for type Generic").
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 
 function pickOrTiny<T>(share first: T | Tiny, share second: T) -> T | Tiny {
   return first
 }
 
-function pickMaybe<T>(share first: maybe<T>, share second: T) -> T {
+function pickMaybe<T>(share first: Maybe<T>, share second: T) -> T {
   return second
 }
 
-function pickArray<T>(share items: array<T>, share second: T) -> T {
+function pickArray<T>(share items: Array<T>, share second: T) -> T {
   return second
 }
 
-function entrypoint() -> nothing {
-  let numbers: array<int> = [5]
+function entrypoint() -> Nothing {
+  let numbers: Array<Int> = [5]
   let found = numbers.first()
   print(pickMaybe(found, 3).toString())
-  print(pickMaybe<int>(found, 3).toString())
+  print(pickMaybe<Int>(found, 3).toString())
   print(pickArray(numbers, 3).toString())
-  print(pickArray<int>(numbers, 3).toString())
+  print(pickArray<Int>(numbers, 3).toString())
   let big: Big = { label: `hello`, count: 3 }
   let tiny: Tiny = { flag: true }
   let out = pickOrTiny(tiny, big)

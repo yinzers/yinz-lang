@@ -2,6 +2,6 @@
 // Cross-file CALLS ship in v0.2; this test validates the multi-file build pipeline.
 import { helper } from `helpers`
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   print(`hello from multi-file project`)
 }

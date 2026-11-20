@@ -4,12 +4,12 @@
 // behavior: the program compiles, runs, frees every allocation (items included) and is clean
 // under AddressSanitizer at both optimization levels.
 
-function consume(give rows: fixed<string>) -> int {
+function consume(give rows: Fixed<String>) -> Int {
   return 1
 }
 
-function entrypoint() -> nothing {
-  let rows: fixed<string> = [`a`.toUpperCase(), `bb`]
+function entrypoint() -> Nothing {
+  let rows: Fixed<String> = [`a`.toUpperCase(), `bb`]
   let used = consume(rows)
   print(used)
 }

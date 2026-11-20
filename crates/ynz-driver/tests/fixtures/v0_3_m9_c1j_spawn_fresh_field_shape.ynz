@@ -5,15 +5,15 @@
 // Expected output: the first name, the second name, then `done`.
 
 shape Label {
-  first: string
-  second: string
+  first: String
+  second: String
 }
 
 shape Crate {
   label: Label
 }
 
-function crunch(label: Label) -> nothing {
+function crunch(label: Label) -> Nothing {
   print(label.first)
   print(label.second)
 }
@@ -23,7 +23,7 @@ function make() -> Crate {
   return crate
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background crunch(make().label)
   wait sleep(50)
   print(`done`)

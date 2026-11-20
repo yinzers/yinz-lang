@@ -3,12 +3,12 @@
 // The {i64,i64} return slot must carry error_ptr in field0 — if field0 is 0
 // (error dropped), .or(fallback) treats it as success and returns 0 instead of fallback.
 
-function fallibleStep() -> int errors {
+function fallibleStep() -> Int errors {
   let v = wait __testFallibleAsync(true)
   return v
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = fallibleStep()
   let safe = r.or(99)
   print(`safe: ${safe.toString()}`)

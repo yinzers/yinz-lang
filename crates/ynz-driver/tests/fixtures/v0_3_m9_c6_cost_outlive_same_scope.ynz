@@ -3,12 +3,12 @@
 // Allocations per pass: the field's literal (header + buffer), two passes.
 
 shape Bucket {
-  rows: array<int>
-  id: int
+  rows: Array<Int>
+  id: Int
 }
 
-function entrypoint() -> nothing {
-  let pass: int = 0
+function entrypoint() -> Nothing {
+  let pass: Int = 0
   while (pass < 2) {
     let bucket: Bucket = { rows: [10, 20, 30], id: 1 }
     let rows = bucket.rows

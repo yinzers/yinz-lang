@@ -2,12 +2,12 @@
 // Demonstrates: import syntax, sensitive type, background (sequential).
 import { ApiCred, validateCred } from `auth`
 
-function processRequest(key: sensitive string) -> nothing {
+function processRequest(key: sensitive String) -> Nothing {
   print(key)
 }
 
-function entrypoint() -> nothing {
-  let apiKey: sensitive string = sensitive(`super-secret-key`)
+function entrypoint() -> Nothing {
+  let apiKey: sensitive String = sensitive(`super-secret-key`)
   print(apiKey)
   print(apiKey.reveal())
   background processRequest(apiKey)

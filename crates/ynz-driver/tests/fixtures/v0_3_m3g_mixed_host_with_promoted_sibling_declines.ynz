@@ -25,7 +25,7 @@
 // Expected output (both modes — default and --no-auto-parallel):
 //   9907
 //   9911
-function crunch(seed: int) -> int {
+function crunch(seed: Int) -> Int {
   let total = 0
   let i = 0
   while (i < 100) {
@@ -35,20 +35,20 @@ function crunch(seed: int) -> int {
   return total + seed
 }
 
-function pureCpuHost() -> int {
+function pureCpuHost() -> Int {
   let a = crunch(3)
   let b = crunch(4)
   return a + b
 }
 
-function mixedHost() -> int {
+function mixedHost() -> Int {
   let c = crunch(5)
   let d = crunch(6)
   wait sleep(0)
   return c + d
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let x = pureCpuHost()
   let y = mixedHost()
   print(x)

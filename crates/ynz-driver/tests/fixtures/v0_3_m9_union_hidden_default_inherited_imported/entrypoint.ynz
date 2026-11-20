@@ -3,7 +3,7 @@
 // Correct behavior: prints `5`, `7`, `other`, `end`; clean under AddressSanitizer at -O0 and -O2.
 import { Child, peekCount, peekMore, peekExtra } from `holders`
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let child: Child = { name: `a`, tag: `t` }
   print(child.peekCount().toString())
   print(child.peekMore().toString())

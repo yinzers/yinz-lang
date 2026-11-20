@@ -9,15 +9,15 @@
 // without the sanitizer the payload prints as garbage.
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 
-function describe(share thing: Thing) -> string {
+function describe(share thing: Thing) -> String {
   if (thing) {
     is Tiny => {
       return `tiny`
@@ -29,12 +29,12 @@ function describe(share thing: Thing) -> string {
   return `none`
 }
 
-function keep(lend list: array<Thing>, give thing: Thing) -> nothing {
+function keep(lend list: Array<Thing>, give thing: Thing) -> Nothing {
   list.add(thing)
 }
 
-function fill() -> array<Thing> {
-  let list: array<Thing> = []
+function fill() -> Array<Thing> {
+  let list: Array<Thing> = []
   let big: Big = { label: `kept`, count: 3 }
   keep(list, big)
   let old: Big = { label: `old`, count: 4 }
@@ -45,14 +45,14 @@ function fill() -> array<Thing> {
   return list
 }
 
-function clobber(seed: int) -> int {
+function clobber(seed: Int) -> Int {
   let plusOne = seed + 1
   let doubled = plusOne * 2
   let reduced = doubled - 3
   return reduced + plusOne
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let things = fill()
   let scratch = clobber(7)
   let i = 0

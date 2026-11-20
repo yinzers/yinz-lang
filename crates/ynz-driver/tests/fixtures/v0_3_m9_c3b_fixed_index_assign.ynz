@@ -6,12 +6,12 @@
 // 0; `list[2] = list[0]` copies the element read 1. Total 3+1+1+1 = 6.
 // Expected output: one value per line below.
 
-function entrypoint() -> nothing {
-  let count: int = 3
-  let list: fixed<string> = [`p`, `q`, `r`]
-  let fresh: string = `fresh-${count}`
+function entrypoint() -> Nothing {
+  let count: Int = 3
+  let list: Fixed<String> = [`p`, `q`, `r`]
+  let fresh: String = `fresh-${count}`
   list[0] = fresh
-  let named: string = `named`
+  let named: String = `named`
   list[1] = named
   list[2] = list[0].or(`none`)
   print(list[0].or(`none`))

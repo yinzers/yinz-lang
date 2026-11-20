@@ -16,9 +16,9 @@
 // groups) is ALSO an ordering barrier against a mixed CPU+I/O group. A function
 // like
 //
-//   function crunch(n: int) -> int { ... loop, no suspension ... }
-//   function fetchReport() -> string { wait sleep(60); return `...` }
-//   function example() -> nothing {
+//   function crunch(n: Int) -> Int { ... loop, no suspension ... }
+//   function fetchReport() -> String { wait sleep(60); return `...` }
+//   function example() -> Nothing {
 //     let a = wait crunch(3)   // <- WARNING: wait has no effect here
 //     let b = fetchReport()
 //     print(a)

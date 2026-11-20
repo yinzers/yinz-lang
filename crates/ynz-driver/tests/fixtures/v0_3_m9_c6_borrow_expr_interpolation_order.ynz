@@ -1,9 +1,9 @@
 // v0.3-M9 C6 borrow probe: a `${}` part reads an item that a later part of the same string overwrites
-function clobber(lend items: array<string>) -> string {
+function clobber(lend items: Array<String>) -> String {
   items[0] = `z-${3}`
   return `r`
 }
-function entrypoint() -> nothing {
-  let items: array<string> = [`a-${1}`]
+function entrypoint() -> Nothing {
+  let items: Array<String> = [`a-${1}`]
   print(`${items[0].or(`none`)}-${clobber(items)}`)
 }

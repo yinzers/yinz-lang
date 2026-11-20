@@ -1,4 +1,4 @@
 // An imported function hands back a `maybe` of the channel it reads from its argument.
-export function firstChan(share chans: array<channel<int>>) -> maybe<channel<int>> {
+export function firstChan(share chans: Array<Channel<Int>>) -> Maybe<Channel<Int>> {
   return chans.first()
 }

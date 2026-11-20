@@ -2,8 +2,8 @@
 // Before: the local never released the list's two strings, though the output was right.
 // Expected output: `kept`.
 
-function entrypoint() -> nothing {
-  let seed: fixed<string> = [`amy`.toUpperCase(), `bob`.toUpperCase()]
-  let src: fixed<string> | nothing = seed
+function entrypoint() -> Nothing {
+  let seed: Fixed<String> = [`amy`.toUpperCase(), `bob`.toUpperCase()]
+  let src: Fixed<String> | Nothing = seed
   print(`kept`)
 }

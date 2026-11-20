@@ -6,17 +6,17 @@
 // belongs and SIGSEGVed reading it.
 
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 
 shape Holder {
-  name: string
-  hidden extra: Big | map<int> = 4096
+  name: String
+  hidden extra: Big | Map<Int> = 4096
 }
 
-function peek(share self: Holder) -> string {
-  let slot: Big | map<int> = self.extra
+function peek(share self: Holder) -> String {
+  let slot: Big | Map<Int> = self.extra
   if (slot) {
     is Big => {
       return `big ${slot.label}`
@@ -28,7 +28,7 @@ function peek(share self: Holder) -> string {
   return `none`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let holder: Holder = { name: `a` }
   print(holder.peek())
 }

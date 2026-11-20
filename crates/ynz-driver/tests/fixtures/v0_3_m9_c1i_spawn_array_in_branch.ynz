@@ -3,13 +3,13 @@
 // Before: the spawn released the original and the scope exit released it again (double free).
 // Expected output: the count, the first name, then `done`.
 
-function crunch(xs: array<string>) -> nothing {
+function crunch(xs: Array<String>) -> Nothing {
   print(xs.count())
   print(xs[0].or(`?`))
 }
 
-function entrypoint() -> nothing {
-  let xs: array<string> = [`a`.toUpperCase(), `b`.toUpperCase()]
+function entrypoint() -> Nothing {
+  let xs: Array<String> = [`a`.toUpperCase(), `b`.toUpperCase()]
   if (xs.count() > 1) {
     background crunch(xs)
   }

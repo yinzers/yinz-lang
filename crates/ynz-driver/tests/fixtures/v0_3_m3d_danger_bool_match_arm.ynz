@@ -14,9 +14,9 @@
 //   false
 //   true
 
-function overHalf(n: int) -> boolean {
-  let sum: int = 0
-  let i: int = 0
+function overHalf(n: Int) -> Boolean {
+  let sum: Int = 0
+  let i: Int = 0
   while (i < n) {
     sum = sum + i
     i = i + 1
@@ -24,9 +24,9 @@ function overHalf(n: int) -> boolean {
   return sum > 10
 }
 
-function overHalf2(n: int) -> boolean {
-  let sum: int = 0
-  let i: int = 0
+function overHalf2(n: Int) -> Boolean {
+  let sum: Int = 0
+  let i: Int = 0
   while (i < n) {
     sum = sum + i
     i = i + 1
@@ -34,7 +34,7 @@ function overHalf2(n: int) -> boolean {
   return sum > 10
 }
 
-function combine() -> boolean {
+function combine() -> Boolean {
   let pick = 1
   let result = false
   if (pick) {
@@ -51,7 +51,7 @@ function combine() -> boolean {
   return result
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let r = combine()
   print(r)
 }

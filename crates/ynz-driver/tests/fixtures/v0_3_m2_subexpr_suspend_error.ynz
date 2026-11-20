@@ -5,12 +5,12 @@
 //
 // WHY: verifies the HALT-class hole is closed at typeck.
 
-function inner() -> int {
+function inner() -> Int {
     wait sleep(10)
     return 5
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
     let x = 1 + inner()
     print(`result: ${x}`)
 }

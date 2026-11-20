@@ -9,13 +9,13 @@
 //
 // Expected output (one per line): 2, 1, 5, 3, 3, 2, 3, 3
 
-function scoped(enter: boolean) -> int {
-  let outer: array<int> = [1, 2, 3]
+function scoped(enter: Boolean) -> Int {
+  let outer: Array<Int> = [1, 2, 3]
   if (enter) {
-    let inner: array<int> = [4, 5]
+    let inner: Array<Int> = [4, 5]
     print(inner.count().toString())
     if (enter) {
-      let deeper: array<int> = [6]
+      let deeper: Array<Int> = [6]
       print(deeper.count().toString())
     }
     print(inner[1].or(-1).toString())
@@ -23,22 +23,22 @@ function scoped(enter: boolean) -> int {
   return outer.count()
 }
 
-function scopedSuspending(enter: boolean) -> int {
-  let outer: array<int> = [1, 2, 3]
+function scopedSuspending(enter: Boolean) -> Int {
+  let outer: Array<Int> = [1, 2, 3]
   wait sleep(1)
   if (enter) {
-    let inner: array<int> = [4, 5]
+    let inner: Array<Int> = [4, 5]
     wait sleep(1)
     print(inner.count().toString())
   }
   return outer.count()
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   print(scoped(true).toString())
   print(scoped(false).toString())
-  let later: int = scopedSuspending(true)
+  let later: Int = scopedSuspending(true)
   print(later.toString())
-  let skipped: int = scopedSuspending(false)
+  let skipped: Int = scopedSuspending(false)
   print(skipped.toString())
 }

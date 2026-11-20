@@ -13,20 +13,20 @@
 //
 // Expected output: one\ntwo\ndone
 shape Holder {
-  v: int
+  v: Int
 }
 
-function readOne(share h: Holder) -> nothing {
+function readOne(share h: Holder) -> Nothing {
   wait sleep(200)
   print(`one`)
 }
 
-function readTwo(share h: Holder) -> nothing {
+function readTwo(share h: Holder) -> Nothing {
   wait sleep(200)
   print(`two`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let h: Holder = { v: 0 }
   readOne(h)
   readTwo(h)

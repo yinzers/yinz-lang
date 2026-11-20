@@ -8,17 +8,17 @@
 // Expected output (correct):
 //   42
 //   99
-function slowCall() -> int {
+function slowCall() -> Int {
   wait sleep(40)
   return 42
 }
 
-function otherInt() -> int {
+function otherInt() -> Int {
   wait sleep(40)
   return 99
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = slowCall()
   let b = otherInt()
   wait sleep(1)

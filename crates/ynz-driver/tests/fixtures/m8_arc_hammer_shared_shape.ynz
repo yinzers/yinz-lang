@@ -9,13 +9,13 @@
 //   tasks total 105000
 //   caller keeps Fort Pitt 30x35 depth 2
 shape Bridge {
-  name: string
-  width: int
-  height: int
-  depth: int
+  name: String
+  width: Int
+  height: Int
+  depth: Int
 }
 
-function survey(bridge: Bridge, results: channel<int>) -> nothing {
+function survey(bridge: Bridge, results: Channel<Int>) -> Nothing {
   let sum = 0
   for (i in range(0, 25)) {
     wait sleep(1)
@@ -24,8 +24,8 @@ function survey(bridge: Bridge, results: channel<int>) -> nothing {
   results.send(sum)
 }
 
-function entrypoint() -> nothing {
-  let results: channel<int> = channel<int>()
+function entrypoint() -> Nothing {
+  let results: Channel<Int> = Channel<Int>()
   let bridge: Bridge = { name: `Fort Pitt`, width: 30, height: 35, depth: 2 }
   background survey(bridge, results)
   background survey(bridge, results)

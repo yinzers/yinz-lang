@@ -5,19 +5,19 @@
 // SIGSEGV with the read address controlled by the tag/data words.
 
 shape Tiny {
-  flag: boolean
+  flag: Boolean
 }
 shape Big {
-  label: string
-  count: int
+  label: String
+  count: Int
 }
 shape Thing = Tiny | Big
 
-function showBig(share b: Big) -> string {
+function showBig(share b: Big) -> String {
   return b.label
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let big: Big = { label: `hello`, count: 3 }
   let thing: Thing = big
   print(showBig(thing))

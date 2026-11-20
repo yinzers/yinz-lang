@@ -1,7 +1,7 @@
-function foo() -> int {
+function foo() -> Int {
   print(`no return here`)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   print(foo())
 }

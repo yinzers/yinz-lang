@@ -4,8 +4,8 @@
 // strings 2; `copy.set(0, `changed`)` copies the literal 1. Total 5.
 // Expected output: one value per line below.
 
-function entrypoint() -> nothing {
-  let list: fixed<string> = [`p`, `q`]
+function entrypoint() -> Nothing {
+  let list: Fixed<String> = [`p`, `q`]
   let copy = list.copy()
   copy.set(0, `changed`)
   print(list[0].or(`none`))

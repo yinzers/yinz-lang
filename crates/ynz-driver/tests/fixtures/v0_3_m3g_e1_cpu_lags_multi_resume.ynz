@@ -19,7 +19,7 @@
 // Expected output (both modes — default and --no-auto-parallel):
 //   11249999925000004
 
-function crunchBig(seed: int) -> int {
+function crunchBig(seed: Int) -> Int {
   let total = 0
   let i = 0
   while (i < 150000000) {
@@ -29,12 +29,12 @@ function crunchBig(seed: int) -> int {
   return total + seed
 }
 
-function fetchFast(seed: int) -> int {
+function fetchFast(seed: Int) -> Int {
   wait sleep(15)
   return seed + 1
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = crunchBig(1)
   let b = fetchFast(2)
   print(a + b)

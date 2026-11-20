@@ -4,13 +4,13 @@
 // Reported failure (not reproducible at 3a4de04; kept as a guard): an LLVM module the verifier
 // rejected, reported as a compiler bug instead of a diagnostic.
 
-function pick<T>(give first: T, give second: T) -> nothing {
+function pick<T>(give first: T, give second: T) -> Nothing {
   print(`picked`)
 }
 
-function entrypoint() -> nothing {
-  let count: int = 5
-  let label: string = `x`
+function entrypoint() -> Nothing {
+  let count: Int = 5
+  let label: String = `x`
   background pick(count, label)
   sleepBlocking(60)
 }

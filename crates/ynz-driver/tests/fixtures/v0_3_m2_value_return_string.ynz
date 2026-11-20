@@ -1,12 +1,12 @@
 // v0.3-M2 Phase 7: value-returning state machine (string).
 // Verifies Bug A fix for pointer types: string return survives the typed store/load.
 
-function greeting() -> string {
+function greeting() -> String {
   wait sleep(5)
   return `hello from SM`
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   const s = greeting()
   const n = s.count()
   print(`len=${n} val=${s}`)

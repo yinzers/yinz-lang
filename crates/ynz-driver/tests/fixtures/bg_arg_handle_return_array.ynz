@@ -1,16 +1,16 @@
 // Probe: a handle-spawned task RETURNS its ladder-owned `array<int>` clone. The parent reads
 // it through `h.receive()` after the task has retired.
-function echo(rows: array<int>) -> array<int> {
+function echo(rows: Array<Int>) -> Array<Int> {
   wait sleep(1)
   return rows
 }
 
-function entrypoint() -> nothing {
-  let rows: array<int> = [4, 5, 6]
+function entrypoint() -> Nothing {
+  let rows: Array<Int> = [4, 5, 6]
   let h = background echo(rows)
   wait sleep(50)
   let got = h.receive()
-  let fallback: array<int> = []
+  let fallback: Array<Int> = []
   let arr = got.or(fallback)
   print(arr.count().toString())
   let first = arr[0].or(-1)

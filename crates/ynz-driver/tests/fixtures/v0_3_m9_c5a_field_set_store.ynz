@@ -2,17 +2,17 @@
 // returned. A scope-exit release pass that frees `a` here hands the caller a freed array.
 // GREEN today (nothing frees); guards the release pass (C7). Expected output: `3`.
 shape Bag {
-  items: array<int>
+  items: Array<Int>
 }
 
 function make() -> Bag {
-  let a: array<int> = [1, 2, 3]
+  let a: Array<Int> = [1, 2, 3]
   let b: Bag = { items: [0] }
   b.items = a
   return b
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let bag: Bag = make()
   print(bag.items.count().toString())
 }

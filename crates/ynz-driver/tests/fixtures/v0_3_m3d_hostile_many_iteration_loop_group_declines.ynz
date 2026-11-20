@@ -14,7 +14,7 @@
 // Expected output (both modes — default and --no-auto-parallel):
 //   100890000
 
-function score(seed: int) -> int {
+function score(seed: Int) -> Int {
   let total = 0
   let i = 0
   while (i < 10) {
@@ -24,7 +24,7 @@ function score(seed: int) -> int {
   return total + seed
 }
 
-function combine() -> int {
+function combine() -> Int {
   let acc = 0
   for (k in range(0, 10000)) {
     let lo = score(k)
@@ -34,6 +34,6 @@ function combine() -> int {
   return acc
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   print(combine())
 }

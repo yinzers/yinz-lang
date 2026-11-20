@@ -3,36 +3,36 @@
 // Expected output: the sum of the four, the returned count and last string, the exported count,
 // then 0 for the empty list.
 
-function sumOfFour(share values: fixed<int, 4>) -> int {
-  let sum: int = 0
+function sumOfFour(share values: Fixed<Int, 4>) -> Int {
+  let sum: Int = 0
   for (value in values) {
     sum = sum + value
   }
   return sum
 }
 
-function twoNames() -> fixed<string, 2> {
-  let names: fixed<string> = [`ann`, `bo`]
+function twoNames() -> Fixed<String, 2> {
+  let names: Fixed<String> = [`ann`, `bo`]
   return names
 }
 
-export function exportedThree() -> fixed<int, 3> {
-  let numbers: fixed<int> = [7, 8, 9]
+export function exportedThree() -> Fixed<Int, 3> {
+  let numbers: Fixed<Int> = [7, 8, 9]
   return numbers
 }
 
-function countOfNone(share values: fixed<int, 0>) -> int {
+function countOfNone(share values: Fixed<Int, 0>) -> Int {
   return values.count()
 }
 
 
-function entrypoint() -> nothing {
-  let four: fixed<int> = [1, 2, 3, 4]
+function entrypoint() -> Nothing {
+  let four: Fixed<Int> = [1, 2, 3, 4]
   print(sumOfFour(four))
   let names = twoNames()
   print(names.count())
   print(names[1].or(`?`))
   print(exportedThree().count())
-  let emptyList: fixed<int> = []
+  let emptyList: Fixed<Int> = []
   print(countOfNone(emptyList))
 }

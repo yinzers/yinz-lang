@@ -10,7 +10,7 @@
 // trampoline passes that i64 where the compiled callee expects its pointer-typed
 // number param — LLVM verifier failure surfaced as "compiler bug" on valid code.
 
-function heavyGrow(n: number) -> number {
+function heavyGrow(n: Number) -> Number {
   let total = 0
   let i = 0
   while (i < 50) {
@@ -20,7 +20,7 @@ function heavyGrow(n: number) -> number {
   return n
 }
 
-function heavyShrink(m: number) -> number {
+function heavyShrink(m: Number) -> Number {
   let total = 0
   let i = 0
   while (i < 40) {
@@ -30,9 +30,9 @@ function heavyShrink(m: number) -> number {
   return m
 }
 
-function entrypoint() -> nothing {
-  let x: number = 2.5
-  let y: number = 4.5
+function entrypoint() -> Nothing {
+  let x: Number = 2.5
+  let y: Number = 4.5
   let a = heavyGrow(x)
   let b = heavyShrink(y)
   print(a.toString())

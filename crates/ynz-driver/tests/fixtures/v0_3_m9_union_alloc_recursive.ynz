@@ -8,14 +8,14 @@
 // allocation count is 600 (the counter test pins it).
 
 shape End {
-  flag: boolean
+  flag: Boolean
 }
 shape Node {
-  value: int
+  value: Int
   next: Node | End
 }
 
-function build(seed: int) -> Node {
+function build(seed: Int) -> Node {
   let stop: End = { flag: true }
   let last: Node = { value: seed, next: stop }
   let middle: Node = { value: 2, next: last }
@@ -23,7 +23,7 @@ function build(seed: int) -> Node {
   return first
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let total = 0
   let round = 0
   while (round < 100) {

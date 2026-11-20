@@ -9,21 +9,21 @@
 // between two stadium seats. Real Yinz constructs (functions, shapes), deliberately
 // spaced out so the formatter has plenty to clean up.
 
-function   cheer(  name :  string  )  ->  string  {
+function   cheer(  name :  String  )  ->  String  {
   return   `Yinz ready, ${name}? Let's go Bucs!`
 }
 
-function   totalBeers(  x:int,    y:int  )  ->  int  {
+function   totalBeers(  x:Int,    y:Int  )  ->  Int  {
   let   round=x+y
   return   round
 }
 
 shape    StadiumSeat   {
-  row  :  int
-  seat   :  int
+  row  :  Int
+  seat   :  Int
 }
 
-function   rowDistance(  a:  StadiumSeat  ,  b:  StadiumSeat  )  ->  float  {
+function   rowDistance(  a:  StadiumSeat  ,  b:  StadiumSeat  )  ->  Float  {
   let   dRow =  a.row  - b.row
   let   dSeat =  a.seat  - b.seat
   return   dRow * dRow  +  dSeat  *  dSeat

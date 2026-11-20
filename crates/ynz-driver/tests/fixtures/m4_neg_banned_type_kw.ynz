@@ -1,5 +1,5 @@
-type Player { name: string }
+type Player { name: String }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   print(1)
 }
