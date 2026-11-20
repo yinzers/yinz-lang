@@ -309,9 +309,9 @@ Writing `switch` gives the warning "`switch` is not a keyword in Yinz." and tell
 Give each step a name:
 
 ```
-let active = players.filter(p => p.health > 0)
+let active = players.filter(player => player.health > 0)
 let topTen = active.limit(10)
-let names = topTen.map(p => p.name)
+let names = topTen.map(player => player.name)
 ```
 
 The compiler joins the steps into one fast pass, so the named version costs nothing.
@@ -334,9 +334,9 @@ export default function fetchUser() { }
 // Name the export instead: `export function foo()` or `export const PI = 3.14`.
 ```
 
-`import users from `services/users`` looks like a default import, but it brings in the whole module under the name `users`. You then write `users.fetchUser()`.
+``import users from `services/users` `` looks like a default import, but it brings in the whole module under the name `users`. You then write `users.fetchUser()`.
 
-When two imports use the same name, TypeScript quietly keeps the last one. Yinz stops you and asks you to rename one:
+Two imports cannot use the same name. Yinz stops you and asks you to rename one:
 
 ```
 import { Player } from `models/game`
