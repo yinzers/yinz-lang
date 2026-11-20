@@ -19,6 +19,8 @@ The `ynz` CLI builds, runs, formats and watches your code. Every command takes a
 
 ## Building
 
+`ynz build` compiles your code into a native program.
+
 ```text
 ynz build entrypoint.ynz    // compile one file into a native program
 ynz build .                 // compile the project in this folder
@@ -38,6 +40,8 @@ The compiled program lands next to the source file (one file) or in the project 
 
 ## Running
 
+`ynz run` builds your code and runs it in one step.
+
 ```text
 ynz run entrypoint.ynz    // compile, run, then delete the program
 ynz run .                 // the same for a project
@@ -54,6 +58,8 @@ ynz run .                 // the same for a project
 ---
 
 ## Watch mode
+
+`ynz watch` rebuilds your project every time you save a file.
 
 ```text
 ynz watch .             // rebuild and re-run when you save a file
@@ -73,6 +79,8 @@ Stop watching with Ctrl+C.
 ---
 
 ## Formatting
+
+`ynz fmt` rewrites your files in the standard Yinz style.
 
 ```text
 ynz fmt entrypoint.ynz    // rewrite one file in the standard style
