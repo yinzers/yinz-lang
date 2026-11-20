@@ -749,7 +749,7 @@ match (statusCode) {
 
 ### Chaining: an iterator chain becomes named steps
 
-Yinz has no chaining. Each step goes on its own line with a name, so you can inspect every value. There is no `.iter()` to start and no `.collect()` to finish: a `for` loop builds the result one item at a time.
+Yinz has no chaining. Each step goes on its own line with a name, so you can inspect every value. The example below uses a `for` loop that builds the result one item at a time.
 
 Rust:
 

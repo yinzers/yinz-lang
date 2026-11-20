@@ -398,7 +398,7 @@ if (checked.failed()) {
 }
 ```
 
-`throw`, `try` and `catch` are not valid. The compiler gives only general errors for them, so remember the rule: mark the function `errors`, and let the caller use `.or(...)` or `.failed()`. There is nothing to throw by hand.
+`throw`, `try` and `catch` are not valid. `try` and `catch` give general errors. `throw` also gets a note that points you to the `errors` keyword. So remember the rule: mark the function `errors`, and let the caller use `.or(...)` or `.failed()`. There is nothing to throw by hand.
 
 A failure left unhandled is a compile error, so it cannot slip through:
 

@@ -312,7 +312,7 @@ switch (statusCode) {
 
 ### Chaining: a chain becomes named steps
 
-Yinz has no chaining. Each step goes on its own line with a name, so you can inspect every value. There is no `.filter()` and `.map()` to join: a `for` loop builds the result one item at a time.
+Yinz has no chaining. Each step goes on its own line with a name, so you can inspect every value. The example below uses a `for` loop that builds the result one item at a time.
 
 TypeScript:
 
