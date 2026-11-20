@@ -72,16 +72,9 @@ Use this when you need a few things from a file. It is the most common style.
 
 ```ynz
 import users from `services/users`
-
-function entrypoint() -> Nothing {
-  let user = users.fetchUser(7)
-  print(user.name)
-}
 ```
 
-Use this when you use many things from the same file, or when you want the origin visible at every call site.
-
-This form imports the whole module under one name. `users.fetchUser()` means "call `fetchUser` from the `users` module." Yinz has no default exports.
+This form imports the whole module under one name. Yinz has no default exports. Calling a function through the name, such as `users.fetchUser(7)`, does not compile yet, so use Style 1 for now.
 
 ---
 
@@ -104,9 +97,16 @@ my-project/
 
 ```ynz
 // From anywhere in the project:
-import { fetchUser } from `services/users`
+import { fetchUser, User } from `services/users`
 import { Player } from `models/player`
 import { formatDate } from `utils/helpers`
+
+function entrypoint() -> Nothing {
+  let user: User = fetchUser(7)
+  let player: Player = { name: user.name }
+  print(player.name)
+  print(formatDate(3))
+}
 ```
 
 The file path is the import path. You don't set anything up.
@@ -126,7 +126,7 @@ import { fetchUser } from `../services/users`
 ```
 
 ```
-Import path "../services/users" contains `..` or `.` segments.
+Import paths must be project-root relative, not relative paths.
 ```
 
 Use the path from the project root: `services/users`.
@@ -135,27 +135,29 @@ Use the path from the project root: `services/users`.
 
 ## Renaming with `as` — fixing name clashes
 
-When two imports have the same name, use `as` to give one a new name:
+Use `as` to give an import a new name in this file:
 
 ```ynz
-import { fetchUser as getUser } from `services/users`
-import { fetchUser as getAdminUser } from `services/admins`
+// services/admins.ynz
+export shape Admin {
+  name: String
+}
 
-function entrypoint() -> Nothing {
-  print(getUser(1).name)
-  print(getAdminUser(2).name)
+export function fetchAdmin(id: Int) -> Admin {
+  return { name: `admin${id.toString()}` }
 }
 ```
 
-Whole-module imports rarely clash, because the module name tells the functions apart:
-
 ```ynz
-import users from `services/users`
-import admins from `services/admins`
+// entrypoint.ynz
+import { fetchUser as getUser, User } from `services/users`
+import { fetchAdmin as getAdmin, Admin } from `services/admins`
 
 function entrypoint() -> Nothing {
-  print(users.fetchUser(1).name)
-  print(admins.fetchUser(2).name)
+  let user: User = getUser(1)
+  let admin: Admin = getAdmin(2)
+  print(user.name)
+  print(admin.name)
 }
 ```
 
@@ -164,13 +166,29 @@ If two imports use the same name and you don't rename one, the compiler refuses 
 ```ynz
 import { Player } from `models/game`
 import { Player } from `external/legacy`
+
+function entrypoint() -> Nothing {
+  print(`hello`)
+}
 ```
 
 ```
 Import name `Player` is already bound by a previous import.
 ```
 
-Rename one of them: ``import { Player as otherName } from `external/legacy` ``.
+Rename one of them:
+
+```ynz
+import { Player } from `models/game`
+import { Player as legacyPlayer } from `external/legacy`
+
+function entrypoint() -> Nothing {
+  let current: Player = { name: `Ana` }
+  let old: legacyPlayer = { nickname: `Ace` }
+  print(current.name)
+  print(old.nickname)
+}
+```
 
 ---
 
@@ -178,8 +196,28 @@ Rename one of them: ``import { Player as otherName } from `external/legacy` ``.
 
 Two files that import each other are an error:
 
+```ynz
+// services/orders.ynz
+import { loadCustomer } from `services/customers`
+
+export function loadOrder(id: Int) -> Int {
+  return loadCustomer(id)
+}
 ```
-Circular import detected: "services/orders" is already being imported in this chain.
+
+```ynz
+// services/customers.ynz
+import { loadOrder } from `services/orders`
+
+export function loadCustomer(id: Int) -> Int {
+  return loadOrder(id)
+}
+```
+
+The compiler reports:
+
+```
+Circular import: this module is part of a mutually-recursive import chain.
 ```
 
 Move the shared shapes into a third file that both files import.
@@ -210,7 +248,7 @@ import * as users from `services/users`
 Wildcard imports are not allowed in Yinz.
 ```
 
-Write ``import users from `services/users` ``.
+Write ``import { fetchUser } from `services/users` ``.
 
 **No relative paths:** see "Import paths" above.
 
