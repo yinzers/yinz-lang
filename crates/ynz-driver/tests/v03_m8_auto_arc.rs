@@ -3,9 +3,8 @@
 // every decline leaves the shipped copy path byte-for-byte, the refcount protocol balances
 // under real concurrent load, and the single-reader program emits no `ynz_arc_*` call at all.
 //
-// Plan: `.claude/planning/active/2026-07-04-v0-3-m8-concurrency-completion/plan.md` Phase 5
-// (steps 2, 3, 5, 6). Design: `IMP-ownership.md` "Auto-Arc — Sharing Topology Across
-// `background` Boundaries" (signed 2026-09-03, `audit.md`'s Phase 2 SIGN-OFF record).
+// Phase 5 of v0.3-M8 (`git log --grep=m8-p5`). Design: `IMP-ownership.md` "Auto-Arc —
+// Sharing Topology Across `background` Boundaries".
 //
 // RED observed before the emission landed (the spike fixture, step 2): the program printed the
 // correct lines, but its IR carried ZERO `ynz_arc_new` calls — two independent `ynz_alloc`

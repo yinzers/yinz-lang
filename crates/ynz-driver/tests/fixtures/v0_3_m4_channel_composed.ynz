@@ -1,5 +1,5 @@
 // v0.3-M4 Phase 2 — the R5 composed-suspension hostile fixture (build-blocking).
-// Grown from .claude/planning/active/2026-07-02-v0-3-m4-channels-arc-release/p0-spike/composed-scenario.ynz.
+// Grown from the v0.3-M4 Phase 0 composed-scenario spike (see git history).
 //
 // THE SCENARIO: a background-spawned CHILD suspends on channel.send()-on-full WHILE the
 // PARENT polls channel.receive(). Capacity-1 channel forces the backpressure. The child's
