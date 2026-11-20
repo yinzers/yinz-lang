@@ -93,6 +93,10 @@ Every design topic has its own file. This is the index. One line per topic, link
 | Topic | File | What's in it |
 |-------|------|--------------|
 | Coming from TypeScript | [`docs/guides/coming-from-typescript.md`](guides/coming-from-typescript.md) | What changes if you already write TypeScript: a side-by-side table and the habits the compiler corrects (quotes, semicolons, `null`, `throw`, `else`, `async`, imports) |
+| Coming from Python | [`docs/guides/coming-from-python.md`](guides/coming-from-python.md) | What changes if you already write Python: a side-by-side table and the habits the compiler corrects (f-strings, `class`, `None`, `raise`, `isinstance`, `elif`, comprehensions, `async def`, imports) |
+| Coming from Rust | [`docs/guides/coming-from-rust.md`](guides/coming-from-rust.md) | What changes if you already write Rust: a side-by-side table and the habits the compiler corrects (`let mut`, `&`/`&mut`, `Option`, `Result` and `?`, `match`, iterator chains, `async`, `mod`/`use`) |
+| Coming from Go | [`docs/guides/coming-from-go.md`](guides/coming-from-go.md) | What changes if you already write Go: a side-by-side table and the habits the compiler corrects (`:=`, receivers and `*Player`, `nil`, `if err != nil`, type switches, `iota`, `++`, `switch`, goroutines, packages) |
+| Coming from C++ | [`docs/guides/coming-from-cpp.md`](guides/coming-from-cpp.md) | What changes if you already write C++: a side-by-side table and the habits the compiler corrects (`auto`, `class`, `&`/`const&`, `nullptr`, `throw`, `std::variant`, `enum class`, `std::vector`, `switch`, `#include`, `std::thread`) |
 
 ## Future Designs (locked, awaiting implementation milestone)
 
