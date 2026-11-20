@@ -114,7 +114,7 @@ function greet(share user: Maybe<User>) -> Nothing {
 }
 
 function entrypoint() -> Nothing {
-  let user: Maybe<User> = { name: `Ana` }
+  let user: Maybe<User> = none
   greet(user)
 }
 ```
@@ -142,7 +142,7 @@ function entrypoint() -> Nothing {
 
 ```ynz
 function entrypoint() -> Nothing {
-  let stuff = [42, `hello`, true]
+  let stuff = [42, `hello`]
 }
 ```
 
