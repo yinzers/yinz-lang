@@ -25,6 +25,11 @@ options Status {
   inactive,
   banned
 }
+
+function entrypoint() -> Nothing {
+  let current: Status = Status.active
+  print(current.toString())
+}
 ```
 
 "The options for status are: active, inactive, or banned." Plain English.
@@ -77,7 +82,26 @@ function entrypoint() -> Nothing {
 }
 ```
 
-Missing a choice is a compile error. The compiler tells you exactly which ones are missing. With the `banned` arm removed, it reports:
+Missing a choice is a compile error. The compiler tells you exactly which ones are missing. With the `banned` arm removed:
+
+```ynz
+options Status {
+  active,
+  inactive,
+  banned
+}
+
+function entrypoint() -> Nothing {
+  let current: Status = Status.active
+
+  if (current) {
+    active => print(`active`)
+    inactive => print(`inactive`)
+  }
+}
+```
+
+the compiler reports:
 
 ```
 Non-exhaustive options multi-case — `Status` has 3 variants; 1 are not handled: banned.
@@ -107,6 +131,13 @@ shape Square {
 }
 
 shape Figure = Circle | Square
+
+function entrypoint() -> Nothing {
+  let circle: Circle = { radius: 2.0 }
+  let current: Status = Status.active
+  print(current.toString())
+  print(circle.radius.toString())
+}
 ```
 
 Use `options` when the choices are just labels. Use `|` when they have different data shapes. See [Unions](REF-unions.md).
@@ -157,6 +188,11 @@ options Status {
   inactive
   banned: `Banned`
 }
+
+function entrypoint() -> Nothing {
+  let current: Status = Status.inactive
+  print(current.toString())      // inactive
+}
 ```
 
 Here `Status.inactive.toString()` returns `inactive`.
@@ -175,5 +211,12 @@ options Status { active, inactive, banned }
 options Timeframe {
   hourly: `Hourly`
   daily: `Daily`
+}
+
+function entrypoint() -> Nothing {
+  let current: Status = Status.banned
+  let frame: Timeframe = Timeframe.hourly
+  print(current.toString())
+  print(frame.toString())
 }
 ```
