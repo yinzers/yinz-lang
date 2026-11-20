@@ -249,10 +249,14 @@ enum Status {
   Banned,
 }
 
-const status: Status = Status.Active
-if (status === Status.Banned) {
-  console.log('banned')
+function describeStatus(status: Status): string {
+  if (status === Status.Banned) {
+    return 'banned'
+  }
+  return 'online'
 }
+
+console.log(describeStatus(Status.Active))    // online
 ```
 
 Yinz:
