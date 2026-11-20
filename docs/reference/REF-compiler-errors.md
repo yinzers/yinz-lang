@@ -4,7 +4,7 @@ description: "The compiler's character as a teacher (Golden Rule 3, docs/referen
 tags:
   - "yinz-compiler"
 created_at: "2026-05-14"
-updated_at: "2026-07-16"
+updated_at: "2026-11-20"
 status: "active"
 author: "patrick"
 metadata:
@@ -19,21 +19,18 @@ The compiler's error messages show whether it really acts as a teacher (Golden R
 
 ## Required Format — Three Parts
 
-Every compiler diagnostic (error, warning, suggestion) follows this shape:
+Every compiler diagnostic (error, warning, suggestion) has three parts:
 
-```
-[severity prefix]: [WHAT — one sentence stating the issue in plain English]
+- **WHAT** — one sentence stating the issue in plain English. It is the headline of the message.
+- **WHAT TO DO INSTEAD** — a fix you can copy. It is printed next to the code it points at.
+- **WHY** — the reason: correctness, performance, convention, or safety. It is printed as a note under the code.
 
-  [WHAT TO DO INSTEAD — corrected code, ready to copy]
+**Severity:**
+- `Error` — the program won't compile
+- `Warning` — the program compiles, but something looks wrong
+- `SUGGESTION` — an IDE hint, the lowest urgency
 
-  [WHY — the reason: correctness, performance, convention, or safety]
-```
-
-**Severity prefixes:**
-- `COMPILE ERROR:` — the program won't compile
-- `RUNTIME ERROR:` — the program stops while it runs; the compiler usually catches these first, but some can only be found while the program runs
-- `WARNING:` — the program compiles, but something looks wrong
-- `SUGGESTION:` — an IDE hint, the lowest urgency
+A program that stops while it runs prints `RUNTIME ERROR:` instead. The compiler usually catches these problems first, but some can only be found while the program runs.
 
 **A message missing any of the three parts is incomplete.** A "WHAT" without a "WHAT TO DO INSTEAD" leaves the user stuck. A "WHAT" with a fix but no "WHY" teaches the user to apply fixes without understanding them, which is exactly what the teaching mission is meant to prevent.
 
@@ -90,12 +87,11 @@ These are Yinz's own names — use them freely:
 - `follows`, "follows the X contract" — how a shape says it provides the functions a contract lists
 - `share` / `lend` / `give` / `copy` / `.freeze` — ownership words
 - `options` — a fixed set of named choices
-- `type`, `field`, `method` — basic words that everyone understands
+- "type", "field", "function" — basic words that everyone understands
 - `Number`, `Float`, `Int`, `Number<N>` — the number type names
 - `Array`, `Fixed`, `Map` — the collection type names
 - `wait`, `background` — the keywords for running things at the same time
-- `setup` / `teardown` — testing keywords
-- `code point`, `byte`, `grapheme` — text terms (kept because the alternatives are worse)
+- `code point`, `grapheme`, and byte counts (`byteCount`, `byteAt`) — text terms (kept because the alternatives are worse)
 
 If a word is the official name of a Yinz feature, use it. The ban-list covers programmer jargon, not Yinz's own vocabulary.
 
@@ -112,21 +108,15 @@ This is different from the jargon ban-list above. The jargon ban-list covers WOR
 | `class Foo { ... }` | `shape Foo { ... }` |
 | `interface Foo { ... }` | `shape Foo { ... }` (or `follows` for contracts) |
 | `enum Status { ... }` | `options Status { ... }` |
-| `fn name() { ... }` | `function name() { ... }` |
+| `abstract` | `base shape` |
 
-`type` is not on the jargon ban-list, because it appears in many messages in its everyday sense ("return type", "this type"). It is only refused when you use it to declare something in your own code.
+"Type" is not on the jargon ban-list, because it appears in many messages in its everyday sense ("return type", "this type"). It is only refused when you use it to declare something in your own code.
 
-The teaching message looks like this:
+The teaching message for `type Foo { name: String }` is a warning. Its three parts:
 
-```
-type Foo { name: String }
-^^^^
-WARNING: `type` is not a keyword in Yinz.
-
-  Use `shape` to declare a data type: `shape Player { name: String, health: Int }`
-
-  Why: Yinz uses `shape` — one unambiguous keyword for all data type declarations.
-```
+- **WHAT:** `` `type` is not a keyword in Yinz. ``
+- **WHAT TO DO INSTEAD:** ``Use `shape` to declare a data type: `shape Player { name: String, health: Int }` ``
+- **WHY:** why Yinz has one keyword for every data declaration.
 
 ---
 
@@ -136,22 +126,30 @@ Every type name starts with a capital letter, built-in types included. Two mista
 
 **A lowercase built-in type name.** Writing `int`, `float`, `number`, `boolean`, `string`, `range`, `maybe`, `array`, `fixed`, `map`, `channel` or `nothing` where a type goes is an error. The editor offers a quick-fix titled ``Write `Int` instead of `int` `` (with the names you wrote) that rewrites the name:
 
+```ynz
+function entrypoint() -> Nothing {
+  let health: int = 100
+}
 ```
-let health: int = 100
-// COMPILE ERROR: `int` is not a type name.
-//   Write `Int`.
-//   Why: Every type in Yinz starts with a capital letter, built-ins included.
+
+```
+`int` is not a type name.
+  Write `Int`.
+  Why: Every type in Yinz starts with a capital letter, built-ins included.
 ```
 
 **A shape named like a built-in type.** A `shape` or union alias called `Int`, `Float`, `Number`, `Boolean`, `String`, `Range`, `Maybe`, `Array`, `Fixed`, `Map`, `Channel`, `Nothing`, `MapEntry`, `Frame` or `SourceLoc` is an error:
 
-```
+```ynz
 shape Map {
   name: String
 }
-// COMPILE ERROR: `Map` is a reserved built-in type name.
-//   Give this shape another name, such as `MyMap` or one that says what it holds.
-//   Why: Yinz already has a built-in type called `Map`. A shape with the same name would make every `Map` in this file ambiguous between your shape and the built-in.
+```
+
+```
+`Map` is a reserved built-in type name.
+  Give this shape another name, such as `MyMap` or one that says what it holds.
+  Why: Yinz already has a built-in type called `Map`. A shape with the same name would make every `Map` in this file ambiguous between your shape and the built-in.
 ```
 
 Functions, modules and variables keep lowercase names, and they may match a type name in lowercase: `range(1, 10)` is a function that returns a `Range`.
@@ -163,72 +161,37 @@ Functions, modules and variables keep lowercase names, and they may match a type
 - **Direct, not talking down.** "You can't add to a fixed array" is fine. "Oh no! It looks like you tried to..." is too cute.
 - **Don't blame.** Say "the compiler now treats X as Y", not "you tried to do Y."
 - **Suggest something specific.** "Use `Array<T>` instead", with the actual replacement code. Not "consider an alternative."
-- **Use the user's own names.** "`scores` is a `Map<String, Number>`", not "this variable is a map." Point at what they wrote.
+- **Use the user's own names.** "`scores` is a `Map<String, Int>`", not "this variable is a map." Point at what they wrote.
 - **No exclamation marks.** Errors are not exciting.
 - **No emoji.** Plain text only.
 
 ---
 
-## A Message Step by Step
+## Messages Step by Step
+
+**A good compile error** names the user's own variable, gives code that can be copied, and explains the reason for this code. For a duplicate import:
+
+- **WHAT:** `` Import name `Player` is already bound by a previous import. ``
+- **WHAT TO DO INSTEAD:** ``Use a different local name: `import { Player as otherName } from `...` ``
+- **WHY:** Each imported name must be unique in the local scope.
+
+**A good runtime error** says where it happened and how to fix it:
 
 ```
-[SEVERITY]: [WHAT — plain English, one sentence]
+RUNTIME ERROR: <the operation> at src/main.ynz:12:5
 
-  [WHAT TO DO INSTEAD — corrected code, with the change visible]
+  The value wrapped past the maximum (or minimum) for this type.
 
-  Why: [WHY — speed / correctness / convention / safety]
+  Use .wrappingAdd() if wrap-around is intentional.
 
-[Optional link: "See: docs/reference/REF-x.md#section"]
+  Why: Yinz panics on integer overflow by default to prevent silent data corruption.
 ```
 
-**Example — a good compile error:**
+**A good suggestion** tells you what to write and why it helps. For `sleepBlocking` in a program with a scheduler:
 
-```
-COMPILE ERROR: 'Player' is imported from two places.
-
-  Rename one with `as`:
-    import { Player } from `models/game`
-    import { Player as LegacyPlayer } from `external/legacy`
-
-  Why: If the same name came from two imports, code that used 'Player'
-       would silently pick the last one imported. Rearranging imports
-       could change which 'Player' your code refers to. Forcing a rename
-       makes the choice visible.
-```
-
-**Example — a good runtime error:**
-
-```
-RUNTIME ERROR: Int overflow in '+' at src/main.ynz:12:5
-
-  count was at the maximum value (9223372036854775807) and would have
-  wrapped to a negative number.
-
-  Use .wrappingAdd() if you want wrap-around behavior on purpose:
-    let safe = count.wrappingAdd(1)
-
-  Or .saturatingAdd() to stay at the maximum:
-    let capped = count.saturatingAdd(1)
-
-  Why: Wrap-around is almost always a bug, not a feature. Letting it
-       happen silently would corrupt later math. Yinz makes it loud
-       at the call site so the bug is caught early.
-```
-
-**Example — a good suggestion:**
-
-```
-SUGGESTION: All keys in this map are written out in your code.
-
-  Consider a shape instead — it gives you direct field access:
-    shape Scores { alice: Number, bob: Number, charlie: Number }
-    let scores: Scores = { alice: 90, bob: 85, charlie: 78 }
-
-  Why: Reading a shape field is one step (about 1 processor
-       instruction). Reading a map key means searching for it (about
-       10-50 instructions). For keys that never change, a shape is
-       about 10x faster AND gives you dot access with autocomplete.
-```
+- **WHAT:** `` `sleepBlocking` parks the current thread — it sits idle and runs nothing else until the time is up. ``
+- **WHAT TO DO INSTEAD:** ``Write `wait sleep(100)` — your function pauses just the same, but the thread stays free to run other tasks.``
+- **WHY:** `wait sleep` hands the thread back to the scheduler during the pause. `sleepBlocking` keeps the thread parked doing nothing.
 
 ---
 
@@ -239,28 +202,9 @@ The compiler reports ALL the errors it finds in one run, not just the first. Two
 1. **Faster fixing.** A user who sees 5 errors at once can fix them in one sitting, instead of fixing one, recompiling, seeing the next, and repeating five times.
 2. **Seeing the chain.** If error 3 was caused by error 1, showing both together lets the user see why.
 
-**Limit:** if a file has more than 50 errors, the compiler stops after 50 and prints `... and N more errors. Fix the first batch and try again.` This stops a flood of thousands of errors when something basic is wrong (such as a missing bracket confusing everything after it).
+**Limit:** the compiler prints the first 50 errors. After them it prints `... and N more errors hidden`. This stops a flood of thousands of errors when something basic is wrong (such as a missing bracket confusing everything after it). Warnings and suggestions are never counted against the limit.
 
 Type checking only runs on code that parsed cleanly. There is no point checking the types of code the compiler couldn't read.
-
----
-
-## Links to the Docs
-
-Every error that has a matching docs section ends with a "See:" line:
-
-```
-COMPILE ERROR: Direct index access is not allowed.
-
-  Use .get() — it returns Maybe<T> and handles out-of-bounds safely:
-    let item = items.get(5)
-
-  Why: ...
-
-See: docs/reference/REF-collections.md#safe-access
-```
-
-In the IDE these are clickable and jump straight to the doc. In the terminal they print as plain text.
 
 ---
 
@@ -274,7 +218,6 @@ When you review an error message, check that it:
 - [ ] Has at least one concrete code suggestion
 - [ ] Sounds direct, not cute or blaming
 - [ ] Has no exclamation marks and no emoji
-- [ ] Links to the matching docs section, if there is one
 
 A message that fails ANY of these gets rewritten. This is a plain check, not a judgment call.
 
