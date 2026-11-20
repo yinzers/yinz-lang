@@ -4,15 +4,15 @@ Syntax highlighting, inline diagnostics, autocomplete, and hover docs for `.ynz`
 
 ## What's new in v0.3.0
 
-- **Channels** — `channel<T>()` bounded task communication is live. Construction diagnostics
+- **Channels** — `Channel<T>()` bounded task communication is live. Construction diagnostics
   (missing element type, non-positive capacity, wrong capacity type) and the send/receive
   method surface (wrong element type, statement-position, named-binding receiver) all render
   inline with WHAT/WHAT-INSTEAD/WHY teaching text.
-- **`64` default-capacity hint** — `channel<int>()` with empty parens shows a muted `64`
+- **`64` default-capacity hint** — `Channel<Int>()` with empty parens shows a muted `64`
   inside the parens (the locked default capacity). Hover explains the bounded-by-construction
   model; click writes `64` into your source.
 - **Background handle-form** — `let h = background worker(commands)` yields a handle;
-  `h.send(v)` feeds the spawned function's first `channel<T>` parameter, `h.receive()`
+  `h.send(v)` feeds the spawned function's first `Channel<T>` parameter, `h.receive()`
   delivers messages or the task's completion value (typed `errors`). Misuse (no channel
   parameter, non-suspending callee) gets teaching errors.
 - **Backpressure teaching** — send-related diagnostics explain that a suspended producer is
@@ -63,11 +63,11 @@ Syntax highlighting, inline diagnostics, autocomplete, and hover docs for `.ynz`
 - **Find All References** — right-click → "Find All References" lists every use-site across the project
 - **Rename** — F2 on any symbol; all references update atomically
 - **Format on save** — delegates to `ynz-fmt`; normalizes LF line endings
-- **Inlay hints** — inline type annotations (`: int`), ownership modifiers (`share`/`lend`), auto-promotion hints
+- **Inlay hints** — inline type annotations (`: Int`), ownership modifiers (`share`/`lend`), auto-promotion hints
 - **Code actions** — quick-fix lightbulb for every diagnostic with a WHAT-INSTEAD
 - **Semantic tokens** — richer color differentiation: keywords / types / functions / variables
 - **Doc-comment hover** — `///` doc comments appear in hover popups above the signature
-- **Completion narrowing** — `score.` where `score: int` shows only int methods
+- **Completion narrowing** — `score.` where `score: Int` shows only Int methods
 
 ## Features
 

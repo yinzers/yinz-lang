@@ -123,7 +123,7 @@ fn type_attached_constants_have_parseable_value_literals() {
     let mut violations = Vec::new();
     for entry in ynz_registry::type_attached_constants() {
         match entry.value_type {
-            "int" => {
+            "Int" => {
                 if entry.value_literal.parse::<i64>().is_err() {
                     violations.push(format!(
                         "[[type_attached_constant]] {type_name}.{const_name}: \
@@ -134,7 +134,7 @@ fn type_attached_constants_have_parseable_value_literals() {
                     ));
                 }
             }
-            "float" => {
+            "Float" => {
                 if entry.value_literal.parse::<f64>().is_err() {
                     violations.push(format!(
                         "[[type_attached_constant]] {type_name}.{const_name}: \
@@ -145,7 +145,7 @@ fn type_attached_constants_have_parseable_value_literals() {
                     ));
                 }
             }
-            "number" => {
+            "Number" => {
                 // Decimal128 literals are opaque strings; just check non-empty.
                 if entry.value_literal.is_empty() {
                     violations.push(format!(
@@ -158,7 +158,7 @@ fn type_attached_constants_have_parseable_value_literals() {
             other => {
                 violations.push(format!(
                     "[[type_attached_constant]] {type_name}.{const_name}: \
-                     unknown value_type {other:?} — must be 'int', 'float', or 'number'",
+                     unknown value_type {other:?} — must be 'Int', 'Float', or 'Number'",
                     type_name = entry.type_name,
                     const_name = entry.const_name,
                 ));

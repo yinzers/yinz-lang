@@ -8,8 +8,8 @@ import {
 
 let client: LanguageClient | undefined;
 
-// The server marks `array` / `let` tokens the compiler already promoted
-// (`array` -> `fixed`, `let` -> `const`) with this semantic-token modifier.
+// The server marks `Array` / `let` tokens the compiler already promoted
+// (`Array` -> `Fixed`, `let` -> `const`) with this semantic-token modifier.
 const PROMOTABLE_MODIFIER = 'promotable';
 
 // A dotted underline cannot be expressed with semanticTokenColorCustomizations
