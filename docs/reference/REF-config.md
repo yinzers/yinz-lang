@@ -66,7 +66,8 @@ Reading env vars in code:
 
 ```
 let dbUrl = env.get("DATABASE_URL")              // -> maybe<string> — might not be set
-let port = env.get("PORT").or("3000")            // use "3000" if PORT isn't set
+let foundPort = env.get("PORT")                  // a Maybe: the text, or nothing
+let port = foundPort.or("3000")                  // a plain string, "3000" if PORT isn't set
 let secret = env.get("SECRET_KEY")              // -> maybe<string>
 
 if (dbUrl.exists()) {
@@ -81,7 +82,8 @@ Keep secrets and connection strings in `.env`, never in your code or your compil
 **No environment-specific `.env` files.** No `.env.production`, `.env.staging`, `.env.local`. Just `.env`. Different machines have different `.env` files. If you need different behavior in different environments, check an env var:
 
 ```
-let environment = env.get("ENV").or("development")
+let foundEnvironment = env.get("ENV")            // a Maybe: the name, or nothing
+let environment = foundEnvironment.or("development")
 
 let logLevel = "debug"
 if (environment == "production") {
@@ -112,9 +114,10 @@ Runtime settings are code, so they can branch on the environment, command-line a
 
 ```
 function entrypoint() -> nothing {
-  let env = env.get("ENV").or("development")
+  let foundEnvironment = env.get("ENV")
+  let environment = foundEnvironment.or("development")
 
-  if (env == "production") {
+  if (environment == "production") {
     setShutdownTimeout(duration.minutes(2))
     setLogLevel("error")
     setThreadPoolSize(32)
@@ -178,4 +181,4 @@ function entrypoint() -> nothing {
 | Thread pool size | `setThreadPoolSize()` in `entrypoint()` | `setThreadPoolSize(16)` |
 | Error handling behavior | `setErrorHandler()` in `entrypoint()` | `setErrorHandler(e => { ... })` |
 | Shutdown behavior | `setShutdownHandler()` in `entrypoint()` | `setShutdownHandler(s => { ... })` |
-| Environment-specific logic | Code branching in `entrypoint()` | `if (env == "production") { ... }` |
+| Environment-specific logic | Code branching in `entrypoint()` | `if (environment == "production") { ... }` |

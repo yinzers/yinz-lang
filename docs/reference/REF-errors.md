@@ -131,7 +131,8 @@ function loadConfig() -> Config errors {
 
 ```
 function loadConfig() -> Config {
-  let raw = readFile(`config.txt`).or(`{}`)    // use `{}` if the file can't be read
+  let content = readFile(`config.txt`)          // might fail
+  let raw = content.or(`{}`)                    // use `{}` if the file can't be read
   return parseConfig(raw)
 }
 ```
@@ -236,7 +237,8 @@ A function can have both:
 ```
 function findUser(id: string) -> maybe<User> errors {
   let data = readDatabase(id)                              // might fail (connection error)
-  let user = data.filter(u => u.id == id).first()          // might be none (user not found)
+  let matches = data.filter(u => u.id == id)               // every user with this id
+  let user = matches.first()                               // might be none (user not found)
   return user
 }
 ```

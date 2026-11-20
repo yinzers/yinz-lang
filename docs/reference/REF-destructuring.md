@@ -90,8 +90,10 @@ let [first, second] = items
 // COMPILE ERROR: Array destructuring is not allowed. Use .get() for safe index access.
 
 // Safe — .get() returns maybe
-let first = items.get(0).or(defaultItem)
-let second = items.get(1).or(defaultItem)
+let foundFirst = items.get(0)             // a Maybe: the item, or nothing
+let first = foundFirst.or(defaultItem)    // a plain item, defaultItem if missing
+let foundSecond = items.get(1)
+let second = foundSecond.or(defaultItem)
 ```
 
 Object fields are guaranteed by the type system. Array indices are not. Different safety profile, different access pattern.

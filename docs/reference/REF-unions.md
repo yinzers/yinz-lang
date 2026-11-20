@@ -95,7 +95,10 @@ shape AnyUser = Admin | Guest | User
 
 function getAccess(share user: AnyUser) -> string {
   if (user) {
-    is Admin => return user.permissions.first().or(`none`)
+    is Admin => {
+      let firstPermission = user.permissions.first()   // a Maybe: the permission, or nothing
+      return firstPermission.or(`none`)
+    }
     is Guest => return `read-only`
     is User => return `basic`
   }

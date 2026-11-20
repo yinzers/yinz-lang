@@ -96,7 +96,8 @@ if (player.exists()) {
 }
 
 // Or with a default
-let player = players.get(5).or(defaultPlayer)   // always returns a Player
+let foundPlayer = players.get(5)                // a Maybe: the Player, or nothing
+let player = foundPlayer.or(defaultPlayer)      // always a Player
 ```
 
 The same rule applies to all collections — `array<T>`, `fixed<T>`, `map<K, V>`, and `string`. Every access that might not exist returns `maybe`. No out-of-bounds crashes anywhere in the language.

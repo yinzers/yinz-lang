@@ -62,11 +62,12 @@ if (count.exists()) {
 }
 
 // Or use a default:
-let count = input.toInt().or(0)
+let parsedCount = input.toInt()     // a Maybe: the number, or nothing
+let count = parsedCount.or(0)       // a plain int, 0 if input isn't a number
 
 // Failure case:
 let bad = "hello".toInt()           // none — "hello" is not a number
-let bad = "hello".toInt().or(0)     // 0 — fallback
+let badCount = bad.or(0)            // 0 — fallback
 ```
 
 ## Parsing non-decimal strings
@@ -80,8 +81,10 @@ For hex, binary, and octal strings, use explicit methods. All return `maybe<int>
 "17".fromOctal()      // maybe<int> — 15
 
 // With fallback:
-"FF".fromHex().or(0)  // 255
-"ZZ".fromHex().or(0)  // 0 — "ZZ" is not valid hex
+let validHex = "FF".fromHex()
+let validValue = validHex.or(0)     // 255
+let invalidHex = "ZZ".fromHex()
+let invalidValue = invalidHex.or(0) // 0 — "ZZ" is not valid hex
 
 // Failure case:
 "GG".fromHex()        // none — G is not a valid hex digit
