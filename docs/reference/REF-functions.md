@@ -73,16 +73,10 @@ Returning a value from a `Nothing` function is a compile error:
 ```
 function logMessage(share msg: String) -> Nothing {
   return msg
-  // COMPILE ERROR: logMessage is declared to return `Nothing` — it cannot return a value.
-  //
-  //   Either remove the return value:
-  //     return
-  //   Or change the function's return type:
-  //     function logMessage(share msg: String) -> String { return msg }
-  //
-  //   Why: -> Nothing means the function does its work and returns no value
-  //        to the caller. Returning a value would contradict that promise.
 }
+// COMPILE ERROR: `return` with a value in a `-> Nothing` function.
+//   Remove the value: write `return` with no expression.
+//   Functions declared `-> Nothing` do not produce a value. A `return` inside them ends the function — no value allowed.
 ```
 
 ---
@@ -109,47 +103,15 @@ There is no body-level syntax for `.share()` / `.lend()` / `.give()` — those m
 
 ---
 
-## Arrow functions — for callbacks only
+## Every function has a name
 
-Arrow syntax is for inline callbacks passed to functions. Don't use it for standalone named functions — use `function` for those.
-
-**Simple form** — the compiler infers types from context:
-
-```
-let active = players.filter(p => p.health > 0)
-let names = players.map(p => p.name)
-```
-
-**Multi-line** — curly braces with explicit return:
-
-```
-let processed = players.map(p => {
-  let bonus = p.health * 2
-  return p.name + ": " + bonus
-})
-```
-
-**Typed form** — when the compiler needs explicit types (complex callbacks, HTTP route handlers, anywhere inference isn't enough):
-
-```
-server.get("/users", (request: Request) -> Response => {
-  let users = loadUsers()
-  return response.json(users)
-})
-```
-
-The pattern is `(params: Types) -> ReturnType => { body }` — the same shape as a named function, just `=>` where the function name would be. The `-> ReturnType` is only required when the compiler can't infer it.
-
-When to use which form:
-1. `p => expr` — when types are obvious from context
-2. `p => { ... }` — multi-line, types still inferred
-3. `(p: T) -> R => { ... }` — when the compiler asks for explicit types
+Write each function with `function` and a name. To use one function inside another, call it by name.
 
 ---
 
-## No tuples — define a type instead
+## No tuples — define a shape instead
 
-If you need to return multiple values, define a type. Named fields are always clearer than positional slots:
+If you need to return multiple values, define a shape. Named fields are always clearer than positional slots:
 
 ```
 shape DivResult {
