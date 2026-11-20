@@ -82,6 +82,7 @@ docker compose run --rm dev cargo build -p ynz-lsp --release
 docker compose run --rm dev cargo test --workspace
 docker compose run --rm dev cargo clippy --workspace -- -D warnings
 docker compose run --rm dev cargo fmt --all
+docker compose run --rm dev cargo run -p ynz-pascalcase-codemod -- --help   # rename old lowercase built-in types (int, map, ...) to PascalCase, in type positions only, across any tree
 
 # Run the compiler directly inside a running dev container
 docker compose exec dev ./target/debug/ynz run crates/ynz-driver/tests/fixtures/hello.ynz

@@ -30,6 +30,7 @@ pub mod parser;
 pub mod queries;
 pub mod token;
 pub mod trivia;
+pub mod type_positions;
 pub use parser::infix_bp;
 
 pub use db::{CompilerDb, SourceFile, SourceFileRegistry};
@@ -37,3 +38,6 @@ pub use lexer::lex_with_trivia;
 pub use queries::{lex_query, parse_query, LexOutput, ParseOutput};
 pub use token::{Spanned, Token};
 pub use trivia::{Comment, CommentKind};
+pub use type_positions::{
+    find_type_positions, ConstantReadReceiver, TypePositions, TypePositionsOutput,
+};

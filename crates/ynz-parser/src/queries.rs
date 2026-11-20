@@ -3,6 +3,8 @@ use std::sync::Arc;
 use ynz_ast::nodes::{Item, Module};
 use ynz_diagnostics::{DiagnosticBucket, DiagnosticKind, SourceSpan};
 
+use crate::type_positions::TypePositions;
+
 use crate::{
     db::SourceFile,
     lexer,
@@ -78,9 +80,25 @@ pub struct ParseOutput {
 pub fn parse_query(db: &dyn salsa::Database, source: SourceFile) -> Arc<ParseOutput> {
     let lex = lex_query(db, source);
     let path = source.path(db);
+    let (parse_output, _no_type_positions) = parse_lexed(path.as_str(), &lex, false);
+    Arc::new(parse_output)
+}
 
-    let mut parser = Parser::new(path.as_str(), &lex.tokens);
+/// Parse an already-lexed file. Shared by [`parse_query`] and
+/// [`find_type_positions`](crate::type_positions::find_type_positions). With
+/// `record_type_positions` off (the compiler's setting) the second value is `None` and the
+/// parser records nothing.
+pub fn parse_lexed(
+    path: &str,
+    lex: &LexOutput,
+    record_type_positions: bool,
+) -> (ParseOutput, Option<TypePositions>) {
+    let mut parser = Parser::new(path, &lex.tokens);
+    if record_type_positions {
+        parser.record_type_positions();
+    }
     let module = parser.parse_module();
+    let type_positions = parser.take_type_positions();
 
     // Collect positions where banned-declaration-keyword tokens are valid plain
     // identifiers (shape field names, function parameter names). A BannedKeyword
@@ -102,8 +120,11 @@ pub fn parse_query(db: &dyn salsa::Database, source: SourceFile) -> Arc<ParseOut
         diagnostics.push(d);
     }
 
-    Arc::new(ParseOutput {
-        module,
-        diagnostics,
-    })
+    (
+        ParseOutput {
+            module,
+            diagnostics,
+        },
+        type_positions,
+    )
 }

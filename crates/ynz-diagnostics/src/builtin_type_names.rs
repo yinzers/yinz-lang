@@ -54,6 +54,12 @@ pub fn pascal_case_name_for_old_builtin_type(name: &str) -> Option<&'static str>
         .map(|(_, new)| *new)
 }
 
+/// Every old lowercase built-in spelling in the table, in table order. For tools that scan
+/// source text for old spellings (the PascalCase codemod's cheap pre-filter). O(1) to create.
+pub fn old_builtin_type_names() -> impl Iterator<Item = &'static str> {
+    OLD_TO_NEW_BUILTIN_TYPE_NAMES.iter().map(|(old, _)| *old)
+}
+
 /// True when `name` is a built-in type name a user shape may not take (`Map`, `String`, ...).
 /// O(1).
 pub fn is_reserved_builtin_type_name(name: &str) -> bool {

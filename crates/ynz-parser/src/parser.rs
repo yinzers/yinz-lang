@@ -28,6 +28,7 @@ use ynz_diagnostics::builtin_type_names::{
 use ynz_diagnostics::{Diagnostic, DiagnosticBucket, SourceSpan};
 
 use crate::token::{Spanned, Token};
+use crate::type_positions::{ConstantReadReceiver, TypePositions};
 
 pub struct Parser<'a> {
     file: &'a str,
@@ -50,6 +51,9 @@ pub struct Parser<'a> {
     /// and `advance()` consumes it by clearing this flag (without incrementing `pos`).
     /// The actual `>>` token at `pos` will then be seen on the next call to `peek()`.
     pending_gt: bool,
+    /// Where type names were read, for source-rewriting tools. `None` (the compiler's setting)
+    /// records nothing; see [`Parser::record_type_positions`].
+    type_positions: Option<TypePositions>,
 }
 
 impl<'a> Parser<'a> {
@@ -63,6 +67,24 @@ impl<'a> Parser<'a> {
             block_depth: 0,
             nesting_too_deep_reported: false,
             pending_gt: false,
+            type_positions: None,
+        }
+    }
+
+    /// Turn on recording of the source spans read as types (see
+    /// [`crate::type_positions::TypePositions`]). Off by default; the compiler never calls it.
+    pub fn record_type_positions(&mut self) {
+        self.type_positions = Some(TypePositions::default());
+    }
+
+    /// The recorded type positions, or `None` when recording was never turned on.
+    pub fn take_type_positions(&mut self) -> Option<TypePositions> {
+        self.type_positions.take()
+    }
+
+    fn record_type_name(&mut self, span: &SourceSpan) {
+        if let Some(positions) = &mut self.type_positions {
+            positions.type_names.push(span.clone());
         }
     }
 
@@ -971,6 +993,7 @@ impl<'a> Parser<'a> {
             }
             Token::Identifier(written_name) => {
                 let span = self.current_span();
+                self.record_type_name(&span);
                 self.advance();
                 // An old lowercase spelling (`int`) is taught, then read as its PascalCase
                 // name so one wrong word does not cascade into more errors.
@@ -1735,6 +1758,7 @@ impl<'a> Parser<'a> {
             self.advance(); // consume `is`
             let ty_span = self.current_span();
             let ty_name = if let Token::Identifier(n) = self.peek().clone() {
+                self.record_type_name(&ty_span);
                 let n2 = n.clone();
                 self.advance();
                 n2
@@ -1928,6 +1952,8 @@ impl<'a> Parser<'a> {
             let is_span = self.current_span();
             self.advance(); // consume `is`
             let type_name = if let Token::Identifier(n) = self.peek().clone() {
+                let target_span = self.current_span();
+                self.record_type_name(&target_span);
                 let n2 = n.clone();
                 self.advance();
                 n2
@@ -2939,6 +2965,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_call(&mut self, callee: Expr, type_args: Option<Vec<Type>>) -> Expr {
+        if let (Expr::Ident(_, callee_span), Some(positions)) = (&callee, &mut self.type_positions)
+        {
+            positions.call_callees.push(callee_span.clone());
+        }
         let start = callee.span().start;
         self.advance(); // consume `(`
 
@@ -3104,8 +3134,13 @@ impl<'a> Parser<'a> {
                         "Add a comma after the previous element: `[a, b, c]`",
                         "Array elements must be separated by commas. A trailing comma after the last element is also fine: `[a, b, c,]`",
                     ));
-                    // Recover by parsing this as the next element anyway.
+                    // Recover by parsing this as the next element anyway. An element that
+                    // consumed no token would repeat forever (`[{{ a: 1 }}]`), so stop there.
+                    let position_before_element = self.pos;
                     elements.push(self.parse_expr(0));
+                    if self.pos == position_before_element && !self.pending_gt {
+                        break;
+                    }
                 }
             }
         }
@@ -3120,6 +3155,13 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Undo the type names recorded since a speculative parse started.
+    fn forget_type_names_after(&mut self, saved_count: Option<usize>) {
+        if let (Some(positions), Some(count)) = (&mut self.type_positions, saved_count) {
+            positions.type_names.truncate(count);
+        }
+    }
+
     /// Speculatively parse a generic type-argument list `<T, U>` followed by `(`.
     ///
     /// Returns `Some(type_args)` and leaves the parser positioned at `(` if the
@@ -3131,6 +3173,7 @@ impl<'a> Parser<'a> {
 
         let saved_pos = self.pos;
         let saved_diags_len = self.diags.len();
+        let saved_type_name_count = self.type_positions.as_ref().map(|p| p.type_names.len());
 
         self.advance(); // consume `<`
         let mut tokens_consumed: usize = 1;
@@ -3141,6 +3184,7 @@ impl<'a> Parser<'a> {
             if tokens_consumed > 32 {
                 self.pos = saved_pos;
                 self.diags.truncate(saved_diags_len);
+                self.forget_type_names_after(saved_type_name_count);
                 return None;
             }
 
@@ -3155,6 +3199,7 @@ impl<'a> Parser<'a> {
                 Token::Eof | Token::RBrace | Token::RParen => {
                     self.pos = saved_pos;
                     self.diags.truncate(saved_diags_len);
+                    self.forget_type_names_after(saved_type_name_count);
                     return None;
                 }
                 _ => {
@@ -3165,6 +3210,7 @@ impl<'a> Parser<'a> {
                     if matches!(ty, Type::Error) {
                         self.pos = saved_pos;
                         self.diags.truncate(saved_diags_len);
+                        self.forget_type_names_after(saved_type_name_count);
                         return None;
                     }
                     args.push(ty);
@@ -3176,6 +3222,7 @@ impl<'a> Parser<'a> {
         if !matches!(self.peek(), Token::LParen) {
             self.pos = saved_pos;
             self.diags.truncate(saved_diags_len);
+            self.forget_type_names_after(saved_type_name_count);
             return None;
         }
 
@@ -3336,6 +3383,17 @@ impl<'a> Parser<'a> {
 
         // No `(` → field access (pure read, no side effects)
         if !matches!(self.peek(), Token::LParen) {
+            if let (Expr::Ident(receiver_name, receiver_span), Some(positions)) =
+                (&receiver, &mut self.type_positions)
+            {
+                positions
+                    .constant_read_receivers
+                    .push(ConstantReadReceiver {
+                        receiver_name: receiver_name.clone(),
+                        receiver_span: receiver_span.clone(),
+                        field_name: name.clone(),
+                    });
+            }
             let end = name_span.end;
             return Expr::FieldAccess {
                 receiver: Box::new(receiver),
