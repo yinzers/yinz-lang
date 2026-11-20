@@ -4,7 +4,7 @@ description: "An options type defines a fixed set of named values — a multiple
 tags:
   - "yinz-compiler"
 created_at: "2026-05-12"
-updated_at: "2026-07-01"
+updated_at: "2026-11-20"
 status: "active"
 author: "patrick"
 metadata:
@@ -19,11 +19,16 @@ An `options` type defines a fixed set of named values — a multiple-choice list
 
 ## Defining options
 
-```
+```ynz
 options Status {
   active,
   inactive,
   banned
+}
+
+function entrypoint() -> Nothing {
+  let current: Status = Status.active
+  print(current.toString())
 }
 ```
 
@@ -33,150 +38,185 @@ options Status {
 
 ## Using an options value
 
-```
-let current: Status = Status.active
+```ynz
+options Status {
+  active,
+  inactive,
+  banned
+}
 
-if (current == Status.banned) {
-  denyAccess()
+function denyAccess() -> Nothing {
+  print(`access denied`)
+}
+
+function entrypoint() -> Nothing {
+  let current: Status = Status.active
+
+  if (current == Status.banned) {
+    denyAccess()
+  }
 }
 ```
 
 ---
 
-## Shorthand when the type is already known
+## Exhaustiveness — all choices must be handled
 
-The compiler can figure out the full name from context:
+When you use a multi-case `if` on an options value, you must handle every choice, or include `else =>`:
 
-```
-let ranked = players.sort(p => p.health, desc)              // shorthand — compiler knows SortOrder.desc
-let ranked = players.sort(p => p.health, SortOrder.desc)    // explicit — also valid
-```
-
-IDE autocomplete surfaces the available options at the call site so you don't have to remember them.
-
----
-
-## Built-in options
-
-These are part of the standard library — no import needed:
-
-```
-options SortOrder {
-  asc,
-  desc
+```ynz
+options Status {
+  active,
+  inactive,
+  banned
 }
 
-options Comparison {
-  equal,
-  greater,
-  less
+function entrypoint() -> Nothing {
+  let current: Status = Status.active
+
+  if (current) {
+    active => print(`active`)
+    inactive => print(`inactive`)
+    banned => print(`banned`)
+  }
 }
 ```
 
----
+Missing a choice is a compile error. The compiler tells you exactly which ones are missing. With the `banned` arm removed:
 
-## Exhaustiveness — all variants must be handled
+```ynz
+options Status {
+  active,
+  inactive,
+  banned
+}
 
-When you use multi-case `if` on an options type, you must handle every variant — or include `else =>`:
+function entrypoint() -> Nothing {
+  let current: Status = Status.active
 
-```
-if (current) {
-  Status.active  => print(`active`)
-  Status.inactive => print(`inactive`)
-  Status.banned  => print(`banned`)
+  if (current) {
+    active => print(`active`)
+    inactive => print(`inactive`)
+  }
 }
 ```
 
-Missing a variant is a compile error. The compiler tells you exactly which ones are missing.
+the compiler reports:
 
 ```
-// COMPILE ERROR: Non-exhaustive options multi-case — Status has 3 variants; only 2 are handled.
-// Missing variant: banned
-// Add: Status.banned => ...  or add: else => ...
+Non-exhaustive options multi-case — `Status` has 3 variants; 1 are not handled: banned.
 ```
 
----
-
-## Shorthand — when the type is already known (revisited)
-
-If two options types in scope both define the same variant name, shorthand is ambiguous and the compiler rejects it:
-
-```
-options SortOrder { asc, desc }
-options Direction { up, down, desc }   // also has 'desc'
-
-let sorted = players.sort(p => p.health, desc)
-// COMPILE ERROR: 'desc' is ambiguous — it's a variant of both SortOrder and Direction.
-// Use the qualified form: SortOrder.desc or Direction.desc
-```
-
-If a function and an options variant share the same name, the function takes priority. If that produces a type error, qualify the variant explicitly.
+Add the missing arm (`banned =>`) or add an `else =>` default arm.
 
 ---
 
 ## options vs union types
 
-`options` is for a fixed set of named labels (like states or modes). `|` is for when a value can be one of several different types with different fields:
+`options` is for a fixed set of named labels (like states or modes). `|` is for when a value can be one of several different shapes with different fields:
 
-```
-options Status { active, inactive, banned }    // named states — same underlying type
-shape Shape = Circle | Square | Triangle      // different types — each has different fields
+```ynz
+options Status {
+  active,
+  inactive,
+  banned
+}
+
+shape Circle {
+  radius: Float
+}
+
+shape Square {
+  side: Float
+}
+
+shape Figure = Circle | Square
+
+function entrypoint() -> Nothing {
+  let circle: Circle = { radius: 2.0 }
+  let current: Status = Status.active
+  print(current.toString())
+  print(circle.radius.toString())
+}
 ```
 
-Use `options` when the variants are just labels. Use `|` when they have different data shapes. See [Unions](REF-unions.md).
+Use `options` when the choices are just labels. Use `|` when they have different data shapes. See [Unions](REF-unions.md).
 
 ---
 
 ## Display strings — human-readable `.toString()` values
 
-By default, `.toString()` on an options value returns the variant identifier as a string:
+By default, `.toString()` on an options value returns the choice's name as a string:
 
 ```ynz
-options Direction { north, south, east, west }
-Direction.north.toString()    // `north`
+options Direction {
+  north,
+  south,
+  east,
+  west
+}
+
+function entrypoint() -> Nothing {
+  let heading: Direction = Direction.north
+  let label = heading.toString()
+  print(label)                       // north
+}
 ```
 
-You can attach a display string to any variant using `: \`value\`` syntax:
+You can attach a display string to any choice with `: ` and a backtick string:
 
 ```ynz
 options Timeframe {
-    oneMinute: `One Minute`
-    fiveMinute: `Five Minute`
-    fifteenMinute: `Fifteen Minute`
-    thirtyMinute: `Thirty Minute`
-    hourly: `Hourly`
-    daily: `Daily`
+  oneMinute: `One Minute`
+  fiveMinute: `Five Minute`
+  hourly: `Hourly`
+  daily: `Daily`
 }
 
-Timeframe.fifteenMinute.toString()    // `Fifteen Minute`
-Timeframe.daily.toString()            // `Daily`
+function entrypoint() -> Nothing {
+  let frame: Timeframe = Timeframe.daily
+  let label = frame.toString()
+  print(label)                       // Daily
+}
 ```
 
-Variants without a display string still return the identifier:
+Choices without a display string still return their name:
 
 ```ynz
 options Status {
-    active: `Active`
-    inactive               // no display string — toString() returns `inactive`
-    banned: `Banned`
+  active: `Active`
+  inactive
+  banned: `Banned`
+}
+
+function entrypoint() -> Nothing {
+  let current: Status = Status.inactive
+  print(current.toString())      // inactive
 }
 ```
 
-Display strings are useful for UI labels, log output, and any context where the identifier name alone is too terse. The variant identifier is still used for comparisons, storage, and type-checking — the display string only affects `.toString()`.
+Here `Status.inactive.toString()` returns `inactive`.
+
+Display strings are useful for UI labels and log output. The choice's name is still used for comparisons and type-checking. The display string only affects `.toString()`.
 
 ---
 
 ## Commas are optional
 
-Variants can be comma-separated or newline-separated — both work:
+Choices can be comma-separated or newline-separated — both work:
 
 ```ynz
-// Comma-separated (traditional)
 options Status { active, inactive, banned }
 
-// Newline-separated (cleaner with display strings)
 options Timeframe {
-    hourly: `Hourly`
-    daily: `Daily`
+  hourly: `Hourly`
+  daily: `Daily`
+}
+
+function entrypoint() -> Nothing {
+  let current: Status = Status.banned
+  let frame: Timeframe = Timeframe.hourly
+  print(current.toString())
+  print(frame.toString())
 }
 ```

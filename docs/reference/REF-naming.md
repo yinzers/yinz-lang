@@ -38,16 +38,16 @@ Yinz uses plain English words for its keywords, and capital letters to mark type
 
 Every type is PascalCase, built-in types included. Everything else is lowercase camelCase — modules, functions, variables, keywords. No exceptions.
 
-```
-Player          // type you wrote
-Int             // built-in type
-Array<Player>   // built-in type
-player          // variable
-request         // module
-request.get()   // module function
-fetchUser       // function name
-let userName    // variable
-```
+| Name | What it is |
+|------|------------|
+| `Player` | a type you wrote |
+| `Int` | a built-in type |
+| `Array<Player>` | a built-in type |
+| `player` | a variable |
+| `request` | a module |
+| `request.get()` | a module function |
+| `fetchUser` | a function name |
+| `userName` | a variable |
 
 A name can exist in both casings. `Date` is the type, `date` is the module. `Response` is the type, `response` is the module. `Range` is the type, `range` is the function: `range(1, 10)` returns a `Range`.
 
@@ -68,17 +68,22 @@ A name can exist in both casings. `Date` is the type, `date` is the module. `Res
 | `Channel<T>` | A line for passing values between tasks |
 | `Nothing` | What a function returns when it returns no value: `-> Nothing` |
 
-`Nothing` is an ordinary type name, not a keyword. A function, module or variable can use the lowercase spelling of a type name. A variable called `number` is fine, and `.map(...)` is still the function that transforms a collection.
+`Nothing` is an ordinary type name, not a keyword. A function, module or variable can use the lowercase spelling of a type name. A variable called `number` is fine.
 
 ### Old lowercase type names
 
 Writing a built-in type in lowercase is a compile error:
 
+```ynz
+function entrypoint() -> Nothing {
+  let health: int = 100
+}
 ```
-let health: int = 100
-// COMPILE ERROR: `int` is not a type name.
-//   Write `Int`.
-//   Why: Every type in Yinz starts with a capital letter, built-ins included.
+
+```
+`int` is not a type name.
+  write `Int`
+  Why: Write `Int`. — Every type in Yinz starts with a capital letter, built-ins included.
 ```
 
 The editor offers a quick-fix titled ``Write `Int` instead of `int` `` that rewrites the name for you.
@@ -87,13 +92,20 @@ The editor offers a quick-fix titled ``Write `Int` instead of `int` `` that rewr
 
 A shape or union alias named like a built-in type is a compile error. The reserved names are `Int`, `Float`, `Number`, `Boolean`, `String`, `Range`, `Maybe`, `Array`, `Fixed`, `Map`, `Channel`, `Nothing`, `MapEntry`, `Frame` and `SourceLoc`:
 
-```
+```ynz
 shape String {
   value: Int
 }
-// COMPILE ERROR: `String` is a reserved built-in type name.
-//   Give this shape another name, such as `MyString` or one that says what it holds.
-//   Why: Yinz already has a built-in type called `String`. A shape with the same name would make every `String` in this file ambiguous between your shape and the built-in.
+
+function entrypoint() -> Nothing {
+  print(`hello`)
+}
+```
+
+```
+`String` is a reserved built-in type name.
+  Give this shape another name, such as `MyString` or one that says what it holds.
+  Why: Yinz already has a built-in type called `String`. A shape with the same name would make every `String` in this file ambiguous between your shape and the built-in.
 ```
 
 **Why**: Instant scannability. Any line of code — see a capital letter, it's a type. Don't see one, it's not. Zero ambiguity, no context-reading required. The rule is mechanical and absolute: no threshold, no judgment calls.
