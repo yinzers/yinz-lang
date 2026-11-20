@@ -17,7 +17,7 @@ fn old_lowercase_type_spelling_gets_a_quick_fix_to_pascal_case() {
     let uri = lsp_types::Url::from_file_path("/tmp/ynz_old_builtin_type.ynz").expect("valid path");
     state.open_document(uri.clone(), src.to_string());
 
-    let offset = src.find("int").expect("`int` in source");
+    let offset = src.find(": int").expect("`: int` in source") + 2;
     let table = LineTable::new(src);
     let range = lsp_types::Range {
         start: table.byte_offset_to_position(src, offset, PositionEncoding::Utf8),
