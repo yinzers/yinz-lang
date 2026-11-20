@@ -62,7 +62,7 @@ fn position_at(src: &str, needle: &str) -> lsp_types::Position {
 
 #[test]
 fn test_references_include_decl_false_excludes_declaration() {
-    let src = "function greet() -> string { return `hi` }\nfunction entrypoint() -> nothing {\n  let a = greet()\n  let b = greet()\n  let c = greet()\n}\n";
+    let src = "function greet() -> String { return `hi` }\nfunction entrypoint() -> Nothing {\n  let a = greet()\n  let b = greet()\n  let c = greet()\n}\n";
     let path = "/tmp/ynz_refs_excl.ynz";
     let (state, uri) = state_single(path, src);
     let decl_pos = position_at(src, "greet()"); // first occurrence = call, not decl
@@ -80,7 +80,7 @@ fn test_references_include_decl_false_excludes_declaration() {
 
 #[test]
 fn test_references_include_decl_true_includes_declaration() {
-    let src = "function greet() -> string { return `hi` }\nfunction entrypoint() -> nothing {\n  let a = greet()\n}\n";
+    let src = "function greet() -> String { return `hi` }\nfunction entrypoint() -> Nothing {\n  let a = greet()\n}\n";
     let path = "/tmp/ynz_refs_incl.ynz";
     let (state, uri) = state_single(path, src);
     let decl_pos = lsp_types::Position {
@@ -102,7 +102,7 @@ fn test_references_whitespace_returns_some_empty_not_none() {
     // 'no refs found' vs 'not applicable'." None is reserved for position
     // conversion failure (invalid URI, out-of-bounds offset), not for
     // whitespace/keyword positions where there simply are no references.
-    let src = "function entrypoint() -> nothing {   }\n";
+    let src = "function entrypoint() -> Nothing {   }\n";
     let path = "/tmp/ynz_refs_ws.ynz";
     let (state, uri) = state_single(path, src);
     let pos = lsp_types::Position {
@@ -117,7 +117,7 @@ fn test_references_whitespace_returns_some_empty_not_none() {
 #[test]
 fn test_references_unknown_symbol_returns_empty_vec_not_none() {
     // A function called with no references (only declared).
-    let src = "function solo() -> nothing {}\nfunction entrypoint() -> nothing {}\n";
+    let src = "function solo() -> Nothing {}\nfunction entrypoint() -> Nothing {}\n";
     let path = "/tmp/ynz_refs_solo.ynz";
     let (state, uri) = state_single(path, src);
     let decl_pos = lsp_types::Position {
@@ -136,8 +136,8 @@ fn test_references_unknown_symbol_returns_empty_vec_not_none() {
 
 #[test]
 fn test_references_cross_file_symbol_returns_cross_file_locations() {
-    let dep_src = "export function announce(name: string) -> string {\n  return name\n}\n";
-    let main_src = "import { announce } from `services/players`\nfunction entrypoint() -> nothing {\n  let a = announce(`Roberto`)\n  let b = announce(`Willie`)\n}\n";
+    let dep_src = "export function announce(name: String) -> String {\n  return name\n}\n";
+    let main_src = "import { announce } from `services/players`\nfunction entrypoint() -> Nothing {\n  let a = announce(`Roberto`)\n  let b = announce(`Willie`)\n}\n";
     let (state, main_uri, _dep_uri, _dir) = state_two_files("players", dep_src, main_src);
     let call_pos = position_at(main_src, "announce(`Roberto`)");
     let refs = references_response(&state, &main_uri, call_pos, false, &make_sender());
@@ -155,7 +155,7 @@ fn test_references_progress_emitted_for_large_project() {
     // Use a project with >10 open documents (inject synthetically into ServerState).
     let mut state = ServerState::new(PositionEncoding::Utf8);
     let path = "/tmp/ynz_refs_progress.ynz";
-    let src = "function greet() -> string { return `hi` }\nfunction entrypoint() -> nothing {\n  let a = greet()\n}\n";
+    let src = "function greet() -> String { return `hi` }\nfunction entrypoint() -> Nothing {\n  let a = greet()\n}\n";
     let uri = lsp_types::Url::from_file_path(path).expect("valid path");
     state.open_document(uri.clone(), src.to_string());
     // Inject 10 more synthetic documents to trigger progress threshold.
@@ -187,7 +187,7 @@ fn test_references_progress_emitted_for_large_project() {
 
 #[test]
 fn test_references_performance_under_500ms() {
-    let src = "function greet() -> string { return `hi` }\nfunction entrypoint() -> nothing {\n  let a = greet()\n  let b = greet()\n}\n";
+    let src = "function greet() -> String { return `hi` }\nfunction entrypoint() -> Nothing {\n  let a = greet()\n  let b = greet()\n}\n";
     let path = "/tmp/ynz_refs_perf.ynz";
     let (state, uri) = state_single(path, src);
     let decl_pos = lsp_types::Position {

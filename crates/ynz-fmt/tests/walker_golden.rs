@@ -38,7 +38,7 @@ fn empty_source_yields_empty_output() {
 
 #[test]
 fn trailing_newline_added() {
-    let source = "function f() -> nothing {}";
+    let source = "function f() -> Nothing {}";
     let got = ynz_fmt::format(source).expect("format failed");
     assert!(
         got.ends_with('\n'),
@@ -54,7 +54,7 @@ fn nested_generic_keeps_lexer_required_space() {
     // the driver-fixture idempotency sweep failed on the first nested-generic
     // annotation in the tree, v0.3-M5 P2 fix round 2).
     let source =
-        "function f() -> nothing {\n  let picks: map<string, maybe<int> > = { `a`: 1 }\n}\n";
+        "function f() -> Nothing {\n  let picks: Map<String, Maybe<Int> > = { `a`: 1 }\n}\n";
     let got = ynz_fmt::format(source).expect("format failed");
     assert!(
         got.contains("map<string, maybe<int> >"),
@@ -149,7 +149,7 @@ fn errors_capable_suffix_not_doubled() {
     //      `errors` suffix. Prior to this fix, the formatter appended BOTH, producing
     //      `-> string errors errors`. A future refactor that "helpfully" re-enables the
     //      errors_capable flag would break this test — the test catches that regression.
-    let source = "function readConfig() -> string errors { return `ok` }\n";
+    let source = "function readConfig() -> String errors { return `ok` }\n";
     let got = ynz_fmt::format(source).expect("format failed");
     let count = got.matches(" errors").count();
     assert_eq!(
@@ -168,7 +168,7 @@ fn errors_capable_suffix_not_doubled() {
 fn backtick_string_preserved_byte_exact() {
     // Backtick string content (including interpolations) must be preserved exactly.
     let source =
-        "function f(name: string, val: int) -> string { return `hello ${name}, val=${val}!` }\n";
+        "function f(name: String, val: Int) -> String { return `hello ${name}, val=${val}!` }\n";
     let got = ynz_fmt::format(source).expect("format failed");
     assert!(
         got.contains("`hello ${name}, val=${val}!`"),
@@ -179,7 +179,7 @@ fn backtick_string_preserved_byte_exact() {
 #[test]
 fn block_opener_on_same_line_as_keyword() {
     // `{` must stay on the same line as `function`/`if`/`while`/`for`, not on its own line.
-    let source = "function f() -> nothing { let x = 1 }\n";
+    let source = "function f() -> Nothing { let x = 1 }\n";
     let got = ynz_fmt::format(source).expect("format failed");
     assert!(
         got.contains("function f() -> nothing {"),
@@ -189,7 +189,7 @@ fn block_opener_on_same_line_as_keyword() {
 
 #[test]
 fn output_ends_in_exactly_one_trailing_newline() {
-    let source = "function f() -> int { return 42 }\n";
+    let source = "function f() -> Int { return 42 }\n";
     let got = ynz_fmt::format(source).expect("format failed");
     assert!(got.ends_with('\n'), "must end with newline");
     assert!(!got.ends_with("\n\n"), "must not end with double newline");
@@ -198,7 +198,7 @@ fn output_ends_in_exactly_one_trailing_newline() {
 #[test]
 fn operator_precedence_parens_preserved() {
     // The AST stores the precedence correctly; the formatter must not lose parens.
-    let source = "function f(a: int, b: int, c: int) -> int { return (a + b) * c }\n";
+    let source = "function f(a: Int, b: Int, c: Int) -> Int { return (a + b) * c }\n";
     let got = ynz_fmt::format(source).expect("format failed");
     assert!(
         got.contains("(a + b) * c"),
@@ -209,7 +209,7 @@ fn operator_precedence_parens_preserved() {
 #[test]
 fn higher_precedence_subexpr_no_parens() {
     // a + b * c — the * binds tighter; no parens needed.
-    let source = "function f(a: int, b: int, c: int) -> int { return a + b * c }\n";
+    let source = "function f(a: Int, b: Int, c: Int) -> Int { return a + b * c }\n";
     let got = ynz_fmt::format(source).expect("format failed");
     assert!(got.contains("a + b * c"), "spurious parens added: {got}");
     assert!(

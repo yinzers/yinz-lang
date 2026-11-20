@@ -165,7 +165,7 @@ fn comments_only_body_preserved() {
 
 #[test]
 fn inline_comment_has_two_spaces_before_slashes() {
-    let source = "function f() -> nothing { let x = 1 // note\n }\n";
+    let source = "function f() -> Nothing { let x = 1 // note\n }\n";
     let got = ynz_fmt::format(source).expect("format failed");
     // The inline comment should have exactly 2 spaces between code and //
     assert!(
@@ -176,7 +176,7 @@ fn inline_comment_has_two_spaces_before_slashes() {
 
 #[test]
 fn crlf_input_becomes_lf_output() {
-    let source = "function f() -> nothing {\r\n  let x = 1\r\n}\r\n";
+    let source = "function f() -> Nothing {\r\n  let x = 1\r\n}\r\n";
     let got = ynz_fmt::format(source).expect("format failed");
     assert!(
         !got.contains('\r'),
@@ -204,7 +204,7 @@ fn doc_comment_not_double_emitted() {
     //      vec. If both paths emit the comment, it appears twice. This test guards the
     //      invariant that only the trivia path emits in the comment-aware walker — the AST
     //      field is ignored by emit_function_with_comments.
-    let source = "/// My doc comment\nfunction f() -> nothing { print(`ok`) }\n";
+    let source = "/// My doc comment\nfunction f() -> Nothing { print(`ok`) }\n";
     let got = ynz_fmt::format(source).expect("format failed");
     let count = got.matches("/// My doc comment").count();
     assert_eq!(count, 1, "doc comment must appear exactly once, got: {got}");

@@ -819,8 +819,8 @@ fn cross_file_items_appear_in_completion_with_import_edit() {
     };
 
     let root = std::path::Path::new("/tmp/ynz_cross_completion");
-    let exporter_src = "export shape Order { id: string }\nexport function processOrder(o: Order) -> nothing { }\n";
-    let importer_src = "function main() -> nothing { }\n";
+    let exporter_src = "export shape Order { id: String }\nexport function processOrder(o: Order) -> Nothing { }\n";
+    let importer_src = "function main() -> Nothing { }\n";
 
     let mut state = ServerState::new(PositionEncoding::Utf8);
     state.project_root = Some(root.to_path_buf());

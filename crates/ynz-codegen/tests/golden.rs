@@ -39,12 +39,12 @@ const FILE: &str = "hello.ynz";
 // test-ratchet: M7 P1 migrates double-quoted string to backtick syntax — double-quotes now
 // produce an error diagnostic, so any test source must use backticks. The golden SHA-256
 // files will change and must be regenerated (they are auto-regenerated on first run).
-const M1_SOURCE: &str = "function entrypoint() -> nothing { print(`hello, yinz`) }";
+const M1_SOURCE: &str = "function entrypoint() -> Nothing { print(`hello, yinz`) }";
 
 const M2_SMOKE_FILE: &str = "m2_smoke.ynz";
-const M2_SMOKE_SOURCE: &str = r#"function entrypoint() -> nothing {
+const M2_SMOKE_SOURCE: &str = r#"function entrypoint() -> Nothing {
   let price = 0.1 + 0.2
-  let count: int = 42
+  let count: Int = 42
   let active = true
   print(price)
   print(count * count - 1)
@@ -338,7 +338,7 @@ fn m2_decimal_exactness() {
     // This test compiles just the number computation (not the full smoke test)
     // and verifies the IR is produced without codegen errors. End-to-end
     // execution is the driver integration step which actually runs the binary.
-    let source = "function entrypoint() -> nothing { let x = 0.1 + 0.2\nprint(x) }";
+    let source = "function entrypoint() -> Nothing { let x = 0.1 + 0.2\nprint(x) }";
     let db = CompilerDb::default();
     let sf = SourceFile::new(&db, "decimal_test.ynz".to_string(), source.to_string());
     let output = codegen_query(&db, sf);
@@ -354,13 +354,13 @@ fn m2_decimal_exactness() {
 }
 
 const M3_FIB_FILE: &str = "m3_fib.ynz";
-const M3_FIB_SOURCE: &str = r#"function fib(n: int) -> int {
+const M3_FIB_SOURCE: &str = r#"function fib(n: Int) -> Int {
   if (n < 2) {
     return n
   }
   return fib(n - 1) + fib(n - 2)
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let result = fib(10)
   print(result)
 }"#;
@@ -437,7 +437,7 @@ fn m3_fib_sha256_golden() {
 
 const M4_PLAYER_FILE: &str = "m4_player.ynz";
 // test-ratchet: M7 P1 migrates double-quoted string to backtick syntax
-const M4_PLAYER_SOURCE: &str = "shape Player {\n  name: string\n  health: int\n}\nfunction greet(share self: Player) -> nothing {\n  print(self.name)\n}\nfunction heal(lend self: Player, amount: int) -> nothing {\n  self.health = self.health + amount\n}\nfunction consume(give p: Player) -> nothing {\n  print(p.name)\n}\nfunction entrypoint() -> nothing {\n  let p: Player = { name: `Patrick`, health: 100 }\n  p.greet()\n  p.heal(20)\n  print(p.health.toString())\n  consume(p)\n}";
+const M4_PLAYER_SOURCE: &str = "shape Player {\n  name: String\n  health: Int\n}\nfunction greet(share self: Player) -> Nothing {\n  print(self.name)\n}\nfunction heal(lend self: Player, amount: Int) -> Nothing {\n  self.health = self.health + amount\n}\nfunction consume(give p: Player) -> Nothing {\n  print(p.name)\n}\nfunction entrypoint() -> Nothing {\n  let p: Player = { name: `Patrick`, health: 100 }\n  p.greet()\n  p.heal(20)\n  print(p.health.toString())\n  consume(p)\n}";
 
 fn run_m4_player_codegen() -> Option<CompiledArtifact> {
     let db = CompilerDb::default();
@@ -495,11 +495,11 @@ fn m3_codegen_query_returns_no_diagnostics_on_valid_m3_source() {
     // WHY: all M3 happy-path fixtures must compile without diagnostics.
     // Any diagnostic here means typeck or codegen rejected valid M3 code.
     let sources = [
-        ("m3_for.ynz", "function entrypoint() -> nothing { for (i in range(0, 3)) { print(i) } }"),
-        ("m3_while.ynz", "function entrypoint() -> nothing { let x: int = 3\nwhile (x > 0) { x = x - 1 }\nprint(x) }"),
-        ("m3_early_ret.ynz", "function sign(x: int) -> int { if (x > 0) { return 1 } return 0 }\nfunction entrypoint() -> nothing { print(sign(5)) }"),
-        ("m3_multicase.ynz", "function entrypoint() -> nothing { let v: int = 2\nif (v) { 1 => print(1)\n2 => print(2)\nelse => print(0) } }"),
-        ("m3_mutual.ynz", "function a(n: int) -> int { if (n <= 0) { return 0 } return b(n - 1) }\nfunction b(n: int) -> int { if (n <= 0) { return 0 } return a(n - 1) }\nfunction entrypoint() -> nothing { print(a(4)) }"),
+        ("m3_for.ynz", "function entrypoint() -> Nothing { for (i in range(0, 3)) { print(i) } }"),
+        ("m3_while.ynz", "function entrypoint() -> Nothing { let x: Int = 3\nwhile (x > 0) { x = x - 1 }\nprint(x) }"),
+        ("m3_early_ret.ynz", "function sign(x: Int) -> Int { if (x > 0) { return 1 } return 0 }\nfunction entrypoint() -> Nothing { print(sign(5)) }"),
+        ("m3_multicase.ynz", "function entrypoint() -> Nothing { let v: Int = 2\nif (v) { 1 => print(1)\n2 => print(2)\nelse => print(0) } }"),
+        ("m3_mutual.ynz", "function a(n: Int) -> Int { if (n <= 0) { return 0 } return b(n - 1) }\nfunction b(n: Int) -> Int { if (n <= 0) { return 0 } return a(n - 1) }\nfunction entrypoint() -> Nothing { print(a(4)) }"),
     ];
     for (file, source) in &sources {
         let db = CompilerDb::default();
@@ -518,19 +518,19 @@ fn m3_codegen_query_returns_no_diagnostics_on_valid_m3_source() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const V03_M1_BACKGROUND_SOURCE: &str = r#"
-function worker() -> nothing {
+function worker() -> Nothing {
   sleepBlocking(1)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background worker()
   print(`done`)
 }
 "#;
 
 const V03_M1_WHILE_PREEMPT_SOURCE: &str = r#"
-function entrypoint() -> nothing {
-  let x: int = 3
+function entrypoint() -> Nothing {
+  let x: Int = 3
   while (x > 0) {
     x = x - 1
   }
@@ -611,10 +611,10 @@ fn v03_m2_single_wait_ir_snapshot() {
     // If the resume function, switch dispatch, or suspend/resume blocks change structure,
     // this snapshot fails and the reviewer can audit the diff.
     let source = r#"
-function pause() -> nothing {
+function pause() -> Nothing {
   wait sleep(100)
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background pause()
   sleepBlocking(200)
 }
@@ -643,11 +643,11 @@ fn v03_m2_multi_wait_ir_snapshot() {
     // WHY: locks the multi-state state machine IR shape (two sequential waits).
     // A regression in state-block numbering or resume_point tracking will appear here.
     let source = r#"
-function chain() -> nothing {
+function chain() -> Nothing {
   wait sleep(50)
   wait sleep(50)
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background chain()
   sleepBlocking(200)
 }
@@ -672,12 +672,12 @@ fn v03_m2_wait_in_if_ir_snapshot() {
     // State machines with wait inside an `if` must emit correct poll-and-yield in the
     // conditional branch while the non-waiting path goes straight to the terminal.
     let source = r#"
-function maybeWait(b: boolean) -> nothing {
+function maybeWait(b: Boolean) -> Nothing {
   if (b) {
     wait sleep(100)
   }
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background maybeWait(true)
   sleepBlocking(200)
 }
@@ -711,10 +711,10 @@ fn v03_m2_non_sm_caller_block_on_ir_snapshot() {
     // If the program-entry driver symbol disappears from the IR, this test catches it before
     // the program silently returns wrong values.
     let source = r#"
-function sleeper() -> nothing {
+function sleeper() -> Nothing {
   wait sleep(100)
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   sleeper()
 }
 "#;
@@ -734,7 +734,7 @@ fn v03_m2_main_with_wait_ir_snapshot() {
     // If ynz_rt_init placement regresses, programs using wait will panic at runtime
     // with "ynz_rt_init not called before ynz_rt_run_entrypoint call".
     let source = r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   wait sleep(1)
 }
 "#;
@@ -756,10 +756,10 @@ fn v03_m2_background_spawn_sm_fn_ir_snapshot() {
     // ynz_rt_spawn_blocking (blocking pool). If the routing regresses, background
     // state machines would tie up OS threads during their wait, defeating M2.
     let source = r#"
-function worker() -> nothing {
+function worker() -> Nothing {
   wait sleep(100)
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background worker()
   sleepBlocking(200)
 }
@@ -797,10 +797,10 @@ fn v03_m2_background_spawn_regular_fn_ir_snapshot() {
     // spawned via `background` still routes to ynz_rt_spawn_blocking (not ynz_rt_spawn).
     // This is the M1 behavior that must not regress when M2 routing is added.
     let source = r#"
-function worker() -> nothing {
+function worker() -> Nothing {
   sleepBlocking(100)
 }
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   background worker()
   sleepBlocking(200)
 }
@@ -828,7 +828,7 @@ fn main_rt_init_is_first_instruction() {
     // appears before any `call void @ynz_rt_run_entrypoint` or
     // `call void @ynz_rt_spawn` instruction in main's text.
     let source = r#"
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   wait sleep(1)
 }
 "#;
@@ -872,14 +872,14 @@ function entrypoint() -> nothing {
 }
 
 const TWO_CPU_GROUPS_SOURCE: &str = r#"
-function fib(n: int) -> int {
+function fib(n: Int) -> Int {
   if (n < 2) {
     return n
   }
   return fib(n - 1) + fib(n - 2)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = fib(10)
   let b = fib(11)
   print(a)
@@ -966,14 +966,14 @@ fn admitted_group_for(
 }
 
 const XPIN_FIRE_SOURCE: &str = r#"
-function fib(n: int) -> int {
+function fib(n: Int) -> Int {
   if (n < 2) {
     return n
   }
   return fib(n - 1) + fib(n - 2)
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let a = fib(20)
   let b = fib(21)
   print(a)

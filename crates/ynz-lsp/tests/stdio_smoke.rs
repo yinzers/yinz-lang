@@ -6,8 +6,8 @@ use serde_json::json;
 // beyond the ynz-lsp binary itself.
 const BASIC_YNZ: &str = "\
 // Basic fixture for LSP lifecycle tests.\n\
-function entrypoint() -> nothing {\n\
-    let x: int = 42\n\
+function entrypoint() -> Nothing {\n\
+    let x: Int = 42\n\
     print(x.toString())\n\
 }\n";
 

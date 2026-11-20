@@ -56,7 +56,7 @@ fn variable_named_share_in_expression_position_shows_type_in_hover() {
     // hover, and annotated ones always include the type name. Catches a regression
     // where the binding hover was typeless ("Binding: share") even when the type
     // annotation was available via the cheap AST walk.
-    let src = "function entrypoint() -> nothing {\n  let share: int = 5\n  print(share)\n}";
+    let src = "function entrypoint() -> Nothing {\n  let share: Int = 5\n  print(share)\n}";
     let tokens = tokenize(src);
     let table = LineTable::new(src);
     let module = make_db_and_module(src);
@@ -105,7 +105,7 @@ fn variable_named_lend_in_expression_position_shows_binding_hover_not_none() {
     // `let lend: int` hovered at its expression use-site must return Some with the type,
     // not None. Guards that the context-aware path handles ALL Identifier-class contextual
     // keywords, not just `share`.
-    let src = "function entrypoint() -> nothing {\n  let lend: int = 7\n  print(lend)\n}";
+    let src = "function entrypoint() -> Nothing {\n  let lend: Int = 7\n  print(lend)\n}";
     let tokens = tokenize(src);
     let table = LineTable::new(src);
     let module = make_db_and_module(src);
@@ -234,7 +234,7 @@ fn share_in_function_signature_modifier_position_returns_none() {
     // no variable shadow must return None, not a spurious binding hover. Catches a
     // regression where the context-aware path would incorrectly claim `share` is a
     // user-defined symbol just because it appears as a Token::Identifier.
-    let src = "function f(share self: int) -> nothing { }";
+    let src = "function f(share self: Int) -> Nothing { }";
     let tokens = tokenize(src);
     let table = LineTable::new(src);
     let module = make_db_and_module(src);
@@ -272,7 +272,7 @@ fn end_of_token_cursor_returns_hover_content() {
     // character of a token (tok.span.end) must still resolve the token. The `<=`
     // upper bound in `token_at_offset` makes this work; reverting it to `<` silently
     // breaks hover for common editor cursor-placement conventions (Bug 2.12).
-    let src = "function entrypoint() -> nothing { }";
+    let src = "function entrypoint() -> Nothing { }";
     let tokens = tokenize(src);
 
     // "function" spans bytes [0, 8). Cursor at byte 8 = span.end.
@@ -297,7 +297,7 @@ fn end_of_token_cursor_does_not_double_match_adjacent_token() {
     // whitespace (not inside the next token's start), so None is the correct result.
     // Catches a regression where the `<=` bound accidentally resolved whitespace gaps
     // to the preceding token.
-    let src = "function entrypoint() -> nothing { }";
+    let src = "function entrypoint() -> Nothing { }";
     let tokens = tokenize(src);
 
     // `->` in "function entrypoint() -> nothing". Find its end byte.
@@ -376,7 +376,7 @@ fn keyword_hover_function_unaffected_by_fix() {
     // user-defined identifier. Its hover must survive the context-aware reorder
     // unchanged — `identifier_use_site_at_offset` does NOT flag the `function` token
     // itself as an expression use-site, so the registry path fires normally.
-    let src = "function entrypoint() -> nothing { }";
+    let src = "function entrypoint() -> Nothing { }";
     let tokens = tokenize(src);
     let table = LineTable::new(src);
     let module = make_db_and_module(src);

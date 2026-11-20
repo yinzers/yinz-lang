@@ -318,7 +318,7 @@ fn let_passed_to_read_only_parameter_is_still_marked() {
     // the binding as a mutation, so nearly every real `let` lost its marker. Only a
     // `lend`/`give` parameter may block it; a plain read-only parameter must not.
     let src = concat!(
-        "function consume(x: int) -> nothing {}\n",
+        "function consume(x: Int) -> Nothing {}\n",
         "function entrypoint() -> nothing {\n",
         "  let val = 42\n",
         "  consume(val)\n",

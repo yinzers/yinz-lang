@@ -20,7 +20,7 @@ fn function_body_fold_spans_multiple_lines() {
     // WHY: A multi-line function body must produce a FoldingRange covering at
     // least lines 0-2.  If no range is returned the editor cannot fold the
     // function.  If the range is zero-height clients handle it inconsistently.
-    let src = "function entrypoint() -> nothing {\n  let x = 42\n}\n";
+    let src = "function entrypoint() -> Nothing {\n  let x = 42\n}\n";
     let (state, uri) = state_single("/tmp/fr_test_fn.ynz", src);
     let ranges = folding_range_response(&state, &uri);
     assert_eq!(ranges.len(), 1, "one function → one fold; got: {ranges:?}");
@@ -42,7 +42,7 @@ fn shape_decl_produces_fold() {
     // WHY: A multi-line shape declaration is a common fold candidate — users
     // collapse shapes to see calling code more clearly.  Missing this fold
     // leaves a visible gap in editor UX.
-    let src = "shape Player {\n  name: string\n  health: int\n}\n";
+    let src = "shape Player {\n  name: String\n  health: Int\n}\n";
     let (state, uri) = state_single("/tmp/fr_test_shape.ynz", src);
     let ranges = folding_range_response(&state, &uri);
     assert_eq!(ranges.len(), 1, "one shape → one fold; got: {ranges:?}");
@@ -84,9 +84,9 @@ fn multiple_declarations_produce_multiple_folds() {
     // per foldable item, not just the first one it encounters.  A short-circuit
     // bug would leave all but the first declaration un-foldable.
     let src = concat!(
-        "shape Player {\n  name: string\n  health: int\n}\n",
+        "shape Player {\n  name: String\n  health: Int\n}\n",
         "options Status {\n  active\n  inactive\n}\n",
-        "function greet(p: Player) -> nothing {\n  print(`hi`)\n}\n",
+        "function greet(p: Player) -> Nothing {\n  print(`hi`)\n}\n",
     );
     let (state, uri) = state_single("/tmp/fr_test_multi.ynz", src);
     let ranges = folding_range_response(&state, &uri);

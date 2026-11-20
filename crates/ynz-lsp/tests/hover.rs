@@ -215,7 +215,7 @@ fn hover_with_doc_comment_prepends_content() {
     use ynz_typeck::signatures::{FunctionSig, SignatureTable};
     use ynz_typeck::types::Type;
 
-    let src = "/// Heals the player by amount.\nfunction heal(amount: int) -> nothing { }";
+    let src = "/// Heals the player by amount.\nfunction heal(amount: Int) -> Nothing { }";
     let (tokens, _) = lex("test.ynz", src);
     let table = LineTable::new(src);
 
@@ -286,7 +286,7 @@ fn hover_without_doc_comment_shows_signature_only() {
     use ynz_typeck::signatures::{FunctionSig, SignatureTable};
     use ynz_typeck::types::Type;
 
-    let src = "function greet() -> nothing { }";
+    let src = "function greet() -> Nothing { }";
     let (tokens, _) = lex("test.ynz", src);
     let table = LineTable::new(src);
 
@@ -352,7 +352,7 @@ fn hover_request_via_lsp_returns_response() {
     h.initialize();
     h.did_open(
         "file:///hover_test.ynz",
-        "function entrypoint() -> nothing { }",
+        "function entrypoint() -> Nothing { }",
     );
     h.try_recv_timeout(std::time::Duration::from_millis(100)); // drain diagnostic
 
@@ -466,7 +466,7 @@ fn hover_shape_type_shows_fields() {
     use ynz_parser::{CompilerDb, SourceFile};
     use ynz_typeck::queries::module_signatures_query;
 
-    let src = "shape Bar {\n  symbol: string\n  open: number\n}\nfunction insertBars(bars: Bar) -> nothing { }";
+    let src = "shape Bar {\n  symbol: String\n  open: Number\n}\nfunction insertBars(bars: Bar) -> Nothing { }";
     let (tokens, _) = lex("test.ynz", src);
     let table = LineTable::new(src);
 
@@ -520,7 +520,7 @@ fn hover_options_type_shows_variants() {
     use ynz_parser::{CompilerDb, SourceFile};
     use ynz_typeck::queries::module_signatures_query;
 
-    let src = "options Status {\n  active\n  inactive\n  banned: `Banned User`\n}\nfunction check(s: Status) -> nothing { }";
+    let src = "options Status {\n  active\n  inactive\n  banned: `Banned User`\n}\nfunction check(s: Status) -> Nothing { }";
     let (tokens, _) = lex("test.ynz", src);
     let table = LineTable::new(src);
 

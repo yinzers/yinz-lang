@@ -98,7 +98,7 @@ fn test_lsp_rename_error_codes_are_stable() {
 
 #[test]
 fn test_prepare_rename_returns_identifier_range_for_let_binding() {
-    let src = "function entrypoint() -> nothing {\n  let score = 42\n}\n";
+    let src = "function entrypoint() -> Nothing {\n  let score = 42\n}\n";
     let (state, uri) = state_single("/tmp/ynz_rename_prep_let.ynz", src);
     let pos = position_at(src, "score");
     let range = prepare_rename_response(&state, &uri, pos);
@@ -117,8 +117,8 @@ fn test_prepare_rename_returns_identifier_range_for_let_binding() {
 
 #[test]
 fn test_prepare_rename_returns_identifier_range_for_function_call() {
-    let src = "function greet() -> string { return `hi` }\n\
-               function entrypoint() -> nothing {\n  let msg = greet()\n}\n";
+    let src = "function greet() -> String { return `hi` }\n\
+               function entrypoint() -> Nothing {\n  let msg = greet()\n}\n";
     let (state, uri) = state_single("/tmp/ynz_rename_prep_fn.ynz", src);
     let pos = position_at(src, "greet()"); // call site
     let range = prepare_rename_response(&state, &uri, pos);
@@ -135,7 +135,7 @@ fn test_prepare_rename_returns_identifier_range_for_function_call() {
 #[test]
 fn test_prepare_rename_returns_none_for_keyword() {
     // WHY: `function` is a keyword — it has no declaration site and cannot be renamed.
-    let src = "function entrypoint() -> nothing {}\n";
+    let src = "function entrypoint() -> Nothing {}\n";
     let (state, uri) = state_single("/tmp/ynz_rename_prep_kw.ynz", src);
     let pos = lsp_types::Position {
         line: 0,
@@ -146,7 +146,7 @@ fn test_prepare_rename_returns_none_for_keyword() {
 
 #[test]
 fn test_prepare_rename_returns_none_for_integer_literal() {
-    let src = "function entrypoint() -> nothing {\n  let x = 99\n}\n";
+    let src = "function entrypoint() -> Nothing {\n  let x = 99\n}\n";
     let (state, uri) = state_single("/tmp/ynz_rename_prep_int.ynz", src);
     let pos = position_at(src, "99");
     assert!(prepare_rename_response(&state, &uri, pos).is_none());
@@ -159,7 +159,7 @@ fn test_prepare_rename_returns_none_for_integer_literal() {
 #[test]
 fn test_rename_local_let_produces_workspace_edit_with_one_file() {
     // WHY: a let binding with 2 uses should produce exactly 1 file with 2+ edits.
-    let src = "function entrypoint() -> nothing {\n  let score = 0\n  let total = score\n}\n";
+    let src = "function entrypoint() -> Nothing {\n  let score = 0\n  let total = score\n}\n";
     let (state, uri) = state_single("/tmp/ynz_rename_local.ynz", src);
     let pos = position_at(src, "score = 0");
     let result = rename_response(&state, &uri, pos, "points", &mock_sender());
@@ -184,7 +184,7 @@ fn test_rename_local_let_produces_workspace_edit_with_one_file() {
 #[test]
 fn test_rename_produces_empty_edit_for_zero_references() {
     // WHY: a function with no callers should produce an empty (but valid) WorkspaceEdit.
-    let src = "function isolated() -> nothing {}\nfunction entrypoint() -> nothing {}\n";
+    let src = "function isolated() -> Nothing {}\nfunction entrypoint() -> Nothing {}\n";
     let (state, uri) = state_single("/tmp/ynz_rename_zero.ynz", src);
     let pos = position_at(src, "isolated");
     let result = rename_response(&state, &uri, pos, "orphan", &mock_sender());
@@ -199,7 +199,7 @@ fn test_rename_produces_empty_edit_for_zero_references() {
 #[test]
 fn test_rename_invalid_identifier_returns_error_code_32004() {
     // WHY: ensures client gets the stable -32004 code for identifier-syntax failures.
-    let src = "function entrypoint() -> nothing {\n  let x = 1\n}\n";
+    let src = "function entrypoint() -> Nothing {\n  let x = 1\n}\n";
     let (state, uri) = state_single("/tmp/ynz_rename_invalid.ynz", src);
     let pos = position_at(src, "x");
     let result = rename_response(&state, &uri, pos, "123invalid", &mock_sender());
@@ -210,7 +210,7 @@ fn test_rename_invalid_identifier_returns_error_code_32004() {
 #[test]
 fn test_rename_reserved_keyword_returns_error_code_32002() {
     // WHY: attempting to rename to a keyword produces -32002 and a WHY explanation.
-    let src = "function entrypoint() -> nothing {\n  let count = 0\n}\n";
+    let src = "function entrypoint() -> Nothing {\n  let count = 0\n}\n";
     let (state, uri) = state_single("/tmp/ynz_rename_kw.ynz", src);
     let pos = position_at(src, "count");
     let result = rename_response(&state, &uri, pos, "let", &mock_sender());
@@ -225,7 +225,7 @@ fn test_rename_reserved_keyword_returns_error_code_32002() {
 #[test]
 fn test_rename_banned_jargon_returns_error_code_32003() {
     // WHY: `class` is banned jargon in Yinz — renaming to it must be rejected.
-    let src = "function entrypoint() -> nothing {\n  let x = 1\n}\n";
+    let src = "function entrypoint() -> Nothing {\n  let x = 1\n}\n";
     let (state, uri) = state_single("/tmp/ynz_rename_jargon.ynz", src);
     let pos = position_at(src, "x");
     let result = rename_response(&state, &uri, pos, "class", &mock_sender());
@@ -236,7 +236,7 @@ fn test_rename_banned_jargon_returns_error_code_32003() {
 #[test]
 fn test_rename_non_symbol_position_returns_error_code_32001() {
     // WHY: cursor on whitespace/punctuation must produce -32001 (not a panic or silent no-op).
-    let src = "function entrypoint() -> nothing {  }\n";
+    let src = "function entrypoint() -> Nothing {  }\n";
     let (state, uri) = state_single("/tmp/ynz_rename_notsym.ynz", src);
     let pos = lsp_types::Position {
         line: 0,
@@ -251,9 +251,9 @@ fn test_rename_non_symbol_position_returns_error_code_32001() {
 fn test_rename_imported_symbol_returns_error_code_32006() {
     // WHY: renaming an imported symbol from the import site (not the origin file)
     // must be rejected with -32006 pointing to the origin.
-    let dep_src = "export function greet() -> string { return `hi` }\n";
+    let dep_src = "export function greet() -> String { return `hi` }\n";
     let main_src =
-        "import { greet } from `services/helpers`\nfunction entrypoint() -> nothing {\n  let msg = greet()\n}\n";
+        "import { greet } from `services/helpers`\nfunction entrypoint() -> Nothing {\n  let msg = greet()\n}\n";
     let (state, main_uri, _dep_uri, _dir) = state_two_files("helpers", dep_src, main_src);
 
     // Rename from the call site in main (not origin)
@@ -280,7 +280,7 @@ fn test_rename_to_existing_name_returns_error_code_32005() {
     // in the same file) must be REJECTED with -32005.  Allowing it would produce
     // two top-level functions with the same name, which is a compile error
     // immediately after the rename — a silent corruption of the user's source.
-    let src = "function greet() -> string { return `hi` }\nfunction entrypoint() -> nothing {}\n";
+    let src = "function greet() -> String { return `hi` }\nfunction entrypoint() -> Nothing {}\n";
     let (state, uri) = state_single("/tmp/ynz_rename_conflict.ynz", src);
     let pos = position_at(src, "greet");
     let result = rename_response(&state, &uri, pos, "entrypoint", &mock_sender());
@@ -301,7 +301,7 @@ fn test_rename_error_produces_no_workspace_edit() {
     // WHY: on validation failure (e.g. bad new-name), rename_response returns Err
     // — caller sends ResponseError to client, never a partial WorkspaceEdit.
     // This test verifies the function NEVER returns Ok on a known-bad new-name.
-    let src = "function entrypoint() -> nothing {\n  let total = 0\n}\n";
+    let src = "function entrypoint() -> Nothing {\n  let total = 0\n}\n";
     let (state, uri) = state_single("/tmp/ynz_rename_atomic.ynz", src);
     let pos = position_at(src, "total");
     // Bad new-name: contains a space (invalid identifier)
@@ -319,8 +319,8 @@ fn test_rename_error_produces_no_workspace_edit() {
 #[test]
 fn test_rename_response_under_1000ms() {
     // WHY: rename must be fast enough for interactive F2 use — 1s cap.
-    let src = "function greet() -> string { return `hi` }\n\
-               function entrypoint() -> nothing {\n  let a = greet()\n  let b = greet()\n}\n";
+    let src = "function greet() -> String { return `hi` }\n\
+               function entrypoint() -> Nothing {\n  let a = greet()\n  let b = greet()\n}\n";
     let (state, uri) = state_single("/tmp/ynz_rename_perf.ynz", src);
     let pos = position_at(src, "greet() -> string");
     let start = std::time::Instant::now();
