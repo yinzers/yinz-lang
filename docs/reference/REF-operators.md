@@ -276,7 +276,7 @@ print(player)    // Alice (HP: 100)
 ```
 let input: string = `5`
 let count: int = 5
-if (input == count) { }
+if (input == count) { print(1) }
 ```
 
 The compiler stops with this error:
