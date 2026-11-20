@@ -628,7 +628,7 @@ let team: Array<Player> = { name: `Alice`, health: 100 }
 // Put it inside `[...]` to make an array: `[{ ... }]`
 ```
 
-Writing past the end by position stops the whole program with no message, so use `.add` to grow an `Array`.
+Writing past the end by position stops the whole program with no message, so use `.add(item)` to grow an `Array`.
 
 ### Numbers: one `Int`, an exact `Number`, and overflow stops the program
 

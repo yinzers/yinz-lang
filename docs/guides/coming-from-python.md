@@ -462,7 +462,7 @@ let hits = foundHits.or(0)
 print(hits)    // 0
 ```
 
-The everyday list functions have new names:
+The everyday collection functions have new names:
 
 | Python | Yinz |
 |---|---|
@@ -479,7 +479,7 @@ let team: Array<Player> = { name: `Alice`, health: 100 }
 // Put it inside `[...]` to make an array: `[{ ... }]`
 ```
 
-Writing past the end by position stops the whole program with no message, so use `.add` to grow an `Array`.
+Writing past the end by position stops the whole program with no message, so use `.add(item)` to grow an `Array`.
 
 ### Numbers: `/` on whole numbers stays whole, and `//` is a comment
 
