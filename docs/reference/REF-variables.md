@@ -78,7 +78,7 @@ The compiler rejects all three at compile time. `const` is a complete promise �
 Inside a function body, you don't have to write a type when it is obvious from the value:
 
 ```
-let x = 42              // the compiler knows: int
+let playerCount = 42    // the compiler knows: int
 let name = `Patrick`    // the compiler knows: string
 let active = true       // the compiler knows: boolean
 ```
@@ -88,9 +88,9 @@ The IDE still shows the type when you hover. You just don't have to write it.
 You must write types at the edges of a function: its parameters, its return type, and shape definitions. Inside the body you can leave them out:
 
 ```
-function add(a: number, b: number) -> number {
-  let result = a + b    // no type needed — fine
-  return result
+function addScores(firstScore: number, secondScore: number) -> number {
+  let total = firstScore + secondScore    // no type needed — fine
+  return total
 }
 ```
 
@@ -104,7 +104,6 @@ You cannot declare a variable without giving it a value:
 let name: string
 // COMPILE ERROR: `name` declaration is missing `=`.
 // Write: `let name = value`
-// Every variable must start with a value. Use maybe<string> if the value is optional.
 ```
 
 If a value might not exist, use a `maybe` type — see [Maybe Types](REF-maybe.md).

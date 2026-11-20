@@ -113,7 +113,7 @@ A single `|` is for union types (`shape Shape = Circle | Square`), not for "or".
 
 ## Multi-case `if` — compare one value to several cases
 
-When you want to compare one value against several cases, use a multi-case `if`, with `=>` arrows inside the block. There is no `switch` and no `match`. It is the same `if` keyword in a different form.
+When you want to compare one value against several cases, use a multi-case `if`, with `=>` arrows inside the block. It is the same `if` keyword in a different form.
 
 The compiler tells them apart: `=>` inside the block means multi-case.
 
