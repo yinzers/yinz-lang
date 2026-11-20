@@ -15,13 +15,13 @@ metadata:
 
 User spec: [`docs/reference/REF-ownership.md`](../../reference/REF-ownership.md)
 
-> **Read first**: Yinz is NOT object-oriented — see [`.claude/rules/non-oop.md`](../../../.claude/rules/non-oop.md). Ownership modifiers are SIGNATURE-level keywords (declared at function definitions); body-level `.share()/.lend()/.give()` syntax does NOT exist. The compiler infers ownership at call sites from the callee's signature and renders the result as IDE muted hints. Only `.copy()` and `.freeze()` are body-level dot-postfix operations (with parens per [`.claude/rules/dot-postfix.md`](../../../.claude/rules/dot-postfix.md)). Locked r4, r10, r11.
+> **Read first**: Yinz is NOT object-oriented — see [`.claude/rules/non-oop.md`](../../../.claude/rules/non-oop.md). Ownership modifiers are SIGNATURE-level keywords (declared at function definitions); body-level `.share()/.lend()/.give()` syntax does NOT exist. The compiler infers ownership at call sites from the callee's signature and renders the result as IDE muted hints. Only `.copy()` and `.freeze()` are body-level dot-postfix operations (with parens per [`.claude/rules/dot-postfix.md`](../../../.claude/rules/dot-postfix.md)).
 
 ---
 
 ## Ownership Concepts
 
-Rust ownership semantics, Yinz surface syntax. Three modes for passing a value into a function:
+Ownership-based memory with plain-word keywords. Three modes for passing a value into a function:
 
 - **`share`** — read-only access. Caller keeps ownership. Multiple shares allowed simultaneously.
 - **`lend`** — mutable access. Caller keeps ownership. Only one outstanding lend at a time (no other share or lend during the borrow).
@@ -31,7 +31,7 @@ Plus two body-level operations on values:
 - **`.copy()`** — produce a new owned value: a genuinely independent one for every type where independence is meaningful, and a compile error for the types where it is not.
 - **`.freeze()`** — lock a binding from further mutation for the rest of its scope.
 
-**Why English keywords instead of `&T`/`&mut T`/`move`**: Rust's `&'a mut T` syntax is the single biggest usability barrier in Rust adoption. Yinz uses plain English signature keywords (`share`/`lend`/`give`) declared at the function definition; the compiler infers them at every call site so the developer rarely types ownership at all. `.copy()` and `.freeze()` use dot-postfix-with-parens per [`.claude/rules/dot-postfix.md`](../../../.claude/rules/dot-postfix.md).
+**Why English keywords**: plain signature keywords (`share`/`lend`/`give`) are declared at the function definition and inferred at every call site, so the developer rarely types ownership (Golden Rules 4 and 5). `.copy()` and `.freeze()` use dot-postfix-with-parens per [`.claude/rules/dot-postfix.md`](../../../.claude/rules/dot-postfix.md).
 
 ---
 
@@ -68,13 +68,7 @@ The IDE renders the inferred modifier as muted text:
 
 Click-to-make-explicit on a muted hint converts the source to the explicit signature-level form for the function-decl side, NOT to a call-site syntax (which doesn't exist).
 
-**Why inferred-with-hints instead of inferred-only OR required-explicit**:
-
-- **Inferred-only** (compiler picks, no visibility): mutation becomes invisible to readers. `healPlayer(player)` looks identical whether the function mutates or not. Bad for jr devs.
-- **Required-explicit** (every call types ownership): too much noise; developers stop reading; the marker degrades to syntactic burden. Requiring explicit ownership annotations at every call was tried and removed for this reason.
-- **Inferred + muted hint** (Yinz's choice): compiler does the work; IDE shows what happened; hover teaches WHY.
-
-Consistent with type inference, lifetime inference, wait-point inference, allocator inference — one rule across all surfaces.
+**Decided: inferred plus a muted hint.** The compiler does the work, the IDE shows what it inferred, and the hover teaches why. Inferred-only is rejected because `healPlayer(player)` would look identical whether or not it mutates; required-explicit is rejected because a marker at every call degrades into syntactic noise. It is the same rule as type, lifetime, wait-point and allocator inference.
 
 ---
 
@@ -91,22 +85,22 @@ saveForever(backup)                   // backup consumed (give inferred), origin
 
 **The rule.** `.copy()` returns a genuinely independent value for every type where independence is meaningful, and is a COMPILE ERROR where it is not. Nothing silently aliases, ever. There are exactly two buckets, no third.
 
-The r4 text this replaced — "`.copy()` is only legal when every field is transitively trivially copyable; write a standalone `copy()` function for anything deeper" — described a compiler that never shipped. What shipped instead was an alias: `maybe`, `fixed`, union and `dynamic` all fell into a `.copy()` arm that handed back the receiver's own pointer while the type checker admitted the call, which produced one use-after-free and one silent wrong answer (v0.3 concurrency hardening, cluster C2). Deep-and-refuse is what removes that; a shallow copy would have re-introduced the same defect one level down and called it a design. Golden Rule 4 decides the tie against Golden Rule 7: "sometimes independent, sometimes not, depending on how nested your value is" is not something a junior developer can predict without documentation. If deep copying ever proves too slow on a real workload, the answer is an explicit cheaper operation with its own name — never a silent reinterpretation of `.copy()`.
+Decided: deep-and-refuse over a shallow copy. A shallow copy aliases one level down, which caused a use-after-free and a silent wrong answer. Golden Rule 4 decides the tie against Golden Rule 7: "sometimes independent, depending on how nested your value is" is unpredictable to a junior developer. If deep copying proves too slow, the answer is an explicit cheaper operation with its own name, never a reinterpretation of `.copy()`.
 
 **The one table.** `ynz_typeck::owned_copy::owned_copy_plan` (`crates/ynz-typeck/src/owned_copy.rs:147-332`) is exhaustive over `Type` with no `_` arm, and both consumers read it: `.copy()`'s lowering and the `background`-argument path (`emit_owned_copy`, `crates/ynz-codegen/src/emit.rs:28103-28387`, also exhaustive, no `_` arm). Neither classifies a type itself, so the two can never again disagree about what an owned copy is (`.claude/rules/authoritative-derivation.md`).
 
 | Type | What `.copy()` does |
 |---|---|
 | `Int`, `Float`, `Boolean`, an `options` value | The receiver's bits ARE the copy — nothing can change what is behind them (`owned_copy.rs:150-156`) |
-| `string`, `sensitive string` | A fresh string with an owner of its own (`StringClone`, `owned_copy.rs:154`, `:212-216`; `ynz_string_clone`): two names for the same bytes would agree, but two owners would free them twice. A `sensitive string` copy keeps the label |
-| `number` (≤ 34 digits), `range` | Immutable contents in storage the producing frame owns: the receiver, inside a body. A `background` argument of one is re-homed onto the heap first (`number`) or refused (`range` — no re-homing path exists) (`owned_copy.rs:161-168`) |
-| `shape` | Its own bytes into fresh storage (`ShapeMemcpy`, `owned_copy.rs:171`), then every field that owns heap gets a copy of its own (`deepen_shape_fields`, `emit.rs:5924-6002`): a string, an `array` or a `map` through `emit_owned_copy`, a nested shape or a `maybe` as a fresh heap cell holding a deep copy, an envelope union through `union_deepen_fn`, a `Fixed<T, N>` field cell by cell, a channel as one more counted reference |
-| `Fixed<T>` | Its N inline cells into a fresh slot, and for a `string` or `shape` item a copy of each (a string copy, or a fresh heap cell holding a deep shape copy). `fixed` of any other pointer-item type is refused: a `fixed` has no per-item pointer to follow (`owned_copy.rs:173-186`) |
+| `String`, `sensitive String` | A fresh string with an owner of its own (`StringClone`, `owned_copy.rs:154`, `:212-216`; `ynz_string_clone`): two names for the same bytes would agree, but two owners would free them twice. A `sensitive String` copy keeps the label |
+| `Number` (≤ 34 digits), `Range` | Immutable contents in storage the producing frame owns: the receiver, inside a body. A `background` argument of one is re-homed onto the heap first (`Number`) or refused (`Range` — no re-homing path exists) (`owned_copy.rs:161-168`) |
+| `shape` | Its own bytes into fresh storage (`ShapeMemcpy`, `owned_copy.rs:171`), then every field that owns heap gets a copy of its own (`deepen_shape_fields`, `emit.rs:5924-6002`): a `String`, an `Array` or a `Map` through `emit_owned_copy`, a nested shape or a `Maybe` as a fresh heap cell holding a deep copy, an envelope union through `union_deepen_fn`, a `Fixed<T, N>` field cell by cell, a channel as one more counted reference |
+| `Fixed<T>` | Its N inline cells into a fresh slot, and for a `String` or `shape` item a copy of each (a string copy, or a fresh heap cell holding a deep shape copy). `Fixed` of any other pointer-item type is refused: a `Fixed` has no per-item pointer to follow (`owned_copy.rs:173-186`) |
 | `Array<T>` | A fresh header and buffer, and — when the cells hold pointers — every item copied through the same table, all the way down (`owned_copy.rs:188-191`) |
-| `Map<K, V>` | A fresh header and its four buffers (`MapClone`, `owned_copy.rs:193`), then every value that is not a plain string gets a copy of its own (`emit_map_values_deep_copy`, `emit.rs:28555-28727`: `deepen_shape_fields` for a shape, `union_deepen_fn` for an envelope union, `emit_owned_copy` for a pointer value); a string key or value is copied by `ynz_map_clone_strings` (`emit.rs:28315-28352`) |
+| `Map<K, V>` | A fresh header and its four buffers (`MapClone`, `owned_copy.rs:193`), then every value that is not a plain `String` gets a copy of its own (`emit_map_values_deep_copy`, `emit.rs:28555-28727`: `deepen_shape_fields` for a shape, `union_deepen_fn` for an envelope union, `emit_owned_copy` for a pointer value); a string key or value is copied by `ynz_map_clone_strings` (`emit.rs:28315-28352`) |
 | `Maybe<T>` | A fresh envelope cell, for the inner types the shared maybe-ownership core can follow: a simple value, a `number`/`range`, or a `shape`. `Maybe<Array<T>>`, `Maybe<Map<K, V>>`, `Maybe<Fixed<T>>` and `Maybe<Maybe<T>>` are refused (`owned_copy.rs:195-204`) |
-| `sensitive<T>` | Copies and KEEPS the label, so the copy is still redacted wherever it is printed. Refusing would push people to call `.reveal()` just to get a copyable value, which is strictly worse for the secret. Only inner kinds whose copy IS the receiver's bits qualify, and `sensitive` wraps only `string` today |
-| `number` wider than 34 digits (a bignum) | A fresh copy of its decimal text, as a `string` (`StringClone`): a bignum is owned text, released like a string (`owned_copy.rs:264-266`) |
+| `sensitive<T>` | Copies and KEEPS the label, so the copy is still redacted wherever it is printed. Refusing would push people to call `.reveal()` just to get a copyable value, which is strictly worse for the secret. Only inner kinds whose copy IS the receiver's bits qualify, and `sensitive` wraps only `String` today |
+| `Number` wider than 34 digits (a bignum) | A fresh copy of its decimal text, as a `String` (`StringClone`): a bignum is owned text, released like a string (`owned_copy.rs:264-266`) |
 | `Channel<T>`, a task handle, a union, `dynamic C`, a loop's `MapEntry`, an unchecked `errors` value, `Nothing`, a type placeholder, a generic shape | **Compile error**, with WHAT / WHAT-INSTEAD / WHY naming what to do instead |
 
 A refusal is a real answer and it is loud: a user who can see the refusal is better off than a user handed an alias they cannot see. The refusal text lives with the plan (`CopyRefusal`, three slots) and renders through the `CopyNotIndependent` diagnostic template; the `background` face of the same ruling renders through `SpawnArgNotIndependent`. Under a `Give` label the refusal is skipped except for a named `fixed` whose items cannot be copied (its cells are kept with the spawner's frame): that case fires too, with the `SpawnArgNotIndependentHandedOver` text (decided: plan-caused hole, `git log --grep=HandedOver`).
@@ -127,55 +121,33 @@ The freeze flag persists for the rest of the binding's scope. Useful for build-t
 
 ## `const` Deep Immutability — Safety + Performance Contract
 
-`const` is the load-bearing immutability primitive in Yinz. It is exactly equivalent to Rust's non-`mut` binding (Rust calls it `let`; Yinz calls it `const`).
+`const` is the load-bearing immutability primitive: a binding that no path can mutate.
 
 ### What `const` blocks
 
-A `const` binding rejects ALL paths to mutation:
+A `const` binding rejects every path to mutation:
 
-1. **Reassignment** — `constVar = newValue` is a compile error (already enforced as of M2 in `crates/ynz-typeck/src/check.rs` `check_assign`)
-2. **Field mutation** — `constVar.field = x` is a compile error (enforced when field assignment lands in M4)
-3. **Passing to a `lend` parameter** — the compiler refuses to infer the mutable modifier at the call site if the binding is `const`; compile error pointing to "declare with `let` if you need mutation" (enforced in M4)
-4. **Passing to a `give` parameter** — same: compiler refuses to infer the transfer; compile error (enforced in M4)
-5. **`.freeze()` is redundant** — `const` bindings are already locked; calling `.freeze()` is a no-op but allowed for stylistic uniformity
+1. **Reassignment**: `constVar = newValue` is a compile error (`check_assign` in `crates/ynz-typeck/src/check.rs`).
+2. **Field mutation**: `constVar.field = x` is a compile error.
+3. **Passing to a `lend` parameter**: the compiler refuses to infer the mutable modifier at the call site, with an error pointing to "declare with `let` if you need mutation".
+4. **Passing to a `give` parameter**: the compiler refuses to infer the transfer.
+5. **`.freeze()`** is redundant on a `const` binding, which is already locked; the call is a no-op and allowed.
 
-### Why this is load-bearing — Safety + Performance
+### Why `const` is load-bearing
 
-**Safety — aliasing rules**: if `const` can be mutated through any path, then two `const` references to the same value could observe different state, breaking the language's promise that "two reads of the same `const` always return the same value." That promise is what makes `const` shareable across threads without locks — also what makes the borrow checker tractable.
+**Safety**: if `const` could be mutated through any path, two reads of the same `const` could see different values. The guarantee that they cannot is what makes a `const` shareable across threads without locks.
 
-**Performance — the LLVM contract**: a function parameter declared `share` (or inferred from a `const` binding at the call site) emits the LLVM **`readonly`** attribute. Combined with **`noalias`** (which Yinz can guarantee from the ownership system), the optimizer gets the same aliasing information that lets Rust beat C++ in benchmarks:
+**Performance**: a parameter declared `share`, or inferred read-only from a `const` binding at the call site, gets the LLVM `readonly` attribute, and a parameter the ownership system proves non-aliased gets `noalias`. The optimizer then hoists loop invariants, skips reloads and reorders and vectorizes freely. Codegen attaches both attributes (`emit.rs:1914-2005`); dropping them is a performance regression even when the program is correct.
 
-- `readonly` → optimizer knows this pointer's pointee never changes during the call → enables loop-invariant code motion, common subexpression elimination, and skipping spurious reloads
-- `noalias` → optimizer knows no other pointer aliases this one → enables vectorization and reordering that C/C++ can't do (because any pointer might alias any other)
+Cross-reference: [`docs/reference/REF-variables.md`](../../reference/REF-variables.md) "What const blocks" (user-facing).
 
-C has `restrict` for `noalias` but it's a programmer's promise the compiler can't verify. Rust/Yinz make it enforced at compile time via the ownership system. That's the performance moat.
-
-### M4 codegen contract
-
-When M4 lands, codegen MUST emit:
-
-- `readonly` on every LLVM function parameter declared as `share T`
-- `readonly` on every parameter inferred from a `const` binding at the call site (even if the signature is bare and the modifier was inferred from body usage)
-- `noalias` on every parameter the borrow checker has proven non-aliased (most of them for `share`/`lend`/`give` per ownership rules)
-
-Failure to emit these attributes is a perf regression even if the program is correct.
-### Forward-compatibility for shapes (M4)
-
-When `shape` declarations land in M4, field assignment (`player.field = x`) becomes parseable. The typeck must reject field assignment when the receiver is a `const` binding, with a teaching error pointing the user to declare `let` if they need mutation. This is item #2 above and is the single biggest gap the design-lockdown plan was created to prevent.
-
-Cross-references:
-- [`docs/reference/REF-variables.md`](../../reference/REF-variables.md) "What const blocks" section (user-facing)
 ---
 
 ## No Direct Array Indexing — `.get(index)` Returns `Maybe<T>`
 
-`items[5]` is a compile error. All collection access by index uses `.get(index)` which returns `Maybe<T>`. Collections include `.first()` and `.last()` returning `Maybe<T>`.
+`items[5]` is a compile error. Every collection access by index uses `.get(index)`, which returns `Maybe<T>`, and `.first()` and `.last()` also return `Maybe<T>`; Maps already use `.get(key)` returning `Maybe<V>`.
 
-**Why**: Out-of-bounds array access is one of the most common runtime crashes and security vulnerabilities (buffer overflows) in systems languages. If the compiler can enforce safe access universally, there's no reason not to. The cost is slightly more verbose access; the benefit is the elimination of an entire crash category.
-
-**Performance**: In release mode, the compiler eliminates bounds checks it can statically prove are safe (e.g., a `Fixed<3>` accessed at index 1 — provably in bounds). Debug mode always bounds-checks. Performance impact is negligible in practice.
-
-**Consistency**: Maps already use `.get(key)` returning `Maybe<V>`. The same pattern applies everywhere. No special case for arrays — one rule, all collections.
+**Why**: out-of-bounds access is a common crash and security hole, and one rule for all collections removes the whole category at the cost of slightly more verbose access.
 
 ---
 
