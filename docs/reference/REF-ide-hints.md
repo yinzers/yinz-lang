@@ -25,7 +25,7 @@ When the compiler works something out for you, the IDE shows what it decided as 
 | Who holds a value at a call | `foo(player)` | `share`, `lend` or `give` after `player`. Click jumps to `foo`'s signature, where the word is written. |
 | A store that hands a value over | `list.add(a)` | `handed to` and the place |
 | A copy of a small value | `let n: Int = 5` | `.copy()` where the copy happens |
-| A pause on a slow call | `sleep(100)` | `wait` before the call |
+| A pause on a slow call | `fetchFeed(user)` | `wait` before the call |
 | Where a `background` task runs | `background process(order)` | which pool the task runs on |
 | Statements that run at the same time | `let hits = crunchStat(2)` | `// runs at the same time as line 12` |
 | A channel's default capacity | `Channel<Int>()` | `64` inside the parentheses |
@@ -79,11 +79,11 @@ Every muted hint shows a three-part tooltip on hover, in the same WHAT / WHAT IN
 
 Hovering the muted `share` in the example above shows:
 
-> **WHAT**: The compiler chose `share` at this call site. `foo`'s signature declares its parameter as `share`, and `player` is `const` (which can only be shared, never lent or given). The function gets read-only access; you keep ownership.
+> **WHAT**: Shows who holds a value at this line. After a call it is the ownership word the compiler picked: `share` (the function only reads it), `lend` (the function may change it, you keep it) or `give` (the function takes it over). After a store it reads `handed to` and the place: storing a value hands it over, so that place is now its one owner and the name before the hint cannot be read after this line.
 >
-> **WHAT INSTEAD**: To see the contract, view `foo`'s signature — `function foo(share p: Player)`. There is no syntax for ownership words at call sites; the signature is where you write them.
+> **WHAT INSTEAD**: Nothing to type for a call; write `share`, `lend` or `give` in the function's signature to make the choice visible. For a store, if you read the value again, store a copy instead (`list.add(a.copy())`), or move the line that reads it above the store.
 >
-> **WHY**: `const` bindings can only grant read-only access. If you need a function that changes `player`, declare `player` with `let` and change `foo`'s signature to `lend p: Player`.
+> **WHY**: Every value has one owner, and the owner frees the value when it is done with it. If two names could reach one value, one of them would free it under the other, so a store hands the value over and a call tells you whether you still hold it. A copy is a separate value, so both names can keep theirs.
 
 ---
 
