@@ -30,7 +30,7 @@ export function fetchUser(id: UserId) -> maybe<User> errors {
 }
 ```
 
-Hover over a call to `fetchUser` shows the three `///` lines as prose, then the function signature as a colored code block. No `@param` or `@returns` tags needed — the types tell you the structure, the comment tells you the behavior.
+Hover over a call to `fetchUser` and the IDE shows the three `///` lines as text, then the function signature as highlighted code. You don't need `@param` or `@returns` tags: the signature already shows the types, and the comment says what the function does.
 
 ---
 
@@ -43,18 +43,18 @@ Put a `///` block above the shape, and above any field you want to document:
 export shape Player {
   /// The player's display name.
   name: string
-  /// Current HP, clamped 0–100. Never negative.
+  /// Current health, from 0 to 100. Never negative.
   health: int
-  /// World-space coordinates in meters.
+  /// Where the player stands in the game world, in meters.
   position: Position
 }
 ```
 
-Hover over `Player` at any use site shows the shape's fields in a colored code block with the doc comment above it.
+Hover over `Player` anywhere you use it and the IDE shows the shape's fields as highlighted code, with the doc comment above them.
 
 ---
 
-## On options types
+## On options
 
 ```ynz
 /// The category of a tradable asset on Alpaca.
@@ -96,7 +96,7 @@ export function greet(share self: Player) -> string {
 
 ## Inside function bodies
 
-Use `//` inside a function body. It is always a private implementation note — never a doc comment.
+Use `//` inside a function body. It is always a private note for people reading the file — never a doc comment.
 
 ```ynz
 export function countActive(share players: array<Player>) -> int {
