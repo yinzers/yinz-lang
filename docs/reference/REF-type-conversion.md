@@ -23,32 +23,31 @@ These always give you a value. You don't need to handle a failure.
 
 ```
 // Number conversions
-let n: number = 42.7
-let i = n.toInt()        // 42 — drops the decimal part
-let f = n.toFloat()      // 42.7 as a float
-let s = n.toString()     // `42.7`
+let price: number = 42.7
+let priceAsFloat = price.toFloat()    // 42.7 as a float
+let priceText = price.toString()      // `42.7`
 
 // Int conversions
-let count: int = 10
-let n = count.toNumber() // 10 as a number
-let f = count.toFloat()  // 10.0 as a float
-let s = count.toString() // `10`
+let playerCount: int = 10
+let countAsNumber = playerCount.toNumber()  // 10 as a number
+let countAsFloat = playerCount.toFloat()    // 10.0 as a float
+let countText = playerCount.toString()      // `10`
 
 // Float conversions
-let v: float = 9.81
-let n = v.toNumber()     // 9.81 as a number (exact decimal)
-let s = v.toString()     // `9.81`
+let gravity: float = 9.81
+let gravityAsNumber = gravity.toNumber()    // 9.81 as a number (exact decimal)
+let gravityText = gravity.toString()        // `9.81`
 
 // Boolean conversions
-let active: boolean = true
-let s = active.toString() // `true`
+let isActive: boolean = true
+let activeText = isActive.toString()        // `true`
 ```
 
 ---
 
 ## Conversions that can fail — they return `maybe`
 
-Turning text into a number can fail if the text isn't a valid number. These conversions return a `maybe`, so the compiler makes you handle the failure case:
+Turning text into a number can fail if the text isn't a valid number. Turning a `number` or a `float` into an `int` can fail too, because the value might be too big for an `int`. These conversions return a `maybe`, so the compiler makes you handle the failure case:
 
 ```
 let input = `42`
@@ -69,38 +68,11 @@ let safeCount = parsedCount.or(0)   // a plain int, 0 if input isn't a number
 let hello = `hello`
 let bad = hello.toInt()             // none — `hello` is not a number
 let badCount = bad.or(0)            // 0 — the default
+
+// A number to an int drops the decimal part:
+let unitPrice: number = 42.7
+let wholePrice = unitPrice.toInt()  // a maybe<int>: 42
 ```
-
-## Parsing hex, binary and octal text
-
-For text in base 16 (hex), base 2 (binary) or base 8 (octal), use one function per base. All return `maybe<int>`, because the text might not be valid for that base.
-
-```
-let hexUpper = `FF`
-let hexLower = `ff`
-let binaryText = `1010`
-let octalText = `17`
-
-hexUpper.fromHex()       // maybe<int> — 255
-hexLower.fromHex()       // maybe<int> — 255 (upper or lower case both work)
-binaryText.fromBinary()  // maybe<int> — 10
-octalText.fromOctal()    // maybe<int> — 15
-
-// With a default:
-let validHex = hexUpper.fromHex()
-let validValue = validHex.or(0)     // 255
-let badHexText = `ZZ`
-let invalidHex = badHexText.fromHex()
-let invalidValue = invalidHex.or(0) // 0 — `ZZ` is not valid hex
-
-// Failure case:
-let wrongHex = `GG`
-let wrongOctal = `19`
-wrongHex.fromHex()       // none — G is not a hex digit
-wrongOctal.fromOctal()   // none — 9 is not an octal digit
-```
-
-There is no "choose the base" argument. Each base has its own function, so there is no number to remember or get wrong.
 
 ---
 
@@ -109,8 +81,8 @@ There is no "choose the base" argument. Each base has its own function, so there
 A union is a value that can be one of several shapes. Use `is` to ask which one it is. No cast needed:
 
 ```
-if (shape is Circle) {
-  print(shape.radius)    // inside this block the compiler knows it is a Circle
+if (figure is Circle) {
+  print(figure.radius)    // inside this block the compiler knows it is a Circle
 }
 ```
 
