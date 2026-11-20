@@ -23,19 +23,19 @@ metadata:
 `ynz doc` reads a Yinz project and produces structured documentation for every exported declaration — shapes, functions, options types, constants. It combines two sources of truth that already exist in the compiler:
 
 1. **The type signature** — params, types, return type, ownership modifiers — pulled directly from the AST. Always correct; cannot drift from the code.
-2. **The leading `//` doc comment** — prose description written by the author above the declaration (see [`docs/internal/implementation/IMP-doc-comments.md`](../implementation/IMP-doc-comments.md)).
+2. **The leading `///` doc comment** — prose description written by the author directly above the declaration (see [`docs/internal/implementation/IMP-doc-comments.md`](../implementation/IMP-doc-comments.md)).
 
-The output is a navigable reference that looks like `rustdoc`, `godoc`, or TypeDoc, but tailored for Yinz's type system. Hosted anywhere — static HTML by default.
+The output is a navigable reference tailored for Yinz's type system. Hosted anywhere — static HTML by default.
 
 ---
 
-## Why This Design Is Better Than JSDoc/JavaDoc
+## Why There Are No `@param` Tags
 
-Every JSDoc/JavaDoc-style system has the same failure mode: `@param` descriptions get out of sync with actual parameter names and types. The type changes, the param gets renamed, the comment says something that's no longer true. The user trusts the comment; the code does something different.
+Tag-based doc comments (`@param`, `@returns`) go out of date: the parameter gets renamed or retyped and the comment still describes the old one. The reader trusts the comment while the code does something different.
 
-Yinz sidesteps this entirely because the type signature IS the structured documentation. `ynz doc` derives the structure from the compiler's type-checked AST — same source the compiler uses. If a param changes name or type, the docs update automatically on the next `ynz doc` run. No tags to maintain.
+Yinz needs no tags because the type signature IS the structured documentation. `ynz doc` derives the structure from the compiler's type-checked AST — the same source the compiler uses. If a parameter changes name or type, the docs update on the next `ynz doc` run. No tags to maintain.
 
-The `//` comment adds the PROSE — the "what it does" and "why you'd use it." The signature adds the STRUCTURE — "what goes in, what comes out." Both are always correct by construction.
+The `///` comment adds the PROSE — "what it does" and "why you'd use it." The signature adds the STRUCTURE — "what goes in, what comes out." Both are always correct by construction.
 
 ---
 
@@ -44,7 +44,7 @@ The `//` comment adds the PROSE — the "what it does" and "why you'd use it." T
 For a function:
 
 ```
-fetchUser(id: UserId) -> maybe User errors
+fetchUser(id: UserId) -> Maybe<User> errors
 
 Fetches a user by their unique ID.
 Returns none if the user doesn't exist.
@@ -54,21 +54,22 @@ Parameters
   id: UserId — the unique identifier to look up
 
 Returns
-  maybe User — a User value, or none if not found
+  Maybe<User> — a User value, or none if not found
 
 Errors
   DatabaseError — on connection failure or query timeout
 ```
 
-The "Parameters" and "Returns" sections are DERIVED from the signature — no tags needed. If the author wants to annotate a specific parameter, they use inline trailing comments on the param:
+The "Parameters" and "Returns" sections are DERIVED from the signature — no tags needed. If the author wants to annotate a specific parameter, they put a `///` line directly above the parameter (not shipped; parameters take no doc comment today):
 
 ```ynz
 export function fetchUser(
-  id: UserId    // the unique identifier to look up
-) -> maybe User errors {
+  /// the unique identifier to look up
+  id: UserId
+) -> Maybe<User> errors {
 ```
 
-The doc generator picks up inline trailing comments on parameters and includes them in the "Parameters" section.
+The doc generator would pick up the `///` line above each parameter and include it in the "Parameters" section.
 
 For a shape:
 
@@ -78,12 +79,12 @@ shape Player
 Represents a player in the game world.
 
 Fields
-  name:     string    — The player's display name.
-  health:   int       — Current HP, clamped 0–100. Never negative.
+  name:     String    — The player's display name.
+  health:   Int       — Current HP, clamped 0–100. Never negative.
   position: Position  — World-space coordinates in meters.
 ```
 
-Field descriptions come from inline trailing comments on the field declarations (or leading `//` blocks above the field).
+Field descriptions come from the `///` block directly above each field (shipped; see [`IMP-doc-comments.md`](../implementation/IMP-doc-comments.md)).
 
 For an options type:
 
@@ -92,9 +93,9 @@ options AssetClass
 
 The category of a tradable asset on Alpaca.
 
-Variants
-  us_equity   — U.S. equity (stock)
-  us_option   — U.S. options contract
+Choices
+  usEquity    — U.S. equity (stock)
+  usOption    — U.S. options contract
   crypto      — Cryptocurrency  (display: "Cryptocurrency")
   ipo         — IPO indication of interest  (display: "IPO Indication of Interest")
 ```
@@ -133,14 +134,14 @@ The doc generator shares infrastructure with the LSP hover system. The same `doc
 - **LSP hover**: shows prose + colored signature in the editor
 - **`ynz doc`**: formats the same prose + signature into the generated docs
 
-This means hover works immediately once `//` comments are written — no separate step. `ynz doc` is the same information formatted for a browser instead of a tooltip.
+This means hover works immediately once `///` comments are written — no separate step. `ynz doc` is the same information formatted for a browser instead of a tooltip.
 
 ---
 
 ## Implementation Notes (for when this milestone is planned)
 
-- The doc comment `//` attachment logic lives in `ynz-parser` (attaches during parse, stores in `doc: Option<String>` on AST nodes). Already implemented for M5.
-- The inline trailing-comment-on-param/field attachment does NOT exist yet — that's new parser work for this milestone.
+- The doc comment `///` attachment logic lives in `ynz-parser` (attaches during parse, stores in `doc: Option<String>` on AST nodes). Already implemented for M5.
+- `///` above a function parameter does NOT exist yet — that's new parser work for this milestone.
 - The HTML generator is a new crate (`crates/ynz-doc`), consuming the parsed AST + type-checked signature table.
 - JSON format can be a thin serialization of the existing `SignatureOutput` + doc fields — minimal new work.
 - `ynz doc --watch` reuses `ynz-watch` file-watching infrastructure.
@@ -150,7 +151,7 @@ This means hover works immediately once `//` comments are written — no separat
 
 ## Cross-References
 
-- [`docs/internal/implementation/IMP-doc-comments.md`](../implementation/IMP-doc-comments.md) — the Go-model `//` comment convention (the source of the prose)
+- [`docs/internal/implementation/IMP-doc-comments.md`](../implementation/IMP-doc-comments.md) — the `///` doc comment convention (the source of the prose)
 - [`docs/reference/REF-doc-comments.md`](../../reference/REF-doc-comments.md) — user-facing spec for writing doc comments
 - [`docs/internal/implementation/IMP-lsp.md`](../implementation/IMP-lsp.md) — doc-comment attachment in the parser, LSP hover rendering
 - [`docs/reference/REF-mvp-scope.md`](../../reference/REF-mvp-scope.md) — version target for this feature
