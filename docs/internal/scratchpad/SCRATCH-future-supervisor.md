@@ -93,13 +93,13 @@ Spawns `task` as a `background` task. If the task panics, the supervisor:
 
 If the task returns normally (no panic), the supervisor does NOT restart it. `alwaysRestart` is specifically for panic-recovery.
 
-### `.withBackoff(initial, max, multiplier)`
+### `backoff:` named parameter
 
-Adds exponential backoff between restarts. Without it, a task that panics immediately on startup creates a tight crash loop hammering the runtime. Backoff applies after the FIRST panic; the first restart is immediate.
+Takes `duration.exponential(initial:, max:, multiplier:)` and adds exponential backoff between restarts. Without it, a task that panics immediately on startup creates a tight crash loop hammering the runtime. Backoff applies after the FIRST panic; the first restart is immediate.
 
-### `.maxRestarts(count, within: duration)`
+### `maxRestarts:` and `maxRestartsWindow:` named parameters
 
-Sliding-window restart limit. After `count` panics within `duration`, supervision gives up and calls `onGiveUp` if provided. Default: unlimited restarts (alwaysRestart lives up to its name).
+Sliding-window restart limit. After `maxRestarts` panics within `maxRestartsWindow`, supervision gives up and calls `onGiveUp` if provided. Default: unlimited restarts (alwaysRestart lives up to its name).
 
 ### `onPanic:` / `onGiveUp:` named parameters
 

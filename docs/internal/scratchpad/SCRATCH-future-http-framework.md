@@ -59,7 +59,7 @@ The IDE shows muted hints indicating the supervision policy:
 
 ```ynz
 let server = server.listen(8080)
-//          ^ muted: " (supervised: per-request isolation, restart accept loop on panic)"
+//          ^ muted: ` (supervised: per-request isolation, restart accept loop on panic)`
 //            hover-tooltip explains the default and shows how to customize
 ```
 

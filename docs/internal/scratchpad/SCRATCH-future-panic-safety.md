@@ -184,7 +184,7 @@ task.onError((e) => log.warn(`error: ${e.message}`))
 supervise.alwaysRestart(processOrder, onError: (e) => log.warn(e))
 ```
 
-NEVER `background fn().onError(...)` chained — that violates Rule 9. Always assign to a handle, then attach handlers as separate statements.
+NEVER `background fn().onError(...)` chained — that violates Golden Rule 9. Always assign to a handle, then attach handlers as separate statements.
 
 ### Why "always log when fire-and-forget" is the right default
 

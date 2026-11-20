@@ -13,7 +13,7 @@ metadata:
 
 # Self-Referential Shapes — Relative Pointers (Approach A)
 
-**Status**: Locked — Approach A (relative/offset pointers). Patrick confirmed during the design-lockdown conversation (2026-05-14, round 3 of the plan).
+**Status**: Locked — Approach A (relative/offset pointers). Patrick confirmed it (2026-05-14).
 
 **Target**: v0.3+ implementation. Specific milestone TBD when v0.2 ships.
 
