@@ -240,7 +240,7 @@ let players: Array<Player> = [p1, p2, p3]
 
 **Performance: consider type instead of map:**
 ```
-let stats: Map<string, number> = { health: 100, attack: 50, defense: 30 }
+let stats: Map<String, Number> = { health: 100, attack: 50, defense: 30 }
 // SUGGESTION: all keys are known at compile time. Consider defining a type for direct field access.
 ```
 
