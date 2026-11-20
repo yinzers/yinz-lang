@@ -23,15 +23,15 @@ Yinz uses plain English words for its keywords, and capital letters to mark type
 |--------------|---------------|----------|
 | `nothing` | A function returns no value | `-> nothing` |
 | `none` and `maybe` | A value might be absent | `maybe<string>`: a string, or `none` |
-| `shape` | Declares a data structure | `shape Player { name: string }` |
-| `options` | A fixed set of named values | `options Status { active, banned }` |
-| `base` | A shape that you build on and never create directly | `base shape` |
-| `follows` | A shape meets a contract | "Player follows Damageable" |
+| `shape` | Declares a named group of fields | `shape Player { name: string }` |
+| `options` | A fixed set of named choices | `options Status { active, banned }` |
+| `base` | A shape that other shapes build on and that you never create directly | `base shape` |
+| `follows` | A shape provides the functions a contract lists (a contract is a list of function signatures) | "Player follows Damageable" |
 | `\|` | A value can be one of several shapes | `Circle \| Square` |
-| `is` | Asks which kind a union value is | "if shape is Circle" |
+| `is` | Asks which kind a union value is (a union is a value that can be one of several shapes) | "if shape is Circle" |
 | `function` | Declares a function | `function heal(...)` |
-| `share` and `lend` | How a function uses a value it receives; written in function signatures only | `share player: Player` |
-| `errors` | A function can fail, and the failure flows up to the caller automatically | `-> string errors` |
+| `share` and `lend` | How a function uses a value it receives (`share` reads it, `lend` may change it); written in function signatures only | `share player: Player` |
+| `errors` | A function can fail, and the failure goes up to the caller automatically | `-> string errors` |
 
 ---
 

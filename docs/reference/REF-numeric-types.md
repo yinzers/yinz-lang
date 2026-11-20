@@ -19,7 +19,7 @@ Yinz has three numeric types. Pick the one that matches what your values represe
 
 ## number — the default (exact decimal arithmetic)
 
-`number` is the default. It uses decimal arithmetic — no floating point surprises:
+`number` is the default. It does its math in base 10, the way you do on paper, so you get no surprises from floating point (the way computers usually store decimals):
 
 ```
 let price = 0.1 + 0.2              // 0.3 — exact, not 0.30000000000000004
@@ -33,68 +33,65 @@ Use `number` for anything where the exact value matters: money, measurements, us
 
 ## Why `float` rounds and `number` doesn't
 
-Adding `0.1 + 0.2` with binary floating point gives `0.30000000000000004`, not `0.3`.
+Adding `0.1 + 0.2` as a `float` gives `0.30000000000000004`, not `0.3`.
 
-That isn't a bug. `float` uses **binary floating point** to store decimal numbers, and most decimals can't be represented exactly in binary.
+That isn't a bug. `float` stores decimal numbers in **binary** (base 2, the 0s and 1s a computer uses), and most decimals can't be written exactly in binary.
 
-It's the same reason `1/3` in regular decimal is `0.3333333...` forever — base 10 can't divide cleanly. In base 2 (binary), `0.1` is:
+It's the same reason `1/3` is `0.3333333...` forever in everyday base 10: it never ends. In binary, `0.1` is:
 
 ```
 0.0001100110011001100110011001100110011...   (the 0011 repeats forever)
 ```
 
-Computers have to stop somewhere, so they store the closest possible value. For `0.1` in 64-bit binary float, that's:
+A computer has to stop somewhere, so it stores the closest value it can. For `0.1` as a 64-bit `float`, that is:
 
 ```
 0.1000000000000000055511151231257827021181583404541015625
                   ↑ what's actually in memory, not 0.1
 ```
 
-Add two slightly-wrong values together and the small errors stack up: `0.30000000000000004`.
+Add two slightly-wrong values and the small errors add up: `0.30000000000000004`.
 
-**`number` sidesteps this entirely** by storing values in base 10. The number `0.1` is stored as the trio `(positive, coefficient=1, exponent=-1)` — exactly. Arithmetic happens on whole-number coefficients, so there are no fractional bits to lose.
+**`number` avoids this** by storing values in base 10. It stores `0.1` as three exact pieces: positive, digits `1`, and a decimal point moved one place left. The math runs on whole-number digits, so nothing is lost to rounding.
 
-You only lose precision if you exceed the configured digit limit (34 digits by default — far more than typical math). When you do, rounding is deterministic (round half-even, per IEEE 754).
+You only lose precision if a result needs more digits than the limit (34 digits by default, far more than everyday math needs). When that happens, the result is rounded the same way every time: to the nearest digit, and to the even digit when exactly halfway (the IEEE 754 standard's rule).
 
 ---
 
 ## number<N> — higher precision when you need it
 
-For scientific computing, physics simulations, or any work that needs more than 34 digits of precision, use `number<N>`:
+For science, physics simulations, or any work that needs more than 34 digits of precision, use `number<N>`:
 
 ```
 let position: number<70> = 0.0000000000000001
 let chaotic: number<200> = initialCondition
 ```
 
-`N` is the number of significant decimal digits.
+`N` is the number of significant digits (the digits that count, ignoring leading zeros).
 
-| Range | Backing storage | Speed |
-|-------|-----------------|-------|
-| `number` (= `number<34>`) | u128 coefficient (hardware) | Fastest |
-| `number<N>` for N ≤ 34 | u128 coefficient | Fastest |
-| `number<N>` for N > 34 | Bignum coefficient | Slower per op, still bounded |
+| Range | Speed |
+|-------|-------|
+| `number` (the same as `number<34>`) | Fastest |
+| `number<N>` for N ≤ 34 | Fastest |
+| `number<N>` for N > 34 | Slower per operation, but still bounded |
 
 **Maximum precision: `number<4096>`.** Larger values are a compile error:
 
 ```
 let huge: number<5000> = 0.001
-// COMPILE ERROR: number<N> precision is capped at 4096 in v0.1.
-//                If you genuinely need unbounded precision, see
-//                docs/reference/REF-mvp-scope.md#v2--deferred-features (arbitrary-precision-decimal).
-//                File an issue with your workload — the cap is intentional and
-//                we want to know about real cases that exceed it.
+// COMPILE ERROR: number<N> precision is capped at 4096.
+//                Use a precision of 4096 or less.
 ```
 
-**Mixing precisions in arithmetic** promotes to the higher precision automatically:
+**Mixing precisions in math** gives the higher precision automatically:
 
 ```
 let a: number<34> = 1.0
 let b: number<100> = 2.0
-let c = a + b              // c is number<100> — promoted, no precision lost
+let c = a + b              // c is number<100> — no precision lost
 ```
 
-**Assigning to a narrower precision** rounds with a compiler warning:
+**Assigning to a lower precision** rounds the value and gives a compiler warning:
 
 ```
 let high: number<100> = 0.123456789012345678901234567890
@@ -107,7 +104,7 @@ let low: number<34> = high
 
 ## float — fast binary arithmetic (opt-in)
 
-`float` uses binary floating point. It is faster than `number`, but it has the binary-rounding errors described above:
+`float` stores numbers in binary. It is faster than `number`, but it has the binary rounding errors described above:
 
 ```
 let velocity: float = 9.81 * 2.5    // fast — tiny rounding is acceptable here
@@ -116,13 +113,9 @@ let angle: float = math.sin(1.5)    // graphics/physics — speed over precision
 
 Use `float` when:
 - You're doing graphics, physics, or simulations
-- You're working with machine learning or tensors (once those land — see docs/reference/REF-mvp-scope.md#v2--deferred-features)
-- You've measured that `number` is a bottleneck and a tiny rounding error is acceptable
+- You've measured that `number` is too slow and a tiny rounding error is acceptable
 
 The IDE warns you if `float` looks wrong:
-
-> **IDE (v0.2)**: this hint surfaces via the LSP, which ships in v0.2.
-> In v0.1, the compiler emits the warning to stderr when `--release` is set.
 
 ```
 let price: float = 19.99
@@ -142,7 +135,7 @@ let index: int = 0
 let score: int = 100
 ```
 
-Range: `int.min` to `int.max` — roughly ±9.2 × 10^18. Plenty for any count you'd hand-write.
+Range: `int.min` to `int.max` — roughly ±9.2 × 10^18 (about nine quintillion). That is plenty for any count you'd write by hand.
 
 Assigning a decimal to an `int` is a compile error:
 
@@ -152,10 +145,7 @@ let count: int = 3.5
 // Use number or float for decimal values.
 ```
 
-The IDE suggests `int` when you're using `number` for something that's clearly a whole number:
-
-> **IDE (v0.2)**: this hint surfaces via the LSP, which ships in v0.2.
-> In v0.1, the compiler emits the warning to stderr when `--release` is set.
+The IDE suggests `int` when you use `number` for something that is clearly a whole number:
 
 ```
 let pixels: number = 1920
@@ -167,7 +157,7 @@ let pixels: number = 1920
 
 ## int overflow
 
-`int` panics on overflow by default — both in debug and release builds:
+*Overflow* means a result is too big for an `int` to hold. By default the program stops with a panic (a crash that stays inside one task), in debug and release builds alike:
 
 ```
 let count: int = int.max
@@ -178,7 +168,7 @@ count = count + 1
 //   or .saturatingAdd() to cap at int.max.
 ```
 
-When wrap-around or saturation is the behavior you actually want, ask for it explicitly:
+When you want the number to wrap around (jump to the other end of the range) or stop at the limit, ask for it by name:
 
 ```
 let x: int = int.max
@@ -186,14 +176,14 @@ let wrapped = x.wrappingAdd(1)      // wraps to int.min
 let capped = x.saturatingAdd(1)     // stays at int.max
 ```
 
-The same suffix pattern applies to subtract / multiply / etc:
+Subtract and multiply work the same way:
 
-| Method | Behavior |
-|--------|----------|
-| `.wrappingAdd(n)`, `.wrappingSub(n)`, `.wrappingMul(n)` | Wraps on overflow |
-| `.saturatingAdd(n)`, `.saturatingSub(n)`, `.saturatingMul(n)` | Caps at int.max / int.min |
+| Function | Behavior |
+|----------|----------|
+| `.wrappingAdd(n)`, `.wrappingSub(n)`, `.wrappingMul(n)` | Wraps around on overflow |
+| `.saturatingAdd(n)`, `.saturatingSub(n)`, `.saturatingMul(n)` | Stops at int.max / int.min |
 
-Overflow panics by default. If you want wrap (rare — usually cryptography or hashing), you ask for it visibly with `.wrappingAdd()` and its siblings.
+Wrapping is rare (it is mostly for hashing and encryption), so you ask for it by name where you need it.
 
 ---
 
@@ -214,17 +204,17 @@ When in doubt, use `number`. The IDE suggests the others when it would help.
 
 ---
 
-## Type inference
+## Types the compiler picks for you
 
-The compiler infers numeric types from values and usage:
+If you don't write a type, the compiler picks a numeric type from the value:
 
 ```
-let x = 42          // inferred as int
-let y = 3.14        // inferred as number
-let z: float = 1.0  // explicit float
+let x = 42          // the compiler picks int
+let y = 3.14        // the compiler picks number
+let z: float = 1.0  // you asked for float
 ```
 
-Mixed-type expressions are a compile error — you must convert explicitly:
+Mixing numeric types in one expression is a compile error — you must convert one side yourself:
 
 ```
 let a: int = 42
@@ -236,10 +226,4 @@ let c = a + b        // COMPILE ERROR: `+` cannot be used with `int` and `number
 let c = a.toNumber() + b   // OK: number + number = number
 ```
 
-This makes type conversions visible in code. You never accidentally lose precision or change numeric behavior without knowing it.
-
----
-
-## Note on existing examples
-
-Many examples throughout this spec use `number` for fields like `health` and `score` — those would more accurately be typed as `int`. They'll be updated in a future spec pass.
+Because every conversion is written out, you never lose precision or change how a number behaves without seeing it.
