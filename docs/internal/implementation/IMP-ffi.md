@@ -13,7 +13,7 @@ metadata:
 
 # Foreign Function Interface — Design Decisions
 
-User spec: [`docs/reference/REF-ffi.md`](../../reference/REF-ffi.md)
+No user-facing reference page: `foreign` is deferred to v2+ and not implemented.
 
 > **Status: deferred to v2+, not implemented.** `foreign` is a registered
 > `[[deferred_language_feature]]` (`registry/features.toml`, design doc

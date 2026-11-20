@@ -13,7 +13,7 @@ metadata:
 
 # Package Manager — Design Decisions
 
-User spec: [`docs/reference/REF-packages.md`](../../reference/REF-packages.md)
+No user-facing reference page yet: the package manager is not shipped. Its milestone (v0.22) is in [`docs/reference/REF-mvp-scope.md`](../../reference/REF-mvp-scope.md).
 
 ---
 

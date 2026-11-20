@@ -51,7 +51,7 @@ Yinz has **no function coloring**. There is no type-level distinction between as
 
 ## FFI annotation requirement
 
-**Design for when `foreign` ships (v2+ — see [`docs/reference/REF-ffi.md`](../../reference/REF-ffi.md) and its `[[deferred_language_feature]]` registry entry). No `foreign` keyword exists in the compiler today**, so nothing below runs yet — it is the locked plan for the may-block analysis to extend cleanly onto FFI boundaries once they exist.
+**Design for when `foreign` ships (v2+ — see [`IMP-ffi.md`](IMP-ffi.md) and its `[[deferred_language_feature]]` registry entry). No `foreign` keyword exists in the compiler today**, so nothing below runs yet — it is the locked plan for the may-block analysis to extend cleanly onto FFI boundaries once they exist.
 
 The compiler can analyze pure Yinz code. It CANNOT analyze C code linked via FFI — we can't know whether `printf` blocks without knowing what's behind it. So FFI boundaries must declare `may-block` explicitly:
 

@@ -13,7 +13,7 @@ metadata:
 
 # Testing — Design Decisions
 
-User spec: [`docs/reference/REF-testing.md`](../../reference/REF-testing.md)
+No user-facing reference page yet: `ynz test` and the `test` keyword are not shipped. Their milestone (v0.13) is in [`docs/reference/REF-mvp-scope.md`](../../reference/REF-mvp-scope.md).
 
 ---
 
