@@ -22,7 +22,7 @@ User spec: [`docs/reference/REF-maybe.md`](../../reference/REF-maybe.md)
 `Maybe<T>` is a built-in generic primitive shipped in M5 alongside the generics engine. It expresses "a value of type T that might not exist." Operations:
 
 - `none` — the absent value (built-in keyword)
-- `m.exists() -> boolean` — method (parens — action)
+- `m.exists() -> Boolean` — method (parens — action)
 - `m.value` — virtual field (no parens — access; flow-sensitive proof of `.exists()` required)
 - `m.or(default: T) -> T` — method (parens — action)
 
@@ -32,7 +32,7 @@ See [`docs/reference/REF-maybe.md`](../../reference/REF-maybe.md) for the user-f
 
 ## Why `Maybe<T>` ships in M5, not M6
 
-The earlier milestone plan put `maybe T` in M6 alongside `options`, union types, and `is Type` narrowing — all "things that affect type narrowing." But `Maybe<T>` is structurally different: it's the return type of `.get()` on every built-in collection. Without `Maybe<T>` in M5, `Array<Int>.get(0)` either has to return `int` (with a runtime panic on out-of-bounds — wrong shape, eventually requires a rename) or `.get()` ships in M6 (M5 collections would have no safe access until M6 lands).
+The earlier milestone plan put `maybe T` in M6 alongside `options`, union types, and `is Type` narrowing — all "things that affect type narrowing." But `Maybe<T>` is structurally different: it's the return type of `.get()` on every built-in collection. Without `Maybe<T>` in M5, `Array<Int>.get(0)` either has to return `Int` (with a runtime panic on out-of-bounds — wrong shape, eventually requires a rename) or `.get()` ships in M6 (M5 collections would have no safe access until M6 lands).
 
 Pulling `Maybe<T>` into M5 produces the cleanest API: `.get()` returns `Maybe<T>` from day 1; no rename, no breaking change. M6 still ships unions / options / narrowing — but `Maybe<T>` is structurally a primitive of the type system, not a narrowing case.
 
@@ -46,14 +46,14 @@ The lowering is chosen per concrete T at monomorphization time. The decision is 
 
 | Concrete T | Encoding | LLVM type | Why |
 |---|---|---|---|
-| `int`, `float`, `number`, `boolean` (primitives) | Tagged union | `struct { i1 has_value, T value }` | Fits in 2 words; tag is cheaper than reserving a sentinel value of T |
+| `Int`, `Float`, `Number`, `Boolean` (primitives) | Tagged union | `struct { i1 has_value, T value }` | Fits in 2 words; tag is cheaper than reserving a sentinel value of T |
 | Heap-allocated shape pointer (`ynz_alloc`-backed shape) | Null-pointer | `T*` (null = none) | One word; no tag byte; matches Rust's `Option<Box<T>>` optimization |
 | `Fixed<U, N>` (stack-allocated array) | Tagged union | `struct { i1 has_value, [N x U] value }` | The whole array is inline; null-pointer encoding doesn't apply |
 | `Array<U>` (heap array header) | Null-pointer | `*Array<U>` (null = none) | Pointer = discriminator |
 | `Map<K, V>` (heap map header) | Null-pointer | `*Map<K, V>` | Same as `Array<U>` |
 | `Pair<A, B>` and other generic shapes with no pointer field | Tagged union | `struct { i1 has_value, Pair<A, B> value }` | No pointer to repurpose; explicit tag required |
 | `dynamic Foo` (fat pointer: data + vtable) | Null-pointer on DATA slot | `struct { *T data, *Vtable vt }` (data == null → none) | Data-pointer is the natural sentinel; vtable ignored when none |
-| `string` (heap-allocated UTF-8 bytes) | Null-pointer | `*String` (null = none) | Same as heap shape pointer |
+| `String` (heap-allocated UTF-8 bytes) | Null-pointer | `*String` (null = none) | Same as heap shape pointer |
 | `Maybe<Maybe<T>>` (nested) | **REJECTED at typeck** — compile error | — | Nested maybe forces a 2-bit tag; almost always a code smell. Compile error suggests flattening. |
 | All other generic-shape instantiations | Tagged union | `struct { i1 has_value, ShapeT value }` | Default — safe but slightly more memory than null-pointer when applicable |
 
@@ -78,7 +78,7 @@ The `none` literal produces a type `Maybe<T>` for some unknown T. T is resolved 
 | `let m: Map<String, Maybe<U>> = { "a": some(5), "b": none }` | T = U (from map value-type annotation) |
 | `let x = none` (no annotation, no enclosing call/return) | **Compile error** — "Cannot work out which type `none` should be here. Annotate the binding." |
 | `identity(none)` (single-arg generic call, no other parameters constrain T) | **Compile error** — "Cannot work out the type parameter T from a `none` argument alone." |
-| `pair(none, 5)` (multi-arg generic call, one arg constrains T) | T = int for first param if the parameter declares `Maybe<A>`; otherwise compile error per slot |
+| `pair(none, 5)` (multi-arg generic call, one arg constrains T) | T = Int for first param if the parameter declares `Maybe<A>`; otherwise compile error per slot |
 | `foo(none)` where `foo(give x: Maybe<U>) -> ...` (non-generic) | T = U |
 
 **General rule**: `none` resolves T by walking up the AST one node at a time, looking for a context that types it as `Maybe<U>` for a concrete U. The walk terminates at: (a) immediate type annotation, (b) enclosing call's parameter type, (c) enclosing return type, (d) sibling branch with `Maybe<U>` type. If the walk exhausts these without finding a U, compile error with a suggested-annotation diagnostic.
@@ -131,7 +131,7 @@ Documented in fixture `crates/ynz-driver/tests/fixtures/m5_cycle_leak.ynz` with 
 
 ## Why `Maybe<T>` is built-in, not a stdlib generic
 
-`Maybe<T>` is the return type of `.get()` on every built-in collection: `Array<T>`, `Fixed<T>`, `Map<K, V>`, `string`. It's also the signature of `.first()`, `.last()`, `.find()`, `.removeFirst()`, `.removeLast()`, and similar collection methods. The type appears EVERYWHERE in the language surface.
+`Maybe<T>` is the return type of `.get()` on every built-in collection: `Array<T>`, `Fixed<T>`, `Map<K, V>`, `String`. It's also the signature of `.first()`, `.last()`, `.find()`, `.removeFirst()`, `.removeLast()`, and similar collection methods. The type appears EVERYWHERE in the language surface.
 
 If `Maybe<T>` were a stdlib generic (defined in `std/maybe.ynz` and imported), every program would need an implicit prelude that imports it. M5 prefers the simpler model: `Maybe<T>` is a primitive of the type system, defined inside the compiler, with no import needed. This matches `Array<T>` / `Fixed<T>` / `Map<K, V>` (also primitives, also no-import).
 

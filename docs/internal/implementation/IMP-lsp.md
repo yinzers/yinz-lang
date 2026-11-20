@@ -347,7 +347,7 @@ The compiler already uses the stricter form, so these two domains mark the token
 
 | Surface | Behavior |
 |---|---|
-| Marker | Semantic-token modifier `promotable` (legend index 0, bit `1`) on the `array` token of the annotation / the `let` keyword. The VS Code extension draws it as a cyan dotted underline in the extension's own theme colour `yinz.lessonUnderline` (`contributes.colors`; users can override it with `workbench.colorCustomizations`; red is for errors and yellow for lint). It applies the underline from full and range semantic-token responses; a range response replaces only the ranges it overlaps. |
+| Marker | Semantic-token modifier `promotable` (legend index 0, bit `1`) on the `Array` token of the annotation / the `let` keyword. The VS Code extension draws it as a cyan dotted underline in the extension's own theme colour `yinz.lessonUnderline` (`contributes.colors`; users can override it with `workbench.colorCustomizations`; red is for errors and yellow for lint). It applies the underline from full and range semantic-token responses; a range response replaces only the ranges it overlaps. |
 | Hover | A marked token answers with the domain's registry WHAT / WHAT INSTEAD / WHY (`lsp_inlay_hint_hover_for`), replacing the plain `let` keyword hover for that token only. |
 | Click | Code action of kind `refactor.rewrite` (an optional improvement, not a fix) titled exactly `Write 'const' instead of 'let'` / `Write 'Fixed' instead of 'Array'` (the hover quotes the same words), whose `TextEdit` replaces exactly the token with `const` / `Fixed`. Offered when the request range touches the token (either edge). `capabilities` advertises `quickfix` and `refactor.rewrite`. |
 | Inlay hint | None for these two domains. |

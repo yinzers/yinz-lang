@@ -21,8 +21,8 @@ Scripting should be as easy as Python. One-file scripts, CLI tools, data process
 
 ```
 let args = cli.args()
-let verbose = cli.flag("verbose")           // -> boolean
-let port = cli.option("port", "3000")       // -> string (with default)
+let verbose = cli.flag("verbose")           // -> Boolean
+let port = cli.option("port", "3000")       // -> String (with default)
 ```
 
 ---
@@ -45,7 +45,7 @@ terminal.clear()
 
 ```
 let name = terminal.ask("What's your name?")
-let confirm = terminal.confirm("Continue?")             // -> boolean
+let confirm = terminal.confirm("Continue?")             // -> Boolean
 let choice = terminal.choose("Pick one:", ["A", "B", "C"])
 ```
 

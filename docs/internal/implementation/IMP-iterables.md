@@ -46,8 +46,8 @@ Built-in collections formally follow `Iterable<T>` through compiler-synthesized 
 | `ArrayIter<T>` | `Array<T>` | `T` | Yes — alloca, no `ynz_alloc` |
 | `FixedIter<T, N>` | `Fixed<T, N>` | `T` | Yes |
 | `MapIter<K, V>` | `Map<K, V>` | `MapEntry<K, V>` |  Yes |
-| `StringCodePointIter` | `string` | `string` (1 code point per step) | Yes |
-| `Range` | `range(start, end)` | `int` | Yes (Range IS the iterator — not wrapped) |
+| `StringCodePointIter` | `String` | `String` (1 code point per step) | Yes |
+| `Range` | `range(start, end)` | `Int` | Yes (Range IS the iterator — not wrapped) |
 
 **`Range`** is a user-visible shape (not synthesized). It follows `Iterable<Int>` directly with hidden state fields. Storable, passable, returnable as of M7 (M3 restriction removed).
 
@@ -55,7 +55,7 @@ Built-in collections formally follow `Iterable<T>` through compiler-synthesized 
 
 **`next()` is `alwaysinline`** for built-in wrappers in optimized builds: LLVM `alwaysinline` attribute ensures no `call @next_array_iter` remains in `-O2` IR. For-loop over built-in collection emits no heap allocation (`alloca` only for the wrapper struct).
 
-**String iteration default (locked):** `for c in "café"` steps by **code point** (not grapheme). Each `c` is a 1-character `string`. Grapheme iteration is opt-in via `.graphemes()` — deferred to v0.5+. This matches `.get(n)` default semantics.
+**String iteration default (locked):** `for c in "café"` steps by **code point** (not grapheme). Each `c` is a 1-character `String`. Grapheme iteration is opt-in via `.graphemes()` — deferred to v0.5+. This matches `.get(n)` default semantics.
 
 ---
 
@@ -187,7 +187,7 @@ function next(lend self: CircularBuffer<T>) -> Maybe<T> {
 // I/O data — implements the fallible contract.
 shape ApiPager<T> follows FallibleIterable<T> {
   cursor: Maybe<String>
-  hidden done: boolean = false
+  hidden done: Boolean = false
 }
 
 function next(lend self: ApiPager<T>) -> Maybe<T> errors {
@@ -237,11 +237,11 @@ For built-in wrappers, the `T` in `Iterable<T>` or `FallibleIterable<T>` is:
 | `Array<T>` | `ArrayIter<T>` | `Iterable<T>` | concrete T |
 | `Fixed<T, N>` | `FixedIter<T, N>` | `Iterable<T>` | concrete T |
 | `Map<K, V>` | `MapIter<K, V>` | `Iterable<MapEntry<K, V>>` | `MapEntry<K, V>` |
-| `string` | `StringCodePointIter` | `Iterable<String>` | `string` (1 code point) |
-| `range(start, end)` | `Range` (self) | `Iterable<Int>` | `int` |
-| `file.lines(path)` | (user-visible) | `FallibleIterable<String>` | `string` |
+| `String` | `StringCodePointIter` | `Iterable<String>` | `String` (1 code point) |
+| `range(start, end)` | `Range` (self) | `Iterable<Int>` | `Int` |
+| `file.lines(path)` | (user-visible) | `FallibleIterable<String>` | `String` |
 
-User shapes follow `Iterable<T>` or `FallibleIterable<T>` directly — no wrapper. The concrete `T` is whatever their `next()` function returns inside the `maybe`.
+User shapes follow `Iterable<T>` or `FallibleIterable<T>` directly — no wrapper. The concrete `T` is whatever their `next()` function returns inside the `Maybe`.
 
 ---
 

@@ -282,7 +282,7 @@ The default favors perf; the opt-in covers binary-size-constrained cases.
 
 `shape Box<T> { value: T }` — angle bracket generics, same pattern as built-in collections.
 
-**Why**: Consistent with `Array<Player>`, `Map<String, Number>`, `Fixed<string>`. One `name<type>` pattern covers both built-in and user-defined generic types. No special cases.
+**Why**: Consistent with `Array<Player>`, `Map<String, Number>`, `Fixed<String>`. One `name<type>` pattern covers both built-in and user-defined generic types. No special cases.
 
 ---
 

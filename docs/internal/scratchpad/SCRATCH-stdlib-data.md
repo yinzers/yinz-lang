@@ -48,7 +48,7 @@ let avg = revenues.average()
 let byRegion = records.groupBy(r => r.region)
 ```
 
-Note: `.sum()` and `.average()` are collection methods available on `array<number>` / `fixed<number>`.
+Note: `.sum()` and `.average()` are collection methods available on `Array<Number>` / `Fixed<Number>`.
 
 ---
 

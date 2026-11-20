@@ -37,11 +37,11 @@ The distinction is **intent and recoverability**, not "known vs unknown":
 ### Errors — expected, recoverable, caller has a choice
 
 ```ynz
-function readFile(path: string) -> string errors {
+function readFile(path: String) -> String errors {
   // file might not exist; caller can use a default, retry, or fail the request
 }
 
-function parseAge(input: string) -> int errors {
+function parseAge(input: String) -> Int errors {
   // input might be invalid; caller can prompt the user
 }
 ```
@@ -51,7 +51,7 @@ The function signature DECLARES the failure modes via `errors`. The caller MUST 
 Errors flow through normal control flow. No `try/catch` — errors auto-propagate:
 
 ```ynz
-function loadUser(id: int) -> User errors {
+function loadUser(id: Int) -> User errors {
   let data = readFile("user-${id}.json")   // if readFile fails, this returns the error
   let user = parseUser(data)               // same — auto-propagation
   return user
@@ -85,14 +85,14 @@ For PANICS: **task isolation via `background`** + **supervisor pattern** + **aut
 ### Task isolation
 
 ```ynz
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   while (true) {
     let order = getNextOrder()
     background processOrder(order)  // each order runs in its own task
   }
 }
 
-function processOrder(order: Order) -> nothing {
+function processOrder(order: Order) -> Nothing {
   // If THIS panics:
   //   - just this task dies
   //   - all resources it held drop cleanly via stack unwind

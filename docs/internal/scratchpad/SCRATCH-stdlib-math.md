@@ -25,10 +25,10 @@ let price = 0.1 + 0.2              // 0.3 — exact
 let tax = 19.99 * 0.07             // 1.3993 — exact
 
 // float — fast binary (opt-in)
-let velocity: float = 9.81 * 2.5   // fast, may have tiny rounding
+let velocity: Float = 9.81 * 2.5   // fast, may have tiny rounding
 
 // int — whole numbers only
-let count: int = 42
+let count: Int = 42
 ```
 
 IDE warns when float is used for financial values. IDE suggests int for pure integer math.

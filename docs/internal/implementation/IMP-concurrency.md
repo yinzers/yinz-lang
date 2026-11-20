@@ -212,7 +212,7 @@ The IDE warns on large copies so developers can restructure if needed.
 |---|---|---|
 | Value unused after background | `.give` (move) | Zero |
 | Value used after background | `.copy` (clone) | Copy cost |
-| Small value (string, int) | `.copy` | Trivial |
+| Small value (String, Int) | `.copy` | Trivial |
 | Large value, unused after | `.give` | Zero |
 | Large value, used after | `.copy` + IDE warning | Developer restructures or accepts |
 | Developer writes `.copy()` at the spawn | `.copy()` — independent copy for that task | Copy cost |
@@ -411,7 +411,7 @@ A suspending function (one whose body contains a `wait`) cannot yet return a `Sh
 
 | Return type | Suspending function | Status |
 |---|---|---|
-| `-> Int`, `-> bool`, `-> float` | yes | CLEAN — scalar, no staging needed |
+| `-> Int`, `-> Boolean`, `-> Float` | yes | CLEAN — scalar, no staging needed |
 | `-> Number` (plain) | yes | CLEAN — i128 stored directly in the 16-byte return slot |
 | `-> Number errors` | yes | CLEAN — i128 in 16-byte frame staging slot; alloc=1/free=1 |
 | `-> Int errors` | yes | CLEAN — `{err=0, ok=int_bits}` stored directly |
@@ -434,7 +434,7 @@ Several types cannot yet cross a `wait` boundary. The type classifier is complet
 
 **Why each variant fails without the guard**:
 
-The frame-slot classifier in codegen handles int, bool, float, number, string, array, map, Shape, and ErrorsCapable crossing locals. All others fall into buckets with safety problems:
+The frame-slot classifier in codegen handles Int, Boolean, Float, Number, String, Array, Map, Shape, and ErrorsCapable crossing locals. All others fall into buckets with safety problems:
 
 - **`Maybe<T>` / `dynamic Contract`**: Internally represented as a pointer to a `{tag, payload}` struct alloca on the RESUME FUNCTION'S STACK. Flushing the alloca pointer to the frame slot and reloading it after the next resume stores and re-reads a dangling stack address. LLVM may detect this ("Instruction does not dominate all uses!") or silently corrupt the stack.
 
@@ -452,8 +452,8 @@ The frame-slot classifier in codegen handles int, bool, float, number, string, a
 
 | Type | Status | Frame strategy |
 |---|---|---|
-| `int`, `bool`, `float` | CLEAN | scalar i64/i1/f64 slot |
-| `number` (decimal128) | CLEAN | 2 consecutive i64 slots (lo+hi) |
+| `Int`, `Boolean`, `Float` | CLEAN | scalar i64/i1/f64 slot |
+| `Number` (decimal128) | CLEAN | 2 consecutive i64 slots (lo+hi) |
 | `string`, `Array<T>`, `Map<K,V>` | CLEAN | heap-stable pointer stored as i64 |
 | `Shape` (primitive fields only) | CLEAN | frame-embedded struct bytes, region rounded up to 16 bytes |
 | `T errors` (ErrorsCapable) | CLEAN | 2-slot {err, ok} struct |

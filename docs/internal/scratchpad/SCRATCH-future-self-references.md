@@ -37,7 +37,7 @@ A shape is self-referential when one of its fields holds a pointer or reference 
 
 ```ynz
 shape Node {                         // muted ".self-referential" appears here in IDE
-  data: int
+  data: Int
   ref: pointer-to-self.data          // hypothetical syntax — exact form TBD in v0.3 spec
 }
 ```
@@ -114,7 +114,7 @@ The developer can type `self-referential` explicitly to document intent (per the
 
 ```ynz
 shape Node self-referential {        // explicit — same behavior as inferred
-  data: int
+  data: Int
   ref: pointer-to-self.data
 }
 ```

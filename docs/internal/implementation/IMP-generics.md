@@ -152,7 +152,7 @@ let x = identity()
 
 ## First built-in generic: `Maybe<T>`
 
-See [`docs/internal/implementation/IMP-maybe.md`](IMP-maybe.md) for `Maybe<T>` — the first built-in generic primitive shipped via M5's generics engine. It's the return type of `.get()` on every built-in collection (`Array<T>`, `Fixed<T>`, `Map<K, V>`, `string`), and demonstrates how built-in generics use the same engine that user-defined generics do. M5 ships `Maybe<T>` alongside the engine itself rather than waiting for M6 — the cleanest API (`.get()` returns `Maybe<T>` from day 1, no rename later).
+See [`docs/internal/implementation/IMP-maybe.md`](IMP-maybe.md) for `Maybe<T>` — the first built-in generic primitive shipped via M5's generics engine. It's the return type of `.get()` on every built-in collection (`Array<T>`, `Fixed<T>`, `Map<K, V>`, `String`), and demonstrates how built-in generics use the same engine that user-defined generics do. M5 ships `Maybe<T>` alongside the engine itself rather than waiting for M6 — the cleanest API (`.get()` returns `Maybe<T>` from day 1, no rename later).
 
 ---
 

@@ -28,7 +28,7 @@ The standard library follows all 13 golden rules. Everything is dot-method drive
 The compiler only includes stdlib code your program actually uses. If you never touch `request`, `tensor`, or `date`, none of that code exists in your binary. Zero bloat.
 
 ```
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let x = math.sqrt(16)
   print(x)
 }
@@ -53,7 +53,7 @@ This applies to all stdlib modules: `math`, `file`, `request`, `server`, `date`,
 1. **Everything is dot-methods on the relevant type.** `file.read()`, `date.now()`, `request.get()`. Autocomplete-driven discovery.
 2. **All I/O uses the `errors` system.** File reads, HTTP calls, parsing — auto-propagate or handle explicitly.
 3. **Immutable by default for data types.** Dates, strings — methods return new values, never mutate.
-4. **`number` is decimal, `float` is binary, `int` is whole numbers.** Default prevents floating point surprises. IDE teaches when each is appropriate.
+4. **`Number` is decimal, `Float` is binary, `Int` is whole numbers.** Default prevents floating point surprises. IDE teaches when each is appropriate.
 5. **Scripting should be as easy as Python.** One-file scripts, CLI tools, data processing — minimal boilerplate.
 6. **Tree shaking is mandatory.** Be as comprehensive as wanted. No bloat.
 7. **Speed is always the priority.** Vectorize, use SIMD, inline aggressively. Even precision operations should be as fast as possible.
@@ -132,8 +132,8 @@ Proposed 2026-06-13. These are NOT promises and NOT designed yet — they're a h
 | Idea | Folds into | Why not standalone |
 |---|---|---|
 | **WebSocket** | `network.md` / `server` (v0.21) | WS bootstraps via an HTTP `Upgrade` handshake on the same accept loop, then switches to RFC 6455 frame protocol. Belongs as a `server` section, not a separate module — but the frame protocol is real added code, not free. |
-| **`set<T>`** ✅ COMMITTED 2026-06-13 → **v0.4** | core collections ([`docs/internal/implementation/IMP-collections.md`](../implementation/IMP-collections.md)) — a **language feature**, like `map` (co-ships with the v0.4 linting tier) | A set is `map<K,V>` with keys only: O(1) membership + auto-uniqueness + set algebra. Inherently growable (no "fixed set"). Designed in `collections.md`. Includes `array<T> → set<T>` auto-promotion (membership-only). |
-| **`array.unique()`** ✅ COMMITTED 2026-06-13 | core collections ([`docs/internal/implementation/IMP-collections.md`](../implementation/IMP-collections.md)) | The "dedupe a list once" case — a method on `array`, not a type. Ships with `set<T>`. |
+| **`set<T>`** ✅ COMMITTED 2026-06-13 → **v0.4** | core collections ([`docs/internal/implementation/IMP-collections.md`](../implementation/IMP-collections.md)) — a **language feature**, like `map` (co-ships with the v0.4 linting tier) | A set is `Map<K,V>` with keys only: O(1) membership + auto-uniqueness + set algebra. Inherently growable (no "fixed set"). Designed in `collections.md`. Includes `Array<T> → set<T>` auto-promotion (membership-only). |
+| **`Array.unique()`** ✅ COMMITTED 2026-06-13 | core collections ([`docs/internal/implementation/IMP-collections.md`](../implementation/IMP-collections.md)) | The "dedupe a list once" case — a method on `array`, not a type. Ships with `set<T>`. |
 
 ### Worth designing (secondary)
 
