@@ -14,7 +14,7 @@ Error: `print` was given a number, but it expects a string.
 Warning: This function has no doc comment.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function entrypoint() -> nothing {
+ 1 │ function entrypoint() -> Nothing {
    │ ────┬───  
    │     ╰───── Add `/// What this function does` above the `function` keyword.
    │ 

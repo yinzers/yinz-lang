@@ -1884,7 +1884,7 @@ function entrypoint() -> Nothing { }
         // A function with `wait` nested inside an `if` is still suspends.
         let suspends = suspends_set(
             r#"
-function maybePause(flag: bool) -> Nothing {
+function maybePause(flag: Boolean) -> Nothing {
     if (flag) {
         wait sleep(50)
     }

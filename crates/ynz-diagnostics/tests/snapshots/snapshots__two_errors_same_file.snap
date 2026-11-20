@@ -5,7 +5,7 @@ expression: output
 Error: `function` keyword is misspelled here.
    ╭─[ test.ynz:1:1 ]
    │
- 1 │ function entrypoint() -> nothing {
+ 1 │ function entrypoint() -> Nothing {
    │ ────┬───  
    │     ╰───── Use `function` (all lowercase).
    │ 
