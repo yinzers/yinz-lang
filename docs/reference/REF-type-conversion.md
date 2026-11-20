@@ -23,37 +23,37 @@ These always give you a value. You don't need to handle a failure.
 
 ```
 // Number conversions
-let price: number = 42.7
-let priceAsFloat = price.toFloat()    // 42.7 as a float
+let price: Number = 42.7
+let priceAsFloat = price.toFloat()    // 42.7 as a Float
 let priceText = price.toString()      // `42.7`
 
 // Int conversions
-let playerCount: int = 10
-let countAsNumber = playerCount.toNumber()  // 10 as a number
-let countAsFloat = playerCount.toFloat()    // 10.0 as a float
+let playerCount: Int = 10
+let countAsNumber = playerCount.toNumber()  // 10 as a Number
+let countAsFloat = playerCount.toFloat()    // 10.0 as a Float
 let countText = playerCount.toString()      // `10`
 
 // Float conversions
-let gravity: float = 9.81
-let gravityAsNumber = gravity.toNumber()    // 9.81 as a number (exact decimal)
+let gravity: Float = 9.81
+let gravityAsNumber = gravity.toNumber()    // 9.81 as a Number (exact decimal)
 let gravityText = gravity.toString()        // `9.81`
 
 // Boolean conversions
-let isActive: boolean = true
+let isActive: Boolean = true
 let activeText = isActive.toString()        // `true`
 ```
 
 ---
 
-## Conversions that can fail — they return `maybe`
+## Conversions that can fail — they return `Maybe`
 
-Turning text into a number can fail if the text isn't a valid number. Turning a `number` or a `float` into an `int` can fail too, because the value might be too big for an `int`. These conversions return a `maybe`, so the compiler makes you handle the failure case:
+Turning text into a number can fail if the text isn't a valid number. Turning a `Number` or a `Float` into an `Int` can fail too, because the value might be too big for an `Int`. These conversions return a `Maybe`, so the compiler makes you handle the failure case:
 
 ```
 let input = `42`
-let count = input.toInt()           // maybe<int>
-let price = input.toNumber()        // maybe<number>
-let velocity = input.toFloat()      // maybe<float>
+let count = input.toInt()           // Maybe<Int>
+let price = input.toNumber()        // Maybe<Number>
+let velocity = input.toFloat()      // Maybe<Float>
 
 // Handle it:
 if (count.exists()) {
@@ -62,7 +62,7 @@ if (count.exists()) {
 
 // Or use a default:
 let parsedCount = input.toInt()     // a maybe: the number, or nothing
-let safeCount = parsedCount.or(0)   // a plain int, 0 if input isn't a number
+let safeCount = parsedCount.or(0)   // a plain Int, 0 if input isn't a number
 
 // Failure case:
 let hello = `hello`
@@ -70,8 +70,8 @@ let bad = hello.toInt()             // none — `hello` is not a number
 let badCount = bad.or(0)            // 0 — the default
 
 // A number to an int drops the decimal part:
-let unitPrice: number = 42.7
-let wholePrice = unitPrice.toInt()  // a maybe<int>: 42
+let unitPrice: Number = 42.7
+let wholePrice = unitPrice.toInt()  // a Maybe<Int>: 42
 ```
 
 ---
@@ -95,8 +95,8 @@ See [Unions](REF-unions.md).
 There is no cast keyword. Every conversion is written out by name:
 
 ```
-let n: number = value as number    // COMPILE ERROR: use .toNumber() instead
-let n: number = value.toNumber()   // correct
+let n: Number = value as Number    // COMPILE ERROR: use .toNumber() instead
+let n: Number = value.toNumber()   // correct
 ```
 
 That way every conversion is easy to spot, easy to find with autocomplete, and handled in the same safe way.

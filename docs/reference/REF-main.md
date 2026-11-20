@@ -20,7 +20,7 @@ Every Yinz program starts at `function entrypoint()`. The compiler looks for it 
 ## Basic
 
 ```
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   print(`Hello from the Burgh`)
 }
 ```
@@ -30,7 +30,7 @@ function entrypoint() -> nothing {
 ## With error handling
 
 ```
-function entrypoint() -> nothing errors {
+function entrypoint() -> Nothing errors {
   let config = file.read(`config.ynz`)
   server.route(`GET`, `/`, indexHandler)
   server.listen(3000)
@@ -60,10 +60,10 @@ The function is always called `entrypoint`. The file name is flexible — `app.y
 Arguments come from the standard library, not from `entrypoint`'s parameters:
 
 ```
-function entrypoint() -> nothing {
-  let args = cli.args()                    // all arguments → array<string>
-  let verbose = cli.flag(`verbose`)        // --verbose flag → boolean
-  let port = cli.option(`port`, `3000`)   // --port option → string with default
+function entrypoint() -> Nothing {
+  let args = cli.args()                    // all arguments → Array<String>
+  let verbose = cli.flag(`verbose`)        // --verbose flag → Boolean
+  let port = cli.option(`port`, `3000`)   // --port option → String with default
 }
 ```
 
@@ -76,7 +76,7 @@ See [Tooling](REF-tooling.md) for the full CLI spec.
 > **Status**: This section uses the `process` module, which ships in **v0.7**. In v0.1, exit codes are not yet available via the standard library.
 
 ```
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   if (setupFailed) {
     process.exit(1)    // exit with failure code
   }

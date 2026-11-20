@@ -86,13 +86,13 @@ These words must NEVER appear in messages the user reads. They need computer-sci
 These are Yinz's own names — use them freely:
 
 - `errors`, `errors function` — the language's name for the failure system
-- `maybe<T>`, `maybe`, `none` — values that might not exist
+- `Maybe<T>`, `Maybe`, `none` — values that might not exist
 - `follows`, "follows the X contract" — how a shape says it provides the functions a contract lists
 - `share` / `lend` / `give` / `copy` / `.freeze` — ownership words
 - `options` — a fixed set of named choices
 - `type`, `field`, `method` — basic words that everyone understands
-- `number`, `float`, `int`, `number<N>` — the number type names
-- `array`, `fixed`, `map` — the collection type names
+- `Number`, `Float`, `Int`, `Number<N>` — the number type names
+- `Array`, `Fixed`, `Map` — the collection type names
 - `wait`, `background` — the keywords for running things at the same time
 - `setup` / `teardown` — testing keywords
 - `code point`, `byte`, `grapheme` — text terms (kept because the alternatives are worse)
@@ -119,14 +119,42 @@ This is different from the jargon ban-list above. The jargon ban-list covers WOR
 The teaching message looks like this:
 
 ```
-type Foo { name: string }
+type Foo { name: String }
 ^^^^
 WARNING: `type` is not a keyword in Yinz.
 
-  Use `shape` to declare a data type: `shape Player { name: string, health: int }`
+  Use `shape` to declare a data type: `shape Player { name: String, health: Int }`
 
   Why: Yinz uses `shape` — one unambiguous keyword for all data type declarations.
 ```
+
+---
+
+## Type Names in Your Own Code
+
+Every type name starts with a capital letter, built-in types included. Two mistakes get a teaching message.
+
+**A lowercase built-in type name.** Writing `int`, `float`, `number`, `boolean`, `string`, `range`, `maybe`, `array`, `fixed`, `map`, `channel` or `nothing` where a type goes is an error. The editor offers a quick-fix titled ``Write `Int` instead of `int` `` (with the names you wrote) that rewrites the name:
+
+```
+let health: int = 100
+// COMPILE ERROR: `int` is not a type name.
+//   Write `Int`.
+//   Why: Every type in Yinz starts with a capital letter, built-ins included.
+```
+
+**A shape named like a built-in type.** A `shape` or union alias called `Int`, `Float`, `Number`, `Boolean`, `String`, `Range`, `Maybe`, `Array`, `Fixed`, `Map`, `Channel`, `Nothing`, `MapEntry`, `Frame` or `SourceLoc` is an error:
+
+```
+shape Map {
+  name: String
+}
+// COMPILE ERROR: `Map` is a reserved built-in type name.
+//   Give this shape another name, such as `MyMap` or one that says what it holds.
+//   Why: Yinz already has a built-in type called `Map`. A shape with the same name would make every `Map` in this file ambiguous between your shape and the built-in.
+```
+
+Functions, modules and variables keep lowercase names, and they may match a type name in lowercase: `range(1, 10)` is a function that returns a `Range`.
 
 ---
 
@@ -134,8 +162,8 @@ WARNING: `type` is not a keyword in Yinz.
 
 - **Direct, not talking down.** "You can't add to a fixed array" is fine. "Oh no! It looks like you tried to..." is too cute.
 - **Don't blame.** Say "the compiler now treats X as Y", not "you tried to do Y."
-- **Suggest something specific.** "Use `array<T>` instead", with the actual replacement code. Not "consider an alternative."
-- **Use the user's own names.** "`scores` is a `map<string, number>`", not "this variable is a map." Point at what they wrote.
+- **Suggest something specific.** "Use `Array<T>` instead", with the actual replacement code. Not "consider an alternative."
+- **Use the user's own names.** "`scores` is a `Map<String, Number>`", not "this variable is a map." Point at what they wrote.
 - **No exclamation marks.** Errors are not exciting.
 - **No emoji.** Plain text only.
 
@@ -171,7 +199,7 @@ COMPILE ERROR: 'Player' is imported from two places.
 **Example — a good runtime error:**
 
 ```
-RUNTIME ERROR: integer overflow at line 12.
+RUNTIME ERROR: Int overflow in '+' at src/main.ynz:12:5
 
   count was at the maximum value (9223372036854775807) and would have
   wrapped to a negative number.
@@ -193,7 +221,7 @@ RUNTIME ERROR: integer overflow at line 12.
 SUGGESTION: All keys in this map are written out in your code.
 
   Consider a shape instead — it gives you direct field access:
-    shape Scores { alice: number, bob: number, charlie: number }
+    shape Scores { alice: Number, bob: Number, charlie: Number }
     let scores: Scores = { alice: 90, bob: 85, charlie: 78 }
 
   Why: Reading a shape field is one step (about 1 processor
@@ -224,7 +252,7 @@ Every error that has a matching docs section ends with a "See:" line:
 ```
 COMPILE ERROR: Direct index access is not allowed.
 
-  Use .get() — it returns maybe<T> and handles out-of-bounds safely:
+  Use .get() — it returns Maybe<T> and handles out-of-bounds safely:
     let item = items.get(5)
 
   Why: ...

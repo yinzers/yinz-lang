@@ -20,7 +20,7 @@ Functions are blocks of code that do one job and return a result.
 ## Defining a function
 
 ```
-function add(a: number, b: number) -> number {
+function add(a: Number, b: Number) -> Number {
   return a + b
 }
 ```
@@ -38,29 +38,29 @@ Every function:
 The compiler enforces that every code path actually returns the declared type:
 
 ```
-function getScore(share player: Player) -> number {
+function getScore(share player: Player) -> Number {
   return player.score
 }
 ```
 
 ---
 
-## nothing — functions that don't return a value
+## Nothing — functions that don't return a value
 
-If a function does something but gives nothing back, say `-> nothing`:
+If a function does something but gives nothing back, say `-> Nothing`:
 
 ```
-function logMessage(share msg: string) -> nothing {
+function logMessage(share msg: String) -> Nothing {
   print(msg)
 }
 ```
 
-`nothing` reads like English. The function runs and returns... nothing.
+`Nothing` reads like English. The function runs and returns... nothing.
 
-Using `return` inside a `nothing` function is fine for early exits:
+Using `return` inside a `Nothing` function is fine for early exits:
 
 ```
-function processPlayer(lend player: Player) -> nothing {
+function processPlayer(lend player: Player) -> Nothing {
   if (player.health <= 0) {
     return    // early exit — done
   }
@@ -68,19 +68,19 @@ function processPlayer(lend player: Player) -> nothing {
 }
 ```
 
-Returning a value from a `nothing` function is a compile error:
+Returning a value from a `Nothing` function is a compile error:
 
 ```
-function logMessage(share msg: string) -> nothing {
+function logMessage(share msg: String) -> Nothing {
   return msg
-  // COMPILE ERROR: logMessage is declared to return nothing — it cannot return a value.
+  // COMPILE ERROR: logMessage is declared to return `Nothing` — it cannot return a value.
   //
   //   Either remove the return value:
   //     return
   //   Or change the function's return type:
-  //     function logMessage(share msg: string) -> string { return msg }
+  //     function logMessage(share msg: String) -> String { return msg }
   //
-  //   Why: -> nothing means the function does its work and returns no value
+  //   Why: -> Nothing means the function does its work and returns no value
   //        to the caller. Returning a value would contradict that promise.
 }
 ```
@@ -92,9 +92,9 @@ function logMessage(share msg: string) -> nothing {
 Every parameter says how the function uses the value it receives. See [Ownership](REF-ownership.md) for the full picture.
 
 ```
-function greet(share name: string) -> nothing      // just reading name
-function rename(lend player: Player) -> nothing    // going to modify player
-function consume(give data: Data) -> nothing       // taking ownership
+function greet(share name: String) -> Nothing      // just reading name
+function rename(lend player: Player) -> Nothing    // going to modify player
+function consume(give data: Data) -> Nothing       // taking ownership
 ```
 
 The caller never types the ownership modifier — the compiler infers it from the function's signature. The IDE shows the inferred modifier as muted text:
@@ -153,11 +153,11 @@ If you need to return multiple values, define a type. Named fields are always cl
 
 ```
 shape DivResult {
-  quotient: number
-  remainder: number
+  quotient: Number
+  remainder: Number
 }
 
-function divmod(a: number, b: number) -> DivResult {
+function divmod(a: Number, b: Number) -> DivResult {
   return { quotient: a / b, remainder: a % b }
 }
 ```

@@ -22,9 +22,9 @@ Call functions from C libraries, system APIs, and other non-Yinz code. *FFI* sta
 ## Declaring foreign functions
 
 ```
-foreign function sqrt(value: float) -> float from `libm`
-foreign function sdlInit(flags: int) -> int from `SDL2`
-foreign function curlEasyPerform(handle: int) -> int from `libcurl`
+foreign function sqrt(value: Float) -> Float from `libm`
+foreign function sdlInit(flags: Int) -> Int from `SDL2`
+foreign function curlEasyPerform(handle: Int) -> Int from `libcurl`
 ```
 
 ---
@@ -35,10 +35,10 @@ Keep the foreign boundary as small as possible. Declare the foreign function, th
 
 ```
 // The foreign declaration — kept in one place
-foreign function readFd(fd: int, buffer: int, size: int) -> int from `libc`
+foreign function readFd(fd: Int, buffer: Int, size: Int) -> Int from `libc`
 
 // The safe function — this is what everyone else calls
-export function readBinaryFile(path: string) -> array<byte> errors {
+export function readBinaryFile(path: String) -> Array<byte> errors {
   // all the unchecked foreign calls stay in here
   // callers see normal Yinz types and the errors system
 }

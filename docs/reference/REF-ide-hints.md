@@ -41,14 +41,14 @@ Every semantic the compiler figures out from context gets a muted hint:
 
 | Domain | Example source | Muted hint shows |
 |---|---|---|
-| Variable type inference | `let x = 42` | `: int` after `x` |
+| Variable type inference | `let x = 42` | `: Int` after `x` |
 | Function param types (where context allows) | depends on call site | the figured-out type |
 | Ownership at call sites (informational only — no body-level syntax) | `foo(player)` | `share` or `lend` keyword after `player` — purely teaching; click jumps to foo's signature where the modifier IS declared |
 | Wait points on I/O | `db.fetch()` | `wait` keyword before the call |
-| Array that never grows | `let scores: array<int> = [90, 72]` | cyan dotted underline on `array` (see [Replacement hints](#replacement-hints-the-underlined-token)) |
+| Array that never grows | `let scores: Array<Int> = [90, 72]` | cyan dotted underline on `Array` (see [Replacement hints](#replacement-hints-the-underlined-token)) |
 | Binding that never changes | `let attempts = 3` | cyan dotted underline on `let` (same section) |
 | Lifetimes | always figured out | the lifetime (only shown on request — usually hidden) |
-| Allocator | inside `arena scratch { let a: array<int> = [] }` | `.in(scratch)` after the constructor |
+| Allocator | inside `arena scratch { let a: Array<Int> = [] }` | `.in(scratch)` after the constructor |
 | Implicit copy points | trivially-copyable values | `.copy` where the copy happens |
 
 This list extends as new compiler-figured-out semantics emerge (effect annotations, capability tracking, etc.). New entries follow the same protocol — no exceptions.
@@ -73,8 +73,8 @@ Most muted hints complete to syntactically-valid Yinz the developer COULD have t
 Example (typeable hint — Addition category):
 
 ```ynz
-let x = 42                    // muted ": int (from 42)" after x
-                              // click → becomes `let x: int = 42`
+let x = 42                    // muted ": Int (from 42)" after x
+                              // click → becomes `let x: Int = 42`
 ```
 
 Example (informational hint — Ownership at call sites):
@@ -127,12 +127,12 @@ One canonical explanation lives in one source (typically the rule file or design
 When the compiler already uses a stricter form than the one you wrote, the IDE adds no text. It puts a cyan dotted underline on the token you wrote (red stays for errors and yellow for lint):
 
 ```
-function entrypoint() -> nothing {
-  let highScores: array<int> = [90, 72, 85]
+function entrypoint() -> Nothing {
+  let highScores: Array<Int> = [90, 72, 85]
 }
 ```
 
-Both the `let` and the `array` are underlined, because nothing reassigns `highScores` and nothing grows it.
+Both the `let` and the `Array` are underlined, because nothing reassigns `highScores` and nothing grows it.
 
 The underline colour is the theme colour `yinz.lessonUnderline` (`#4FD1E8` in dark themes, `#0E7490` in light themes). To change it, set it in `workbench.colorCustomizations`:
 
@@ -141,15 +141,15 @@ The underline colour is the theme colour `yinz.lessonUnderline` (`#4FD1E8` in da
 ```
 
 - **Hover** an underlined token: the three-part explanation (WHAT, WHAT INSTEAD, WHY) for that promotion.
-- **Click** the lightbulb on it: the *Write 'const' instead of 'let'* / *Write 'fixed' instead of 'array'* refactor rewrites exactly that token. After both:
+- **Click** the lightbulb on it: the *Write 'const' instead of 'let'* / *Write 'Fixed' instead of 'Array'* refactor rewrites exactly that token. After both:
 
 ```
-function entrypoint() -> nothing {
-  const highScores: fixed<int> = [90, 72, 85]
+function entrypoint() -> Nothing {
+  const highScores: Fixed<Int> = [90, 72, 85]
 }
 ```
 
-The rewrite is optional: the program already behaves this way. A binding that does change has no underline and no rewrite: a `let attempts = 3` followed by `attempts = 4`, or an `array` that gets `highScores.add(60)`.
+The rewrite is optional: the program already behaves this way. A binding that does change has no underline and no rewrite: a `let attempts = 3` followed by `attempts = 4`, or an `Array` that gets `highScores.add(60)`.
 
 Protocol surface: the semantic-token modifier `promotable`, hover on the token, and a `refactor.rewrite` code action. No inlay hint is sent for these two domains.
 
@@ -194,7 +194,7 @@ M5 will wire data to 5 of the 9 registry `[[muted_hint_domain]]` entries. The re
 | `variable_type` | **Firing** — `variable_type_hints` pass in `inlay_hint_passes.rs` | Every unannotated `let x = expr` | N/A |
 | `ownership_call_site` | **Firing** — `ownership_call_site_hints` pass | Every call site with a typed callee signature | N/A |
 | `copy_points` | **Firing** — `copy_point_hints` pass | Trivially-copyable arg still live after call | N/A |
-| `array_to_fixed_promotion` | **Firing** as a token marker (no inlay hint) — `array_to_fixed_promotion_hints` pass | `let x: array<T> = [...]` with no mutation/growth detected | N/A |
+| `array_to_fixed_promotion` | **Firing** as a token marker (no inlay hint) — `array_to_fixed_promotion_hints` pass | `let x: Array<T> = [...]` with no mutation/growth detected | N/A |
 | `let_to_const_promotion` | **Firing** as a token marker (no inlay hint) — `let_to_const_promotion_hints` pass | `let x = ...` with no reassignment/mutation/`.lend` detected | N/A |
 | `function_param_type` | **Protocol-only** (empty) | First-class lambdas with inferred param types | [`registry/features.toml`](../../registry/features.toml) `lsp-inlay-hint-function-param-type` |
 | `wait_points` | **Protocol-only** (empty) | `wait`-auto-insertion analysis (I/O suspension) | [`registry/features.toml`](../../registry/features.toml) `lsp-inlay-hint-wait-points` |

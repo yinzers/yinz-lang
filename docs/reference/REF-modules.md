@@ -23,11 +23,11 @@ Every `.ynz` file is a module. Everything inside it is private by default. Add `
 // services/users.ynz
 
 export shape User {
-  name: string
-  email: string
+  name: String
+  email: String
 }
 
-export function fetchUser(id: string) -> User errors {
+export function fetchUser(id: String) -> User errors {
   let response = request.get(`https://api.example.com/users/${id}`)
   return response.json()
 }
@@ -38,7 +38,7 @@ export function createUser(data: UserInput) -> User errors {
 }
 
 // Private — only this file can use this
-function validateEmail(email: string) -> boolean {
+function validateEmail(email: String) -> Boolean {
   return email.contains(`@`)
 }
 ```
@@ -211,15 +211,15 @@ Two files can import from each other. The compiler handles it automatically.
 import { Order } from `services/orders`
 
 export shape User {
-  name: string
-  orders: array<Order>
+  name: String
+  orders: Array<Order>
 }
 
 // services/orders.ynz
 import { User } from `services/users`
 
 export shape Order {
-  total: number
+  total: Number
   buyer: User
 }
 ```

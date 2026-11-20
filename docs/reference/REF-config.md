@@ -65,10 +65,10 @@ STRIPE_KEY=
 Reading env vars in code:
 
 ```
-let dbUrl = env.get(`DATABASE_URL`)              // -> maybe<string> — might not be set
+let dbUrl = env.get(`DATABASE_URL`)              // -> Maybe<String> — might not be set
 let foundPort = env.get(`PORT`)                  // a maybe: the text, or nothing
 let port = foundPort.or(`3000`)                  // a plain string, `3000` if PORT isn't set
-let secret = env.get(`SECRET_KEY`)               // -> maybe<string>
+let secret = env.get(`SECRET_KEY`)               // -> Maybe<String>
 
 if (dbUrl.exists()) {
   let db = database.connect(dbUrl.value)
@@ -99,7 +99,7 @@ setLogLevel(logLevel)
 Runtime behavior is configured in code, in your `entrypoint()` function, using `set` functions. Type `set` in autocomplete to see all available options.
 
 ```
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   setShutdownTimeout(duration.minutes(5))
   setShutdownHandler(signal => { ... })
   setErrorHandler(error => { ... })
@@ -121,7 +121,7 @@ What the settings do:
 Runtime settings are code, so they can branch on environment variables, command-line arguments, or any other condition:
 
 ```
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   let foundEnvironment = env.get(`ENV`)
   let environment = foundEnvironment.or(`development`)
 
@@ -145,13 +145,13 @@ A static config file can't branch. Code can.
 
 ```
 // Web server — time to finish open requests before shutting down, more threads
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   setShutdownTimeout(duration.seconds(30))
   setThreadPoolSize(16)
 }
 
 // Game — fast shutdown but save first
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   setShutdownTimeout(duration.seconds(5))
   setShutdownHandler(signal => {
     wait saveGameState()
@@ -160,7 +160,7 @@ function entrypoint() -> nothing {
 }
 
 // Long-running simulation — give it time to save its progress
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   setShutdownTimeout(duration.minutes(10))
   setShutdownHandler(signal => {
     log(`Saving simulation progress...`)
@@ -169,7 +169,7 @@ function entrypoint() -> nothing {
 }
 
 // Quick command-line script — nothing to clean up on shutdown
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   setShutdownTimeout(duration.seconds(0))
 }
 ```

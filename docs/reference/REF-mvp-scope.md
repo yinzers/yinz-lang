@@ -28,7 +28,7 @@ The granular model exists because (a) each version has predictable scope, (b) ea
 ### Registry ([`registry/features.toml`](../../registry/features.toml))
 - [ ] New keyword → `[[keyword]]` entry with `token`, `since`, `description`
 - [ ] New banned jargon (term we reject from error messages) → `[[banned_jargon]]` entry
-- [ ] New primitive method on int/float/string/bool → `[[primitive_intrinsic]]` entry
+- [ ] New primitive method on Int/Float/String/Boolean → `[[primitive_intrinsic]]` entry
 - [ ] New muted-hint domain (IDE inline annotation) → `[[muted_hint_domain]]` entry with `placement_category`, `example_source`, `example_hint_rendered`
 - [ ] New lint/suggestion rule → `[[lint_rule]]` entry (v0.4+ when the linting tier ships)
 - [ ] Any feature deliberately deferred to a future version → `[[deferred_language_feature]]` or `[[deferred_tooling_feature]]` entry so it can never be silently forgotten
@@ -78,9 +78,9 @@ The absolute minimum: the language compiles and runs a hello-world program. No s
 - Shapes (data fields plus contract signatures; behavior lives in standalone functions)
 - Options (named value sets, replaces enums)
 - Unions (`shape Foo = A | B | C`)
-- Maybe types (`maybe<T>`, `none`, `.exists()`, `.value`, `.or(default)`)
-- Generics — both **type generics** (`array<T>`, `map<K,V>`) AND **function generics** (`function foo<T>(...)`)
-- Collections (`fixed<T>`, `array<T>`, `map<K,V>`) with bracket sugar for `.get()` / `.set()`
+- Maybe types (`Maybe<T>`, `none`, `.exists()`, `.value`, `.or(default)`)
+- Generics — both **type generics** (`Array<T>`, `Map<K,V>`) AND **function generics** (`function foo<T>(...)`)
+- Collections (`Fixed<T>`, `Array<T>`, `Map<K,V>`) with bracket sugar for `.get()` / `.set()`
 - Control flow (`if`, multi-case `if`, `for`, `while`, early returns)
 - Strings (with interpolation, indexing via code-point / byte / grapheme)
 - Scope (block scoping, file-level constants)
@@ -88,8 +88,8 @@ The absolute minimum: the language compiles and runs a hello-world program. No s
 - Type conversion (dot methods, no `as` keyword)
 - Errors (`errors` keyword, flow-sensitive auto-propagation)
 - Ownership (`share`/`lend`/`give`/`copy`/`.freeze`)
-- Numeric types (`number` = decimal128 default, `number<N>` up to 4096, `float` = f64, `int` = i64)
-- Boolean type (`boolean`, literals `true` / `false`)
+- Numeric types (`Number` = decimal128 default, `Number<N>` up to 4096, `Float` = f64, `Int` = i64)
+- Boolean type (`Boolean`, literals `true` / `false`)
 - Concurrency keywords parse + type-check (`wait`, `background`) — runs SEQUENTIALLY (auto-parallelization comes in v0.3)
 - Iterables — built-in iteration over collections (`for (x in arr)`). Custom `follows Iterable<T>` is v1.0.
 - Modules (`import`, `export`, root-relative paths, aliases with `as`, duplicate-name compile error)
@@ -199,7 +199,7 @@ Single source of truth for all feature inventories. [`registry/features.toml`](.
 - Structured `Diagnostic.code` + `Diagnostic.data` fields; doc-comment hover enrichment
 
 **3 compiler correctness bug-fixes**:
-- Hidden-field default eval: `hidden bar: string = "default"` now evaluates the default correctly (was null-init)
+- Hidden-field default eval: `hidden bar: String = "default"` now evaluates the default correctly (was null-init)
 - Dynamic-dispatch call-site coercion: passing `ConcreteFoo` to `dynamic Foo` param now accepted + vtable-dispatches correctly (was typeck error)
 - UFCS const-lend check: `const p; p.heal(20)` where `heal: lend self` now errors (parity with function-call form which already errored)
 
@@ -230,10 +230,10 @@ The compiler's automatic dependency-graph analysis that schedules independent op
 
 ### Auto-SoA layout transformation (locked design, deferred from v0.1)
 
-The compiler auto-transforms `array<Shape>` storage from Array-of-Structs to Struct-of-Arrays when a hot loop accesses only 1-2 fields, enabling SIMD vectorization and improving cache locality. Same external API (`arr[i].field` works identically); the memory layout is the only thing that changes.
+The compiler auto-transforms `Array<Shape>` storage from Array-of-Structs to Struct-of-Arrays when a hot loop accesses only 1-2 fields, enabling SIMD vectorization and improving cache locality. Same external API (`arr[i].field` works identically); the memory layout is the only thing that changes.
 
-- **Why this version**: SoA analysis is a substantial codegen optimization pass — requires the ownership system to be working (M4, v0.1), the `array<T>` implementation to be stable (v0.1), and an optimization-pass framework that can decide per-array (v0.2 LSP work surfaces some of this). v0.1 ships the basic `shape`/`array` infrastructure; v0.2 ships LSP/watch/fmt; v0.3 is the right slot for ambitious cross-cutting compiler analyses (it's also when auto-parallelization lands).
-- **Substitute used pre-this-version**: Default Array-of-Structs layout. Manual SoA via parallel `array<T>` of each field is possible if a user really needs it pre-v0.3, but no compiler help.
+- **Why this version**: SoA analysis is a substantial codegen optimization pass — requires the ownership system to be working (M4, v0.1), the `Array<T>` implementation to be stable (v0.1), and an optimization-pass framework that can decide per-array (v0.2 LSP work surfaces some of this). v0.1 ships the basic `shape`/`array` infrastructure; v0.2 ships LSP/watch/fmt; v0.3 is the right slot for ambitious cross-cutting compiler analyses (it's also when auto-parallelization lands).
+- **Substitute used pre-this-version**: Default Array-of-Structs layout. Manual SoA via parallel `Array<T>` of each field is possible if a user really needs it pre-v0.3, but no compiler help.
 - **Locked design**: Shipped in v0.3-M5 — see [`docs/internal/implementation/IMP-collections.md` — "Auto-SoA layout (v0.3-M5)"](../internal/implementation/IMP-collections.md#auto-soa-layout-v03-m5)
 
 > **⚠️ DO NOT FORGET** (checklist at top): new `[[muted_hint_domain]]` registry entries for `background_routing` and `channel_capacity` and `auto_arc`; `wait_points` domain activated (was protocol-only); `wait`/`background` hover docs updated (behavior changes from sequential); new lint rules `array-using-soa-layout` + `cross-thread-fields-not-padded` in registry; WHAT/WHAT-INSTEAD/WHY for all new errors (lend-across-thread, wait-on-non-may-block, channel-closed, large-copy warning); SoA debugger DAP integration; extension bump + screenshots for each new IDE surface; `pirates-roster` demo extended per milestone; one error gallery file per work item, named `<version>_<slug>_errors.ynz` and registered in `crates/ynz-driver/tests/error_galleries.rs`. Roadmap: [`.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md`](../../.claude/planning/active/2026-05-21-v0-3-concurrency-perf/roadmap.md).
@@ -248,7 +248,7 @@ The compiler starts emitting the third severity tier — suggestions — during 
 
 No separate `ynz lint` command — the compiler IS the linter. Customization (config file) comes in v1.x.
 
-**Co-shipping: `set<T>` core collection** — the unique-value collection sibling of `map<K,V>`, plus the `array.unique()` method and the `array<T> → set<T>` auto-promotion. Designed in [`docs/internal/implementation/IMP-collections.md`](../internal/implementation/IMP-collections.md). **Why v0.4 specifically:** it's the last language-feature version before the stdlib sequence (v0.5+) begins — so it lands before any stdlib leans on it — AND it's the *earliest* slot where set can ship COMPLETE rather than as a half-feature: its `prefer-set-for-membership` lint + muted hint need this version's linting tier, and its `array→set` auto-promotion codegen needs v0.3's whole-program analysis framework. Shipping the type earlier (the v0.1 collection infra exists) would mean a build-twice: type now, teaching surfaces bolted on later. v0.4 is where all four surfaces (type + auto-promotion + lint + hint) can exist at once.
+**Co-shipping: `set<T>` core collection** — the unique-value collection sibling of `Map<K,V>`, plus the `array.unique()` method and the `Array<T> → set<T>` auto-promotion. Designed in [`docs/internal/implementation/IMP-collections.md`](../internal/implementation/IMP-collections.md). **Why v0.4 specifically:** it's the last language-feature version before the stdlib sequence (v0.5+) begins — so it lands before any stdlib leans on it — AND it's the *earliest* slot where set can ship COMPLETE rather than as a half-feature: its `prefer-set-for-membership` lint + muted hint need this version's linting tier, and its `array→set` auto-promotion codegen needs v0.3's whole-program analysis framework. Shipping the type earlier (the v0.1 collection infra exists) would mean a build-twice: type now, teaching surfaces bolted on later. v0.4 is where all four surfaces (type + auto-promotion + lint + hint) can exist at once.
 
 **Co-shipping candidate: `--release` flag** — LLVM `-O3`, strip debug info, disable dev-only flags. Locked direction; see [`docs/internal/scratchpad/SCRATCH-future-release-mode.md`](../internal/scratchpad/SCRATCH-future-release-mode.md). May ship in v0.4 alongside the linting work, or slip to a later perf-focused slot if scope demands.
 
@@ -511,8 +511,8 @@ User-defined types can `follows Add`, `follows Subtract`, etc. and use `+`, `-`,
 
 User types can implement `Iterable<T>` or `FallibleIterable<T>` and be iterated with `for`.
 
-- **Why this version**: Built-in `for` over collections (`array`, `fixed`, `map`, ranges) works without this. Built-in `for` over fallible iterables like `file.lines()` works in v0.5. Custom user types implementing the contracts is the extension that ships at v1.0.
-- **Substitute used pre-v1.0**: Users with iterable-like data expose a `.items()` method returning `array<T>` and `for (item in foo.items())`. Lossy compared to true iteration (materializes the whole collection) but works.
+- **Why this version**: Built-in `for` over collections (`Array`, `Fixed`, `Map`, ranges) works without this. Built-in `for` over fallible iterables like `file.lines()` works in v0.5. Custom user types implementing the contracts is the extension that ships at v1.0.
+- **Substitute used pre-v1.0**: Users with iterable-like data expose a `.items()` method returning `Array<T>` and `for (item in foo.items())`. Lossy compared to true iteration (materializes the whole collection) but works.
 - **Locked design**: See [`docs/internal/implementation/IMP-iterables.md`](../internal/implementation/IMP-iterables.md) and [`docs/reference/REF-iterables.md`](REF-iterables.md)
 
 ### Deprecation marking (locked design, deferred from v0.1)
@@ -595,7 +595,7 @@ Headline entries with full rationale:
 Angle-bracket-parameterized sized integers (`int<8>`, `int<16>`, `int<32>`, `uint<8>`, `uint<16>`, `uint<32>`, `uint<64>`, etc.) and signed equivalents.
 
 - **Why v2+**: Requires const generics (numeric values as type parameters) — a meaningful compiler sub-project that took Rust years to land well. v0.1 users have no legitimate need: FFI is deferred, binary protocols can use byte arrays + stdlib helpers.
-- **Substitute used pre-v2**: Use plain `int` (= i64) for all whole numbers. Covers ±9.2 × 10^18 — bigger than any count a human writes by hand. Precision loss vs sized variants only matters at FFI boundaries, which aren't in v0.1.
+- **Substitute used pre-v2**: Use plain `Int` (= i64) for all whole numbers. Covers ±9.2 × 10^18 — bigger than any count a human writes by hand. Precision loss vs sized variants only matters at FFI boundaries, which aren't in v0.1.
 - **Trigger to land**: Either (a) FFI work begins, OR (b) a real user workload needs to interop with a binary protocol that v0.1's byte-array helpers can't ergonomically handle.
 - **Locked design**: See [`docs/internal/implementation/IMP-numeric-types.md`](../internal/implementation/IMP-numeric-types.md) and [`docs/reference/REF-numeric-types.md`](REF-numeric-types.md)
 - **Registry entries**: `[[deferred_language_feature]]` names `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64` — DONE M1 P5a
@@ -604,18 +604,18 @@ Angle-bracket-parameterized sized integers (`int<8>`, `int<16>`, `int<32>`, `uin
 
 Single-precision (32-bit) IEEE 754 binary float.
 
-- **Why v2+**: Only essential for GPU compute and ML workloads (both v2+). For graphics/physics in v0.1, `float` (= f64) is overkill but works fine.
-- **Substitute used pre-v2**: Use `float` (f64) for all binary-float math. Slower than f32 on SIMD-heavy workloads but correct.
+- **Why v2+**: Only essential for GPU compute and ML workloads (both v2+). For graphics/physics in v0.1, `Float` (= f64) is overkill but works fine.
+- **Substitute used pre-v2**: Use `Float` (f64) for all binary-float math. Slower than f32 on SIMD-heavy workloads but correct.
 - **Trigger to land**: GPU dispatch begins OR ML stdlib begins.
 - **Locked design**: See [`docs/internal/implementation/IMP-numeric-types.md`](../internal/implementation/IMP-numeric-types.md) and [`docs/reference/REF-numeric-types.md`](REF-numeric-types.md)
 - **Registry entries**: `[[deferred_language_feature]]` names `f32`, `f64` — DONE M1 P5a
 
 ### Arbitrary-precision decimal (locked design, deferred from v0.1)
 
-`number` precision larger than 4096 significant digits — true unbounded decimal arithmetic.
+`Number` precision larger than 4096 significant digits — true unbounded decimal arithmetic.
 
 - **Why v2+**: 4096 digits handles every realistic scientific calculation (gravitational wave numerics top out at ~200 digits; even number-theory research rarely exceeds 2000). Unbounded precision means unbounded memory per value and unbounded per-operation time — breaks the language's "predictable performance" character. Real arbitrary-precision libraries (GMP, MPFR) are massive projects.
-- **Substitute used pre-v2**: Use `number<N>` with N up to 4096. Compile error if a user tries `number<5000>` — error message explicitly points to this deferral.
+- **Substitute used pre-v2**: Use `Number<N>` with N up to 4096. Compile error if a user tries `Number<5000>` — error message explicitly points to this deferral.
 - **Trigger to land**: A real user workload genuinely exceeds 4096 digits AND can't be restructured to fit. This is a deliberately high bar.
 - **Locked design**: See [`docs/internal/implementation/IMP-numeric-types.md`](../internal/implementation/IMP-numeric-types.md) and [`docs/reference/REF-numeric-types.md`](REF-numeric-types.md)
 - **Registry entries**: No token reserved yet — no `[[deferred_language_feature]]` entry. Tracked in this doc only until a token/syntax is reserved.
@@ -644,7 +644,7 @@ The `gpu` call-site keyword and kernel compilation to GPU shader / compute langu
 
 Tensors, neural network primitives, autodiff, optimizers.
 
-- **Why v2+**: v0.1 stdlib focus is general-purpose. ML requires its own deep design (compatible with `float`/`f32`, GPU dispatch, etc.) and is a v2+ concern.
+- **Why v2+**: v0.1 stdlib focus is general-purpose. ML requires its own deep design (compatible with `Float`/`f32`, GPU dispatch, etc.) and is a v2+ concern.
 - **Substitute used pre-v2**: None. ML workloads run in Python until then.
 - **Trigger to land**: v2+ AND GPU dispatch lands.
 - **Locked design**: See [`docs/internal/scratchpad/SCRATCH-stdlib-ml.md`](../internal/scratchpad/SCRATCH-stdlib-ml.md)

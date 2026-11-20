@@ -18,7 +18,7 @@ Yinz runs code concurrently for you. *Concurrently* means several tasks make pro
 Two keywords and one type are the whole toolkit:
 - `wait` — finish something before the next line runs
 - `background` — start a task that keeps going after this function returns
-- `channel<T>` — pass values from one task to another safely
+- `Channel<T>` — pass values from one task to another safely
 
 ---
 
@@ -68,10 +68,10 @@ Hovering over any line shows: "Runs concurrently with lines X and Y. Waits for: 
 The compiler uses the ownership words you already write (`share`, `lend`) to tell reads from writes. There are no new rules to learn.
 
 ```
-function getUser(share db: Database, id: string) -> User errors
+function getUser(share db: Database, id: String) -> User errors
 //               ^^^^^ share = only reads — safe to run alongside other reads
 
-function saveUser(lend db: Database, user: User) -> nothing errors
+function saveUser(lend db: Database, user: User) -> Nothing errors
 //                ^^^^ lend = may change it — the compiler runs this in the right order
 ```
 
@@ -92,7 +92,7 @@ Most code never needs `wait`. The compiler orders reads and writes from the owne
 **When to use `wait` — ordered side effects:**
 
 ```
-function processOrder(order: Order) -> nothing errors {
+function processOrder(order: Order) -> Nothing errors {
   wait chargePayment(order)          // must complete before anything else
   sendConfirmationEmail(order)       // only runs after payment succeeds
   updateInventory(order)             // runs concurrently with email — fine
@@ -124,7 +124,7 @@ A loop already runs one pass at a time, so this loop would fetch the pages in or
 **When you do NOT need `wait` — data dependencies:**
 
 ```
-function buildProfile(id: string) -> Profile errors {
+function buildProfile(id: String) -> Profile errors {
   let user = fetchUser(id)
   let permissions = fetchPermissions(user)       // depends on user — auto-waits
   let profile = buildProfile(user, permissions)  // depends on both — auto-waits
@@ -169,11 +169,11 @@ If you store the result of `background`, you get a **handle**: a line you can us
 
 ## Channels — sending values between tasks
 
-A channel carries values of one type from one task to another. You create one with `channel<T>()`, where `T` is the type of value it carries:
+A channel carries values of one type from one task to another. You create one with `Channel<T>()`, where `T` is the type of value it carries:
 
 ```ynz
-let scores: channel<int> = channel<int>()        // holds up to 64 values (the default)
-let names: channel<string> = channel<string>(8)  // holds up to 8 values
+let scores: Channel<Int> = Channel<Int>()        // holds up to 64 values (the default)
+let names: Channel<String> = Channel<String>(8)  // holds up to 8 values
 ```
 
 The number is the channel's **capacity** — how many values it can hold at once. Leave the parens empty and you get the default of 64. The IDE shows the default as a muted `64` hint inside the empty parens; click it to write `64` into your source.
@@ -181,14 +181,14 @@ The number is the channel's **capacity** — how many values it can hold at once
 One task puts values in with `.send(value)`. Another task takes them out with `.receive()`:
 
 ```ynz
-function relayScores(lend wire: channel<int>) -> nothing {
+function relayScores(lend wire: Channel<Int>) -> Nothing {
   wire.send(2)
   wire.send(5)
   wire.send(3)
 }
 
-function entrypoint() -> nothing {
-  let wire: channel<int> = channel<int>(1)
+function entrypoint() -> Nothing {
+  let wire: Channel<Int> = Channel<Int>(1)
   background relayScores(wire)
   let first = wire.receive()
   let firstScore = first.or(0)
@@ -203,7 +203,7 @@ function entrypoint() -> nothing {
 
 `relayScores` runs as a background task and puts three scores into the channel. `entrypoint` takes them out one at a time. If the channel is empty when you call `.receive()`, your task pauses until a value arrives. You never write locking or waiting code — the channel does it for you.
 
-**`.receive()` gives you a `maybe<T>`, not a plain `T`.** A channel can be closed (see "Closing a channel" below). Once it is closed and empty, `.receive()` returns `none` instead of waiting forever. So you read a delivery the way you read any `maybe` value: `.or(fallback)` when you just want a default, or `.exists()` and `.value` when you need to know the stream has ended.
+**`.receive()` gives you a `Maybe<T>`, not a plain `T`.** A channel can be closed (see "Closing a channel" below). Once it is closed and empty, `.receive()` returns `none` instead of waiting forever. So you read a delivery the way you read any `Maybe` value: `.or(fallback)` when you just want a default, or `.exists()` and `.value` when you need to know the stream has ended.
 
 **A channel is the one value you can hand to a background task and keep using yourself.** Both sides share the same channel safely — that is the point of a channel. (Every other value must be given away or copied — see "Ownership with background tasks" below.)
 
@@ -215,44 +215,44 @@ In the example above the capacity is 1: `relayScores` sends the first score, the
 
 **A paused producer is backpressure working correctly, not a freeze.** The producer isn't stuck. It is waiting for the receiver to catch up, and it continues the moment a slot opens. Without the limit, a fast producer would quietly fill up memory until the program crashed.
 
-Need more room? Pass a bigger number: `channel<int>(10000)`. There is deliberately no "unlimited" option.
+Need more room? Pass a bigger number: `Channel<Int>(10000)`. There is deliberately no "unlimited" option.
 
 ### The rules channels follow
 
-**The value type is fixed when you create the channel.** A `channel<int>` carries `int` values only:
+**The value type is fixed when you create the channel.** A `Channel<Int>` carries `Int` values only:
 
 ```
 wire.send(`three`)
-// COMPILE ERROR: This channel carries `int` values, but you're sending `string`.
-// Send a `int` value, or create a `channel<string>` for this data.
+// COMPILE ERROR: This channel carries `Int` values, but you're sending `String`.
+// Send an `Int` value, or create a `Channel<String>` for this data.
 ```
 
 **The capacity must be at least 1:**
 
 ```
-let wire: channel<int> = channel<int>(0)
+let wire: Channel<Int> = Channel<Int>(0)
 // COMPILE ERROR: A channel's capacity must be at least 1, but got 0.
-// Use a positive capacity: `channel<int>(64)`. For very large buffering, pass a
+// Use a positive capacity: `Channel<Int>(64)`. For very large buffering, pass a
 // large explicit number — there is deliberately no unbounded channel.
 ```
 
 **A channel operation gets its own line.** `.send()` and `.receive()` can pause your task, so each one must be its own statement — `wire.send(5)` on its own line, or `let value = wire.receive()`. Putting one inside a bigger expression is a compile error that tells you to move it out into a named variable first.
 
-**A channel can carry these values:** `int`, `float`, `boolean`, `string`, `number`, `array<T>`, and `map<K, V>`. Sending a `shape` value isn't supported yet — the compile error suggests sending its fields as separate values and building the shape again on the receiving side.
+**A channel can carry these values:** `Int`, `Float`, `Boolean`, `String`, `Number`, `Array<T>`, and `Map<K, V>`. Sending a `shape` value isn't supported yet — the compile error suggests sending its fields as separate values and building the shape again on the receiving side.
 
 ### Closing a channel
 
 A producer tells the other side "nothing more is coming" with `.close()`:
 
 ```ynz
-function relayScores(lend wire: channel<int>) -> nothing {
+function relayScores(lend wire: Channel<Int>) -> Nothing {
   wire.send(2)
   wire.send(5)
   wire.send(3)
   wire.close()
 }
 
-function tallyScores(lend wire: channel<int>) -> int {
+function tallyScores(lend wire: Channel<Int>) -> Int {
   let total = 0
   let stillOpen = true
   while (stillOpen) {
@@ -265,8 +265,8 @@ function tallyScores(lend wire: channel<int>) -> int {
   return total
 }
 
-function entrypoint() -> nothing {
-  let wire: channel<int> = channel<int>(4)
+function entrypoint() -> Nothing {
+  let wire: Channel<Int> = Channel<Int>(4)
   background relayScores(wire)
   let total = tallyScores(wire)
   print(`total: ${total.toString()}`)
@@ -276,7 +276,7 @@ function entrypoint() -> nothing {
 After `close()`:
 
 - `.receive()` still delivers everything that was already sent, in order, and then returns `none`. That `none` is how `tallyScores` knows the game is over — no counting, no timers.
-- `.send()` is refused with a channel-closed error. Because `send()` is declared `-> nothing errors`, you can check it with `.failed()` if you want to notice a late send:
+- `.send()` is refused with a channel-closed error. Because `send()` is declared `-> Nothing errors`, you can check it with `.failed()` if you want to notice a late send:
 
 ```ynz
 let late = wire.send(9)
@@ -303,10 +303,10 @@ let h = background doubler(makeWire())
 
 ### Sending an array or a map gives it away
 
-An `int`, a `string`, or a `number` is copied into the channel — your variable keeps working after the send. An `array<T>` or a `map<K, V>` is different: the channel hands the *same* value to whichever task receives it, so `send()` gives it away and the compiler refuses any later use of that variable:
+An `Int`, a `String`, or a `Number` is copied into the channel — your variable keeps working after the send. An `Array<T>` or a `Map<K, V>` is different: the channel hands the *same* value to whichever task receives it, so `send()` gives it away and the compiler refuses any later use of that variable:
 
 ```ynz
-let rows: array<int> = [1, 2, 3]
+let rows: Array<Int> = [1, 2, 3]
 wire.send(rows)
 print(rows.count())
 // COMPILE ERROR: `rows` was sent into `wire` and cannot be used here — `send()` gave it away.
@@ -316,7 +316,7 @@ print(rows.count())
 
 Two more rules follow from the same idea:
 
-- A parameter you send must be declared `give` on its function, so the caller's variable is given up too. Without the word, the compile error names the function and the one-word fix: `function producer(lend wire: channel<array<int>>, give rows: array<int>)`.
+- A parameter you send must be declared `give` on its function, so the caller's variable is given up too. Without the word, the compile error names the function and the one-word fix: `function producer(lend wire: Channel<Array<Int>>, give rows: Array<Int>)`.
 - You can only send something you own whole. A field (`bucket.rows`), an item (`rows[0]`), the loop variable of a `for`, or a value built from other named values still belongs to something else here — the compile error tells you to send `.copy()` of it instead.
 
 ---
@@ -326,14 +326,14 @@ Two more rules follow from the same idea:
 Storing the result of `background` gives you a **handle** — a two-way line to the running task:
 
 ```ynz
-function gradeProspect(lend requests: channel<int>) -> int errors {
+function gradeProspect(lend requests: Channel<Int>) -> Int errors {
   let command = requests.receive()
   let jerseyNumber = command.or(0)
   return jerseyNumber * 2
 }
 
-function entrypoint() -> nothing {
-  let requests: channel<int> = channel<int>(4)
+function entrypoint() -> Nothing {
+  let requests: Channel<Int> = Channel<Int>(4)
   let scout = background gradeProspect(requests)
   scout.send(21)
   let graded = scout.receive()
@@ -342,7 +342,7 @@ function entrypoint() -> nothing {
 }
 ```
 
-**Sending TO the task:** `scout.send(21)` delivers into the **first `channel<T>` parameter** of the function you started. Here that's `requests`, so inside the task, `requests.receive()` reads what you sent. That's the whole rule: the task reads its messages from its first channel parameter. There is no hidden mailbox.
+**Sending TO the task:** `scout.send(21)` delivers into the **first `Channel<T>` parameter** of the function you started. Here that's `requests`, so inside the task, `requests.receive()` reads what you sent. That's the whole rule: the task reads its messages from its first channel parameter. There is no hidden mailbox.
 
 Because of that, the function you start must take a channel parameter to receive messages:
 
@@ -350,7 +350,7 @@ Because of that, the function you start must take a channel parameter to receive
 let counter = background slowCount()
 counter.send(7)
 // COMPILE ERROR: This task takes no channel — it has no way to receive messages.
-// Add a `channel<T>` parameter to the task's function and pass a channel at the
+// Add a `Channel<T>` parameter to the task's function and pass a channel at the
 // spawn: `let h = background worker(commands)` — `h.send(v)` then feeds that channel.
 ```
 
@@ -361,7 +361,7 @@ One more rule: the handle form needs a function that can pause (one that uses `w
 **When the handle goes out of scope, the task stops.** A handle belongs to the block it was declared in. When that block ends (or the function returns), the task stops at its next pause, and anything it would have done after that never runs:
 
 ```ynz
-function worker() -> int errors {
+function worker() -> Int errors {
   wait sleep(20)
   print(`worker: after first sleep`)
   wait sleep(20)
@@ -369,7 +369,7 @@ function worker() -> int errors {
   return 42
 }
 
-function entrypoint() -> nothing {
+function entrypoint() -> Nothing {
   if (true) {
     let h = background worker()
     print(`leaving the block`)
@@ -394,7 +394,7 @@ The compiler works out whether to give away or copy each argument, so you don't 
 **A function whose parameter is `share` cannot be started with `background`:**
 
 ```ynz
-function processData(share data: Data) -> nothing { ... }
+function processData(share data: Data) -> Nothing { ... }
 
 background processData(data)
 // COMPILE ERROR: Cannot share with a background task.
@@ -406,12 +406,12 @@ background processData(data)
 
 A `share` parameter only works while the original owner still has the value. A background task might still be running after the current function returns and the value is gone. So the function you start with `background` must take its parameters as `give`, or the caller passes a `.copy()` (an independent value the task owns).
 
-**The one exception: `channel<T>` parameters.** A channel is made to be held by two tasks at once, so passing a channel to a background task is always allowed, and you keep using your end afterward. Everything in the channels section above relies on this.
+**The one exception: `Channel<T>` parameters.** A channel is made to be held by two tasks at once, so passing a channel to a background task is always allowed, and you keep using your end afterward. Everything in the channels section above relies on this.
 
 **A union cannot go to a generic parameter of a `background` function.** A task keeps its own copy of a union argument, and it can make that copy only when the function declares the union type. A generic parameter gives the task no union slot to copy into, so the compiler refuses it:
 
 ```ynz
-function eat<T>(held: T) -> nothing { ... }
+function eat<T>(held: T) -> Nothing { ... }
 
 let choice: Circle | Tag = tag
 background eat(choice)
@@ -426,7 +426,7 @@ background eat(choice)
 If you don't use the value after the `background` call, the compiler gives it away (ownership moves to the task):
 
 ```ynz
-function processEvent(give event: WebhookEvent) -> nothing { ... }
+function processEvent(give event: WebhookEvent) -> Nothing { ... }
 
 function handleWebhook(event: WebhookEvent) -> Response errors {
   background processEvent(event)             // event not used after — it is given away
@@ -526,7 +526,7 @@ decided, so you know what is running at the same time.
 ```
 wait           // finish this before the next line
 background     // start a task that keeps going after this function returns
-channel<T>     // pass values between tasks safely
+Channel<T>     // pass values between tasks safely
 ```
 
 Two keywords and one type. Everything else is automatic. The compiler works out which lines

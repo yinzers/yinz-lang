@@ -85,20 +85,20 @@ let path = folder + `/` + filename
 
 ---
 
-## string is a built-in type
+## String is a built-in type
 
-No imports needed. `string` is available everywhere.
+No imports needed. `String` is available everywhere.
 
 ---
 
 ## Safe indexing — brackets are a shortcut for .get()
 
-Use brackets to read one character at a position, just as you do with collections. The result is `maybe<string>`, so a position past the end never crashes your program:
+Use brackets to read one character at a position, just as you do with collections. The result is `Maybe<String>`, so a position past the end never crashes your program:
 
 ```ynz
 let name = `Alice`
-let first = name[0]             // a shortcut for name.get(0) → maybe<string> (`A`)
-let huh = name[100]             // maybe<string> → none (past the end, safe)
+let first = name[0]             // a shortcut for name.get(0) → Maybe<String> (`A`)
+let huh = name[100]             // Maybe<String> → none (past the end, safe)
 
 if (first.exists()) {
   print(first.value)            // A
@@ -118,8 +118,8 @@ You cannot replace a character by its position:
 ```ynz
 let name = `Alice`
 name[0] = `B`
-// COMPILE ERROR: `string` does not support index assignment.
-//   Index assignment works on `array<T>`, `fixed<T>`, and `map<K, V>`.
+// COMPILE ERROR: `String` does not support index assignment.
+//   Index assignment works on `Array<T>`, `Fixed<T>`, and `Map<K, V>`.
 // To change the value, build a new string:
 //   let newName = `B` + name.substring(1)
 // Or give the variable a new value:
@@ -148,9 +148,9 @@ By default, `.get()` and `[n]` count by **code point**. Two more functions count
 
 | Function | Counts by | Returns | Use when |
 |----------|-----------|---------|----------|
-| `.get(n)` or `s[n]` | Code point | `maybe<string>` (1 code point) | Most text work |
-| `.byteAt(n)` | Byte (the raw numbers a file stores, 0–255) | `maybe<int>` | Reading file formats and network data |
-| `.graphemeAt(n)` | Grapheme (one character as a person sees it) | `maybe<string>` (1 grapheme) | Showing text, moving a cursor, emoji |
+| `.get(n)` or `s[n]` | Code point | `Maybe<String>` (1 code point) | Most text work |
+| `.byteAt(n)` | Byte (the raw numbers a file stores, 0–255) | `Maybe<Int>` | Reading file formats and network data |
+| `.graphemeAt(n)` | Grapheme (one character as a person sees it) | `Maybe<String>` (1 grapheme) | Showing text, moving a cursor, emoji |
 
 A *grapheme* is what a person sees as one character. Sometimes it is built from several code points, such as a letter plus an accent mark, or an emoji family made of several people joined together.
 
@@ -205,7 +205,7 @@ let wholeFamily = foundFamily.or(``)         // 👨‍👩‍👧     (the whol
 
 ```ynz
 `Patrick`.contains(`rick`)       // true
-`Patrick`.indexOf(`rick`)        // maybe<int> → 3
+`Patrick`.indexOf(`rick`)        // Maybe<Int> → 3
 `Patrick`.startsWith(`Pat`)      // true
 `Patrick`.endsWith(`ick`)        // true
 ```
@@ -216,7 +216,7 @@ let wholeFamily = foundFamily.or(``)         // 👨‍👩‍👧     (the whol
 `hello`.toUpperCase()            // HELLO
 `HELLO`.toLowerCase()            // hello
 `  hi  `.trim()                  // hi
-`a,b,c`.split(`,`)              // array<string> [`a`, `b`, `c`]
+`a,b,c`.split(`,`)              // Array<String> [`a`, `b`, `c`]
 `hello`.substring(1, 3)          // el
 `hello`.replace(`l`, `r`)        // herro
 ```

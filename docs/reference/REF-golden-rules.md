@@ -73,7 +73,7 @@ The WHY must be **specific to the code in front of you**, not generic. The compi
 >
 > **WHY**: A `const` variable can only give read-only access. If `heal`'s signature declared `lend` (borrow to change it) instead, passing this `const` variable would be a compile error: "`player` is `const` — `heal` needs to mutate it but `const` blocks mutation."
 
-*Why*: People learn at the moment of feedback. A developer who just broke an ownership rule is ready to understand ownership. A developer who just wrote `map<string, number>` with keys that never change is ready to learn why a `shape` is faster. That is the best moment to teach — not in a doc read two weeks earlier, and not after the bug ships. IDE hints bring that coaching to every keystroke, not only to errors.
+*Why*: People learn at the moment of feedback. A developer who just broke an ownership rule is ready to understand ownership. A developer who just wrote `Map<String, Number>` with keys that never change is ready to learn why a `shape` is faster. That is the best moment to teach — not in a doc read two weeks earlier, and not after the bug ships. IDE hints bring that coaching to every keystroke, not only to errors.
 
 Teaching is a core goal of the language. For the full reasoning, the required three-part message format, and the long-term hope that Yinz becomes a language for learning to program, see [REF-teaching-mission.md](REF-teaching-mission.md).
 
@@ -87,7 +87,7 @@ Every keyword, function, and pattern should be readable by a junior developer wh
 ---
 
 **5. Human-readable over programmer jargon**
-`options` not `enum`. `follows` not `implements`. `nothing` not `void`. If a non-programmer could guess a keyword's meaning, the naming is right.
+`options` not `enum`. `follows` not `implements`. `Nothing` not `void`. If a non-programmer could guess a keyword's meaning, the naming is right.
 
 *Why*: The stated goal is to be welcoming to junior developers. Every term that needs computer-science background is a barrier. Plain English words are easy to remember and to guess, and need no prior knowledge.
 
@@ -117,7 +117,7 @@ The default behavior is always the most performant option. Developers opt INTO s
 
 *Why*: Junior developers don't know which choices are fast. If fixed arrays are the default, a map lookup is visibly a different type, and the compiler suggests shapes over maps, then beginner code is fast by default. Experienced developers can always opt in to dynamic behavior when they need it.
 
-**Corollary — automatic upgrade**: when the compiler can prove that a stricter or faster form of your code fits how you actually use it, it uses that form automatically AND shows you the choice. Three things happen: (1) the compiled code silently uses the faster form, (2) a muted IDE hint shows what was chosen (when you could type the explicit form), (3) a lint suggestion teaches you to write the explicit form. Examples: an `array<T>` that never grows is compiled as `fixed<T>`; a `let` that is never reassigned is treated as `const`; hot field-access loops get a faster memory layout; a value shared across threads gets an owner count. Yinz promises to be fast by design, even for beginners, and this pattern delivers it. An upgrade with no teaching is magic, and a suggestion with no upgrade punishes laziness. Yinz does both.
+**Corollary — automatic upgrade**: when the compiler can prove that a stricter or faster form of your code fits how you actually use it, it uses that form automatically AND shows you the choice. Three things happen: (1) the compiled code silently uses the faster form, (2) a muted IDE hint shows what was chosen (when you could type the explicit form), (3) a lint suggestion teaches you to write the explicit form. Examples: an `Array<T>` that never grows is compiled as `Fixed<T>`; a `let` that is never reassigned is treated as `const`; hot field-access loops get a faster memory layout; a value shared across threads gets an owner count. Yinz promises to be fast by design, even for beginners, and this pattern delivers it. An upgrade with no teaching is magic, and a suggestion with no upgrade punishes laziness. Yinz does both.
 
 ---
 
@@ -136,7 +136,7 @@ No method chaining. Each operation gets its own line with a named variable. The 
 ---
 
 **10. Capital letter = type. Everything else = lowercase.**
-Scan any line of code. Capital letter = type. No capital = not a type. Modules are lowercase (`request`, `file`, `math`). Types are PascalCase (`Player`, `Response`, `Date`). Functions, variables, keywords — all lowercase. The same base name can exist in both casings: `Date` is the type, `date` is the module; `Request` is the type, `request` is the module.
+Scan any line of code. Capital letter = type. No capital = not a type. Modules are lowercase (`request`, `file`, `math`). Types are PascalCase, built-in types included (`Player`, `Response`, `Date`, `Int`, `String`, `Array<T>`). Functions, variables, keywords — all lowercase. The same base name can exist in both casings: `Date` is the type, `date` is the module; `Request` is the type, `request` is the module; `Range` is the type, `range` is the function.
 
 *Why*: Zero-cost scannability. Reading code is faster when casing shows what a name is. No context-reading required to tell a module call from a type annotation. Any pair of eyes — experienced or new — instantly knows what category they're looking at.
 
@@ -159,4 +159,4 @@ Borrow from TypeScript/JavaScript wherever possible.
 **13. Fast to type**
 Quick to write without sacrificing readability.
 
-*Why*: Developer experience matters. A language that's pleasant to write gets used. `function` over `fn` is worth the extra characters because it's immediately readable — but ceremony that adds nothing (like `Optional<T>` vs `maybe T`) should be cut.
+*Why*: Developer experience matters. A language that's pleasant to write gets used. `function` over `fn` is worth the extra characters because it's immediately readable — but ceremony that adds nothing (like `Optional<T>` vs `Maybe T`) should be cut.

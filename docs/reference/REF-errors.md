@@ -22,18 +22,18 @@ Some functions can fail. Yinz makes that explicit in the type, and the compiler 
 Add `errors` after the return type:
 
 ```
-function readFile(path: string) -> string errors {
+function readFile(path: String) -> String errors {
   // returns a string on success
   // triggers an error on failure
 }
 
-function deleteFile(path: string) -> nothing errors {
+function deleteFile(path: String) -> Nothing errors {
   // returns nothing on success
   // triggers an error on failure
 }
 
 // No errors keyword = this function can NEVER fail
-function double(x: number) -> number {
+function double(x: Number) -> Number {
   return x * 2
 }
 ```
@@ -157,10 +157,10 @@ function loadConfig() -> Config {
 When you call an `errors` function, the result has these functions and fields until you handle the error (or it goes up to your caller):
 
 ```ynz
-content.failed()           // did it fail? → boolean
+content.failed()           // did it fail? → Boolean
 content.message            // error description (only valid after .failed() check)
-content.suggestions        // array<string> of next steps (may be empty)
-content.trace              // array<Frame> — the call path
+content.suggestions        // Array<String> of next steps (may be empty)
+content.trace              // Array<Frame> — the call path
 content.source             // SourceLoc — where the failure originated
 content.or(`fallback`)     // use this default if failed → T
 ```
@@ -207,16 +207,16 @@ if (content.failed()) {
 Each `Frame` value has:
 
 ```ynz
-frame.file        // string — source file path
-frame.line        // maybe<int> — line number (one-based), none for the truncation sentinel
-frame.function    // string — function name
+frame.file        // String — source file path
+frame.line        // Maybe<Int> — line number (one-based), none for the truncation sentinel
+frame.function    // String — function name
 ```
 
 **`content.source`** is where the failure originated — a single location:
 
 ```ynz
-content.source.file    // string
-content.source.line    // maybe<int>
+content.source.file    // String
+content.source.line    // Maybe<Int>
 ```
 
 The trace captures the full call chain from the function where the error was created up to the current handler.
@@ -225,17 +225,17 @@ The trace captures the full call chain from the function where the error was cre
 
 ---
 
-## `maybe` vs `errors` — two different things
+## `Maybe` vs `errors` — two different things
 
 ```
-maybe<User>        // this user might not exist — absence, not failure
+Maybe<User>        // this user might not exist — absence, not failure
 -> User errors     // this function might fail — failure with a message and call trace
 ```
 
 A function can have both:
 
 ```
-function findUser(id: string) -> maybe<User> errors {
+function findUser(id: String) -> Maybe<User> errors {
   let data = readDatabase(id)                              // might fail (connection error)
   let matches = data.filter(candidate => candidate.id == id)  // every user with this id
   let user = matches.first()                               // might be none (user not found)
