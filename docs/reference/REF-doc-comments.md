@@ -113,6 +113,10 @@ export function greetQuiet(name: String) -> String {
 Use `//` inside a function body. It is always a private note for people reading the file — never a doc comment.
 
 ```ynz
+shape Player {
+  name: String
+}
+
 export function countPlayers(share players: Array<Player>) -> Int {
   // This is only visible when reading this file
   return players.count()
