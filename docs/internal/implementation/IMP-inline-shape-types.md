@@ -13,19 +13,14 @@ metadata:
 
 # Inline / Anonymous Shape Types — Single-Use Structural Types
 
-> **Status**: Shipped — v0.1-polish.
+> **Status**: Shipped.
 > **Spec**: [`docs/reference/REF-types.md`](../../reference/REF-types.md) → "Inline shapes (anonymous types)" section.
-> **Motivation**: defining a one-off shape outside a function just to type a single binding scrolled the eye too far from the use site.
 
 ---
 
-## The problem
-
-Named `shape Foo { ... }` declarations are the right tool when a type is used in multiple places. But single-use types — a config struct for one function, an intermediate result that never leaves a loop — force you to scroll to the top of the file to see a type definition that is only meaningful in one spot. That's a coupling smell: the type's definition is physically separated from the only code that uses it.
-
 ## The rule
 
-`shape Foo { ... }` only makes sense when `Foo` is used more than once. For one-off types, the definition should live at the call site.
+`shape Foo { ... }` is for a type used more than once. A one-off type is defined at its use site, so its definition sits next to the only code that uses it.
 
 ## Syntax
 
@@ -45,7 +40,7 @@ shape Bar { spread: { bid: Number, ask: Number } }
 
 Two `{ a: Int, b: String }` in different files are the same type. Field order does not matter for equivalence.
 
-**Why**: The use case is one-off data definitions. Users expect `{ a: Int, b: Int }` annotated on a `let` to accept any value whose fields match — that's TypeScript's model and the natural expectation. Nominal typing for anonymous shapes would force users to write `shape` declarations anyway to make the types interchangeable.
+**Why**: a `{ a: Int, b: Int }` annotation on a `let` accepts any value whose fields match, so one-off types interchange without a `shape` declaration.
 
 **Named shapes remain nominal**: `shape Foo { a: Int }` and `{ a: Int }` are different types. The user picks one or the other; they don't interconvert.
 
@@ -53,9 +48,9 @@ Two `{ a: Int, b: String }` in different files are the same type. Field order do
 
 Anonymous shapes are NOT a new `Type` variant. Instead, they are **hoisted to synthetic named shapes** with content-based canonical names at the `collect_shapes` pre-pass. Two identical anon shapes get the same canonical name and therefore share the same `ShapeTable` entry.
 
-Canonical name format: `__anon__fieldname__typename__fieldname__typename__...` (fields sorted by name, joined by `__`).
+Canonical name format: `__anon__fieldname__TypeName__fieldname__TypeName__...` (fields sorted by name, joined by `__`).
 
-Example: `{ bid: Number, ask: Number }` → `__anon__ask__number__bid__number`.
+Example: `{ bid: Number, ask: Number }` → `__anon__ask__Number__bid__Number`.
 
 This keeps the rest of the compiler (codegen, type checker, vtable) handling anon shapes identically to named shapes — no new code paths needed.
 
@@ -65,7 +60,7 @@ This keeps the rest of the compiler (codegen, type checker, vtable) handling ano
 
 ### 4. Nested inline shapes work
 
-`{ outer: { inner: Int } }` is valid. The inner anon shape is hoisted to its own synthetic named shape and the outer field type resolves to `Type::Shape { name: "__anon__inner__int" }`.
+`{ outer: { inner: Int } }` is valid. The inner anon shape is hoisted to its own synthetic named shape and the outer field type resolves to `Type::Shape { name: "__anon__inner__Int" }`.
 
 ### 5. Extends and follows not allowed
 
@@ -78,13 +73,15 @@ Inline shapes are pure data — they have no inheritance or contract requirement
 - **Type checker** (`crates/ynz-typeck/src/check.rs`): `ast_type_to_type` for `AstType::AnonShape` computes the canonical name and returns `Type::Shape { name }`. All downstream paths (field access, struct literal, for-destructuring) treat the synthetic shape identically to a named shape.
 - **Type names** (`crates/ynz-typeck/src/types.rs`): `type_name` renders `__anon__...` names as `{ field: type, ... }` for user-facing diagnostics.
 
-## Open questions (not addressed in v0.1-polish)
+## Auto-promotion lint
 
-1. **Auto-promotion lint**: when the same inline type appears in 2+ places, a Tier 3 lint emits a Warning at each use site suggesting extraction to a named `shape`. **SHIPPED** — implemented in `check.rs` `lint_repeated_inline_shapes`, 3 tests in `tests/check.rs`.
+When the same inline type appears in 2+ places, a Tier 3 lint warns at each use site and suggests extracting a named `shape`. Implemented in `check.rs` `lint_repeated_inline_shapes`; 3 tests in `tests/check.rs`.
 
-2. **Cross-file structural equivalence**: Positive case (passing a correctly-typed struct literal to an imported function) is tested and works. Negative case (passing a struct literal with wrong fields to an imported function) currently does NOT produce an error — the expected-type is not threaded into untyped call-argument checking. Fix requires threading the param's expected type into `check_call` argument evaluation. Test `cross_file_inline_shape_field_mismatch_documents_known_gap` in `tests/check.rs` tracks this gap.
+## Known gaps
 
-3. **Inline shapes in `follows` contracts**: deferred. The current implementation focuses on annotation positions only (`:` position). Contract signatures with inline shapes remain unsupported.
+1. **Cross-file structural equivalence**: passing a correctly typed struct literal to an imported function works (tested). Passing a struct literal with wrong fields to an imported function does not yet produce an error, because the parameter's expected type is not threaded into untyped call-argument checking in `check_call`. Test `cross_file_inline_shape_field_mismatch_documents_known_gap` in `tests/check.rs` tracks it.
+
+2. **Inline shapes in `follows` contracts**: not supported. Inline shapes work in annotation positions (after `:`) only.
 
 ## Related design
 
