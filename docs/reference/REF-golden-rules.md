@@ -69,9 +69,9 @@ The WHY must be **specific to the code in front of you**, not generic. The compi
 
 > **WHAT**: The compiler chose `share` here because `player` is declared `const`. The function gets read-only access, and you keep ownership.
 >
-> **WHAT INSTEAD**: Nothing to type here — `share` is written only in a function's signature, never at the call. Click to jump to `foo`'s signature, where the `share` keyword is written (or can be added if the signature has none yet).
+> **WHAT INSTEAD**: Nothing to type here — `share` is written only in a function's signature, never at the call. Click to jump to `heal`'s signature, where the `share` keyword is written (or can be added if the signature has none yet).
 >
-> **WHY**: A `const` variable can only give read-only access. If `foo`'s signature declared `lend` (borrow to change it) instead, passing this `const` variable would be a compile error: "`player` is `const` — `foo` needs to mutate it but `const` blocks mutation."
+> **WHY**: A `const` variable can only give read-only access. If `heal`'s signature declared `lend` (borrow to change it) instead, passing this `const` variable would be a compile error: "`player` is `const` — `heal` needs to mutate it but `const` blocks mutation."
 
 *Why*: People learn at the moment of feedback. A developer who just broke an ownership rule is ready to understand ownership. A developer who just wrote `map<string, number>` with keys that never change is ready to learn why a `shape` is faster. That is the best moment to teach — not in a doc read two weeks earlier, and not after the bug ships. IDE hints bring that coaching to every keystroke, not only to errors.
 

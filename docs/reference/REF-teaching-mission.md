@@ -1,6 +1,6 @@
 ---
 name: "REF-teaching-mission"
-description: "Yinz exists not just to be easy to USE, but to actively teach developers to write better code. This is a positioning decision that differentiates Yinz from every other language in its class."
+description: "Yinz exists not just to be easy to USE, but to actively teach developers to write better code. The compiler and the IDE explain what they do and why."
 tags:
   - "yinz-compiler"
 created_at: "2026-05-14"
@@ -13,7 +13,7 @@ metadata:
 
 # Teaching Mission — A Core Goal of the Language
 
-Yinz exists not just to be easy to USE, but to actively teach developers to write better code. This is a positioning decision that sets Yinz apart from other languages like it.
+Yinz exists not just to be easy to USE, but to actively teach developers to write better code. The compiler and the IDE explain what they do and why, so you learn as you write.
 
 ---
 
@@ -61,34 +61,28 @@ let scores: map<string, number> = { alice: 90, bob: 85, charlie: 78 }
 ### Pattern 2 — Speed suggestions
 
 ```ynz
-let data: array<Player> = []
-for (i in range(0, 10000)) {
-  data.add({ name: `Player ${i}`, health: 100 })
-}
-// IDE HINT: Growing an array to a size you already know makes it move to a
-//           bigger block of memory about 13 times as it fills up. Reserve the
-//           room first to skip that:
-//   let data = array.withCapacity<Player>(10000)
+let weekdays: array<string> = [`Mon`, `Tue`, `Wed`, `Thu`, `Fri`]
+// IDE HINT: `weekdays` never grows or shrinks, so the compiler stores it as
+//           a `fixed<string>`. You can write that yourself:
+//   let weekdays: fixed<string> = [`Mon`, `Tue`, `Wed`, `Thu`, `Fri`]
 //
-// Why: Each move copies the whole array. For 10,000 items that is about 130KB
-//      of copying you don't need. Reserving the room once is a single step.
-//      Filling a known number of items becomes 3-5x faster.
+// Why: Nothing in this file calls .add() or .remove() on `weekdays`, so it
+//      never needs room to grow. A `fixed<string>` lives in the quick memory
+//      a function uses for its own variables, so reading it is faster.
 ```
 
 ### Pattern 3 — The usual Yinz style
 
 ```ynz
-let nums = [1, 2, 3, 4, 5]
-let sum = 0
-for (n in nums) {
-  sum = sum + n
-}
-// IDE HINT: This adds up an array one item at a time. In Yinz you can write:
-//   let sum = nums.reduce(0, (acc, n) => acc + n)
+let delay = 3600
+// IDE HINT: 3600 is a number with no explanation. Give it a name that says
+//           what it means:
+//   const secondsPerHour = 3600
+//   let delay = secondsPerHour
 //
-// Why: .reduce() says "combine everything into one value", so the goal is
-//      clearer. The compiler produces the same machine code for both, so
-//      there is no speed cost. The named version is easier to read.
+// Why: A reader can't tell from `3600` whether it counts seconds, minutes or
+//      items. A named constant says what it is and lets you change it in one
+//      place. The compiled program is the same, so there is no speed cost.
 ```
 
 ### Pattern 4 — Choosing a number type
@@ -131,8 +125,8 @@ The IDE is not only a place to type code. It teaches just as much as compiler er
 So a developer learns even when their code is **completely correct**:
 
 ```ynz
-let x = 42                    // IDE shows muted ": int" → teaches how the compiler picks types
-foo(player)                   // IDE shows muted "share" → teaches ownership at call sites
+let maxHealth = 42            // IDE shows muted ": int" → teaches how the compiler picks types
+heal(player)                  // IDE shows muted "share" → teaches ownership at call sites
 db.fetch(`users`)             // IDE shows muted "wait" → teaches that the call pauses for the network
 arena scratch {
   let temp: array<int> = []     // IDE shows muted ".in(scratch)" → teaches that memory comes from the arena
@@ -156,7 +150,7 @@ Both are required. Error messages fix misunderstandings; muted hints prevent the
 
 The full list of hints is in [REF-ide-hints.md](REF-ide-hints.md).
 
-**One wording everywhere**: each concept has one standard explanation. A compile error that says "`player` is `const` — `foo` needs to mutate it but `const` blocks mutation" uses the same wording as the IDE tooltip that explains why `share` was chosen for a `const` value. The explanation is written once and every surface reuses it, so the docs, the error and the tooltip never disagree.
+**One wording everywhere**: each concept has one standard explanation. A compile error that says "`player` is `const` — `heal` needs to mutate it but `const` blocks mutation" uses the same wording as the IDE tooltip that explains why `share` was chosen for a `const` value. The explanation is written once and every surface reuses it, so the docs, the error and the tooltip never disagree.
 
 ---
 
