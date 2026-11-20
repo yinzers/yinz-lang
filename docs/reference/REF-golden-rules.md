@@ -134,15 +134,37 @@ No method chaining. Each operation gets its own line with a named variable. The 
 *Why*: A chain is hard to debug because you can't look at the middle:
 
 ```ynz
-let health = players.get(0).or(fallback).health
+shape Player {
+  name: String
+  health: Int
+}
+
+function entrypoint() -> Nothing {
+  let fallback: Player = { name: `Guest`, health: 1 }
+  let first: Player = { name: `Ana`, health: 100 }
+  let players: Array<Player> = [first]
+  let health = players.get(0).or(fallback).health
+  print(health.toString())
+}
 ```
 
 One step per line gives every intermediate result a name and a place to inspect it:
 
 ```ynz
-let found = players.get(0)
-let player = found.or(fallback)
-let health = player.health
+shape Player {
+  name: String
+  health: Int
+}
+
+function entrypoint() -> Nothing {
+  let fallback: Player = { name: `Guest`, health: 1 }
+  let first: Player = { name: `Ana`, health: 100 }
+  let players: Array<Player> = [first]
+  let found = players.get(0)
+  let player = found.or(fallback)
+  let health = player.health
+  print(health.toString())
+}
 ```
 
 The compiler removes any speed difference.
