@@ -41,7 +41,9 @@ There is no `collection<T>` type: "collections" is an English umbrella term for 
 
 Each operation gets its own line with a named variable.
 
-**Why**: Golden Rule 9. Named intermediate results are documentation — the variable name says what that step produces. Every step is debuggable — you can inspect any intermediate value. The compiler fuses sequential operations into a single optimized pass anyway, so there's no performance cost for the readability benefit.
+**Why**: Golden Rule 9. Named intermediate results are documentation — the variable name says what that step produces. Every step is debuggable — you can inspect any intermediate value.
+
+**Operation fusion — designed, not built.** The design: when each intermediate result is used only by the next step, the compiler merges a run such as `filter` → `sort` → `limit` → `map` into one loop with no temporary lists, so the readable form costs nothing (Golden Rule 6). No fusion pass exists today, and the steps themselves (`filter`, `map`, `limit`, `sort`) are not lowered (see "Build status" below), so a run of steps does not compile yet.
 
 ---
 
@@ -57,6 +59,35 @@ Several method names chosen for plain-English readability over functional progra
 Plain English names are the rule (Golden Rule 5): `.limit`, `.filter`, `.prepend` are instructions anyone can guess.
 
 **Build status**: the registry and type checker list `map`, `filter`, `limit`, `append`, `sort` and `unique` on arrays, but codegen does not lower them yet. `ynz build` fails with "array method `<name>` not yet lowered". Everything in this doc about those methods is a design, not shipped behavior.
+
+### Method surface: built and designed
+
+The lowering functions `lower_array_method`, `lower_fixed_method` and `lower_map_method` (`crates/ynz-codegen/src/emit.rs`) handle only these methods; any other name fails with "array method `<name>` not yet lowered in P4a" (a `Fixed<T>`: "fixed method `<name>` not yet lowered in P4a"; a map: "map method `<name>` not yet lowered in P4b").
+
+| Type | Built (`ynz build` compiles) | Designed, not built |
+|---|---|---|
+| `Array<T>` | `count`, `add`, `get`, `first`, `last`, `set`, `contains` | everything in the lists below |
+| `Fixed<T>` | `count`, `get`, `first`, `last`, `set` | `contains`, `concat`, `append`, `prepend`, `filter`, `map`, `sort`, `unique`, `limit`, `find` |
+| `Map<K, V>` | `count`, `has`, `get`, `set` | `remove`, `keys`, `values`, `entries`, `update`, `filter`, `find`, `sort`, `clear` |
+
+Designed array methods that change the array (so only `Array<T>` has them):
+
+- `remove(index)`: removes the element at `index`.
+- `removeFirst()` and `removeLast()`: remove and return the first or last element as `Maybe<T>`.
+
+(The registry currently types `remove` with an element argument and `removeFirst` / `removeLast` as returning `Nothing`; the design above is the intended signature and the registry entry has to change when these are built.)
+
+Designed methods that return a new collection and leave the original untouched, on both `Array<T>` and `Fixed<T>` (a `Fixed<T>` is size-locked, so only methods that build a new collection apply to it):
+
+- `concat(other)`: the two collections joined.
+- `append(item)` and `prepend(item)`: a new collection with `item` at the end or the front.
+- `unique()`, `limit(n)`, `filter(fn)`, `map(fn)`, `sort(fn, order)`: as named above.
+
+Designed map methods:
+
+- `keys()` returns `Array<K>` and `values()` returns `Array<V>`.
+- `entries()` returns an array of entries; each entry has `.key` and `.value`.
+- `remove(key)` deletes one key.
 
 ---
 
@@ -179,6 +210,8 @@ If a user genuinely doesn't care about iteration order and wants to skip the ove
 ## `Set<T>` — Unique-Value Collection (DESIGN NOT YET BUILT)
 
 > **Status**: not shipped. `Set<T>` is not a type the compiler accepts today, and no release is committed for it ([`docs/reference/REF-mvp-scope.md`](../../reference/REF-mvp-scope.md) does not list it). The design below is the direction for a core collection **language feature**, sibling to `Map<K,V>` — not a stdlib module.
+>
+> **Ships as one feature, with all four surfaces together:** the `Set<T>` type, the `Array.unique()` method, the `Array<T>` → `Set<T>` auto-promotion (needs the whole-program analysis framework), and the `prefer-set-for-membership` lint with its muted hint (needs the Tier 3 linting). Landing the type alone would leave the teaching surfaces to be bolted on later. The registry entries it needs: `[[primitive_intrinsic]]` for the `Set<T>` methods and `unique`, a `[[lint_rule]]` for `prefer-set-for-membership`, and a `[[muted_hint_domain]]` for the array-to-set hint.
 
 A `Set<T>` holds unique values of one type and answers "is value `X` present?" in O(1). It is `Map<K,V>` with keys only — same machinery, no values.
 
