@@ -68,7 +68,7 @@ The IDE renders the inferred modifier as muted text:
 
 Click-to-make-explicit on a muted hint converts the source to the explicit signature-level form for the function-decl side, NOT to a call-site syntax (which doesn't exist).
 
-**Decided: inferred plus a muted hint.** The compiler does the work, the IDE shows what it inferred, and the hover teaches why. Inferred-only is rejected because `healPlayer(player)` would look identical whether or not it mutates; required-explicit is rejected because a marker at every call degrades into syntactic noise. It is the same rule as type, lifetime, wait-point and allocator inference.
+**Decided: inferred plus a muted hint.** The compiler does the work, the IDE shows what it inferred, and the hover teaches why. The call site stays unmarked, because a marker at every call degrades into syntactic noise. It is the same rule as type, lifetime, wait-point and allocator inference.
 
 ---
 
@@ -85,7 +85,7 @@ saveForever(backup)                   // backup consumed (give inferred), origin
 
 **The rule.** `.copy()` returns a genuinely independent value for every type where independence is meaningful, and is a COMPILE ERROR where it is not. Nothing silently aliases, ever. There are exactly two buckets, no third.
 
-Decided: deep-and-refuse over a shallow copy. A shallow copy aliases one level down, which caused a use-after-free and a silent wrong answer. Golden Rule 4 decides the tie against Golden Rule 7: "sometimes independent, depending on how nested your value is" is unpredictable to a junior developer. If deep copying proves too slow, the answer is an explicit cheaper operation with its own name, never a reinterpretation of `.copy()`.
+Decided: `.copy()` is deep, and refuses what it cannot copy deeply. Golden Rule 4 decides the tie against Golden Rule 7: a copy that is "sometimes independent, depending on how nested your value is" is unpredictable to a junior developer. If deep copying proves too slow, the answer is an explicit cheaper operation with its own name, never a reinterpretation of `.copy()`.
 
 **The one table.** `ynz_typeck::owned_copy::owned_copy_plan` (`crates/ynz-typeck/src/owned_copy.rs:147-332`) is exhaustive over `Type` with no `_` arm, and both consumers read it: `.copy()`'s lowering and the `background`-argument path (`emit_owned_copy`, `crates/ynz-codegen/src/emit.rs:28103-28387`, also exhaustive, no `_` arm). Neither classifies a type itself, so the two can never again disagree about what an owned copy is (`.claude/rules/authoritative-derivation.md`).
 

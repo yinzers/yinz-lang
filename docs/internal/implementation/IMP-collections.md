@@ -617,7 +617,7 @@ below, never a generic claim. The DAP debugger unified-view over SoA storage is 
 
 `ynz build` runs an LLVM `default<O2>` pass pipeline by default (since v0.3-M7); `--no-optimize` / `YNZ_NO_OPTIMIZE` opt out. The correctness claim is unconditional: byte-identical dual-mode output at every measured point, on the one elem_size-aware representation.
 
-The performance claim is measured under `-O2`: SoA wins about 3.3x at N=4096 (10.77 ms AoS vs 3.29 ms SoA, identical generated IR, 2 of 8 fields hot), consistent with the 4x theoretical bandwidth edge. Without the optimizer pipeline the win was not detectable (SoA/AoS ratios 1.00–1.18 at every N from 8 to 4096; raw data in [`soa-threshold-raw-2026-07-04.md`](../../../crates/ynz-driver/benches/soa-threshold-raw-2026-07-04.md)).
+The performance claim holds under `-O2`: SoA wins about 3.3x at N=4096 with 2 of 8 fields hot, near the 4x theoretical bandwidth edge. Without the optimizer pipeline the win is not detectable. Raw data: [`soa-threshold-raw-2026-07-04.md`](../../../crates/ynz-driver/benches/soa-threshold-raw-2026-07-04.md).
 
 `SOA_SIZE_THRESHOLD = 64` is a conservative default, not a crossover-calibrated constant. Re-deriving it from `-O2` crossover data is open work.
 
