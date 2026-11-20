@@ -46,7 +46,7 @@ The table and the traps below follow this list, in this order:
 
 | Concept | In Go you write | In Yinz you write |
 |---|---|---|
-| Variables | `health := 100` can change<br>`var health int = 100` can change<br>`const maxPlayers = 10` can never change, numbers and text only | `let health = 100` can change<br>`const health = 100` can never change<br>`const maxPlayers = 10` |
+| Variables | `health := 100` can change<br>`var health int = 100` can change<br>`const maxPlayers = 10` can never change, numbers, text and booleans only | `let health = 100` can change<br>`const health = 100` can never change<br>`const maxPlayers = 10` |
 | Text | `"Hi"`, `` `raw text` `` (no `${}`)<br>`fmt.Sprintf("Hi %s", name)` | `` `Hi ${name}` `` (backticks only) |
 | Comments and line endings | `// note`, `/* note */`<br>`;` ends a statement, but you leave it out | `// note`, `/// doc comment`, no `;` |
 | Data structures | `type Player struct { Name string }` | `shape Player { name: String }` |
@@ -59,7 +59,7 @@ The table and the traps below follow this list, in this order:
 | Numbers | `int`, `int32`, `uint8`, `float64`<br>overflow wraps around silently | `Int`, `Number`, `Float`<br>overflow stops the program |
 | Operators | `&&`, `\|\|`, `!`, `==`<br>`score++`, `score += 5` | `&&`, `\|\|`, `!`, `==`<br>`score = score + 5` |
 | Branching | `if { } else if { } else { }`<br>`switch code { case 200: ... default: ... }` | early `return`<br>`if (code) { 200 => ... else => ... }` |
-| Chaining | Go has no chains; you write a `for` loop with `append` | a `for` loop, one named step per line |
+| Chaining | Go has no filter-and-map chains; you write a `for` loop with `append` | a `for` loop, one named step per line |
 | Files and imports | `package services`<br>`import "myapp/services"`<br>`FetchUser` (capital letter exports), `func main()` | `` import { fetchUser } from `services/users` ``<br>`export function`<br>`function entrypoint()` |
 | Slow work | `go fetch()`, `sync.WaitGroup`<br>`chan int`, `wire <- 2`, `<-wire` | plain `function`; `wait` and `background` only when you need them<br>`Channel<Int>`, `wire.send(2)`, `wire.receive()` |
 | Copies | `b := a` copies a struct, but a slice, a map or a pointer is shared<br>`slices.Clone(a)` | `let b = a` hands the value over<br>`a.copy()` |
@@ -241,6 +241,7 @@ In Go you choose between a pointer, `*Player`, which can change the original, an
 | nothing; Go's garbage collector keeps a value alive while anything points to it | `give player: Player` | takes the value for good |
 
 Nothing is written at the call. Go's `heal(&player, 20)` becomes `heal(player, 20)`. You write no `&` to take an address and no `*` to read through one. Your editor shows a muted note at the call saying which of the three the function uses.
+
 In Go, a value receiver can change a field and the change is silently lost, because it changed a copy:
 
 ```go
@@ -847,7 +848,7 @@ switch statusCode {
 
 ### Chaining: a loop with `append` becomes named steps
 
-Go has no chains of calls, so you build a result with a `for` loop and `append`. Yinz has no chaining either. Each step goes on its own line with a name, so you can inspect every value. A loop that builds a collection one item at a time looks like Go's.
+Go has no built-in filter-and-map chains, so you build a result with a `for` loop and `append`. Yinz has no chaining at all. Each step goes on its own line with a name, so you can inspect every value. A loop that builds a collection one item at a time looks like Go's.
 
 Go:
 

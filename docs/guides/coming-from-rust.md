@@ -125,7 +125,7 @@ Write ``print(`Health: ${health}`)`` instead.
 
 ### Comments and line endings: `//`, `///`, and no `;`
 
-Comments work as in Rust: `//` for a note and `///` for a doc comment placed directly above a declaration. A doc comment shows in the editor when you hover over the name. There is no `/* */` block comment. `//!` is just a plain comment; doc comments are `///`.
+Comments work as in Rust: `//` for a note and `///` for a doc comment placed directly above a declaration. A doc comment shows in the editor when you hover over the name. There is no `/* */` block comment. In Yinz, `//!` is just a plain comment (Rust uses it for inner doc comments); doc comments are `///`.
 
 ```
 /// Adds `amount` to the player's health.
@@ -850,7 +850,7 @@ import { Player } from `external/legacy`
 
 In Rust, `async fn` makes a function that gives back a future, `.await` runs it, and the standard library has no runtime, so you add a crate such as `tokio` and mark `main`. In Yinz, you mark nothing. When a call has to pause, such as a network call, the compiler pauses your function by itself. Independent calls run at the same time without extra code, so there is no `tokio::join!`.
 
-Rust (with the `tokio` crate, using its `macros`, `rt` and `time` features):
+Rust (with the `tokio` crate, using its `macros`, `rt-multi-thread` and `time` features):
 
 ```rust
 use std::time::Duration;
