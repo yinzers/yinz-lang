@@ -43,6 +43,8 @@ Yinz combines four things: **easy syntax**, **real systems skills** (ownership, 
 
 ### Pattern 1 — Speed suggestions
 
+The IDE tells you when a cheaper form of the same code fits.
+
 ```ynz
 let weekdays: Array<String> = [`Mon`, `Tue`, `Wed`, `Thu`, `Fri`]
 // IDE HINT: `Array` carries a dotted underline. Hover says:
@@ -57,6 +59,8 @@ let weekdays: Array<String> = [`Mon`, `Tue`, `Wed`, `Thu`, `Fri`]
 
 ### Pattern 2 — The usual Yinz style
 
+The IDE tells you when a value is never changed, so you can say so with `const`.
+
 ```ynz
 let serverName = `prod-01`
 // IDE HINT: `let` carries a dotted underline. Hover says:
@@ -69,6 +73,8 @@ let serverName = `prod-01`
 ```
 
 ### Pattern 3 — Memory and ownership
+
+The compiler explains an ownership mistake in terms of your own code.
 
 ```ynz
 shape Player {
