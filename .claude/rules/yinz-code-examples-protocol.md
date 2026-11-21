@@ -8,7 +8,7 @@ An example teaches one idea in the smallest realistic code, and shows the result
 
 **Real**
 
-- **Use only operations that exist:** the built-ins listed in `registry/features.toml`, or operations the example itself defines. Why: readers copy examples, and an invented operation teaches a feature that does not exist.
+- **Use only operations that build with `ynz build`, or operations the example itself defines.** Why: readers copy examples, and an operation that does not build teaches a feature that does not exist.
 - **Use realistic names** (`Player`, `score`, `health`), not `foo`, `bar` or `x`. Why: real names show what the code is for.
 - **Show one idea per example.** Why: a second idea hides the first.
 
@@ -19,7 +19,6 @@ An example teaches one idea in the smallest realistic code, and shows the result
 **House style**
 
 - **Write every identifier in camelCase, constants included** (`const maxHealth = 100`). Never snake_case or SCREAMING_SNAKE. A distinct constants style needs Chief's confirmation, never an example introducing it. Why: capital letter means type, so a style the language lacks teaches users a mistake.
-- **Use arrow functions only inside calls** (`.filter()`, `.map()`), never as standalone functions. Why: standalone functions use `function`.
 
 **Import paths**
 
