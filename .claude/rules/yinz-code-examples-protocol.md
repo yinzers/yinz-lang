@@ -18,7 +18,7 @@ An example teaches one idea in the smallest realistic code, and shows the result
 
 **House style**
 
-- **Write every identifier in camelCase, constants included** (`const maxHealth = 100`). Never snake_case or SCREAMING_SNAKE. A distinct constants style needs Chief's confirmation, never an example introducing it. Why: capital letter means type, so a style the language lacks teaches users a mistake.
+- **Write every non-type identifier in camelCase, constants included** (`const maxHealth = 100`). Never snake_case or SCREAMING_SNAKE. A distinct constants style needs Chief's confirmation, never an example introducing it. Why: capital letter means type, so a style the language lacks teaches users a mistake.
 
 **Import paths**
 
