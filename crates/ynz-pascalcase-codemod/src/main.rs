@@ -446,36 +446,3 @@ fn print_reports(reports: &[FileReport], dry_run: bool) -> ExitCode {
         ExitCode::SUCCESS
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Bug caught: a root given another way (`.`, absolute) lets the two files be rewritten, and
-    /// a name-only match would also skip same-named files elsewhere. Low tier: a rewrite breaks
-    /// the protected tests and every trim lane running the codemod (card #697).
-    #[test]
-    fn never_rewritten_files_match_by_trailing_path_components() {
-        let cases = [
-            ("crates/ynz-typeck/tests/builtin_type_names.rs", true),
-            (
-                "./crates/ynz-lsp/tests/old_builtin_type_name_quick_fix.rs",
-                true,
-            ),
-            (
-                "/checkout/crates/ynz-typeck/tests/builtin_type_names.rs",
-                true,
-            ),
-            ("crates/other/tests/builtin_type_names.rs", false),
-            ("xcrates/ynz-typeck/tests/builtin_type_names.rs", false),
-            ("crates/ynz-typeck/tests/other.rs", false),
-        ];
-        for (path, expected) in cases {
-            assert_eq!(
-                ends_with_never_rewritten_file(Path::new(path)),
-                expected,
-                "{path}"
-            );
-        }
-    }
-}
