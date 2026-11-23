@@ -24,7 +24,9 @@ usage: pascalcase-codemod [--dry-run] [--leftovers] [--lenient] [--mode ynz|mark
 
   A file is processed by its extension (.ynz/.formatted, .md, .rs).
   A directory is searched recursively for files of --mode (default: ynz); .git, .claude,
-  target, node_modules, marketing and this tool's own crate are never entered.
+  target, node_modules, marketing and this tool's own crate are never entered, and two test
+  files that hold old spellings on purpose are never rewritten (builtin_type_names.rs,
+  old_builtin_type_name_quick_fix.rs).
   --dry-run    count renames, write nothing
   --leftovers  (ynz mode) also list every old built-in spelling that was NOT renamed, with
                the neighbouring tokens, for spot-checking
@@ -66,8 +68,32 @@ const DIRECTORIES_NEVER_ENTERED: &[&str] = &[
     "ynz-pascalcase-codemod",
 ];
 
+/// Repo-relative files never rewritten, for the same reason as `ynz-pascalcase-codemod` above:
+/// their tests hold old spellings on purpose.
+const FILES_NEVER_REWRITTEN: &[&str] = &[
+    "crates/ynz-typeck/tests/builtin_type_names.rs",
+    "crates/ynz-lsp/tests/old_builtin_type_name_quick_fix.rs",
+];
+
+/// Matches by whole trailing path components, so it holds however the root argument was given
+/// (`crates`, `.`, `./crates`, an absolute path). The path is made absolute first so a root
+/// that starts below the repo root (`crates/ynz-typeck`) still carries the full suffix.
+fn is_never_rewritten(path: &Path) -> bool {
+    let absolute = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    FILES_NEVER_REWRITTEN
+        .iter()
+        .any(|never_rewritten| absolute.ends_with(never_rewritten))
+}
+
 fn collect_files(root: &Path, wanted_mode: Mode, files: &mut Vec<(PathBuf, Mode)>) {
     if root.is_file() {
+        if is_never_rewritten(root) {
+            eprintln!(
+                "skipping {}: its tests hold old spellings on purpose",
+                root.display()
+            );
+            return;
+        }
         if let Some(mode) = mode_of_extension(root) {
             files.push((root.to_path_buf(), mode));
         } else {
@@ -86,7 +112,7 @@ fn collect_files(root: &Path, wanted_mode: Mode, files: &mut Vec<(PathBuf, Mode)
             if !DIRECTORIES_NEVER_ENTERED.contains(&name.to_string_lossy().as_ref()) {
                 collect_files(&path, wanted_mode, files);
             }
-        } else if mode_of_extension(&path) == Some(wanted_mode) {
+        } else if mode_of_extension(&path) == Some(wanted_mode) && !is_never_rewritten(&path) {
             files.push((path, wanted_mode));
         }
     }
@@ -395,5 +421,33 @@ fn print_reports(reports: &[FileReport], dry_run: bool) -> ExitCode {
         ExitCode::from(1)
     } else {
         ExitCode::SUCCESS
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Bug caught: a root given another way (`.`, absolute) lets the two files be rewritten, and
+    /// a name-only match would also skip same-named files elsewhere.
+    #[test]
+    fn never_rewritten_files_match_by_trailing_path_components() {
+        let cases = [
+            ("crates/ynz-typeck/tests/builtin_type_names.rs", true),
+            (
+                "./crates/ynz-lsp/tests/old_builtin_type_name_quick_fix.rs",
+                true,
+            ),
+            (
+                "/checkout/crates/ynz-typeck/tests/builtin_type_names.rs",
+                true,
+            ),
+            ("crates/other/tests/builtin_type_names.rs", false),
+            ("xcrates/ynz-typeck/tests/builtin_type_names.rs", false),
+            ("crates/ynz-typeck/tests/other.rs", false),
+        ];
+        for (path, expected) in cases {
+            assert_eq!(is_never_rewritten(Path::new(path)), expected, "{path}");
+        }
     }
 }
