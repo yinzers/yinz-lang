@@ -452,7 +452,8 @@ mod tests {
     use super::*;
 
     /// Bug caught: a root given another way (`.`, absolute) lets the two files be rewritten, and
-    /// a name-only match would also skip same-named files elsewhere.
+    /// a name-only match would also skip same-named files elsewhere. Low tier: a rewrite breaks
+    /// the protected tests and every trim lane running the codemod (card #697).
     #[test]
     fn never_rewritten_files_match_by_trailing_path_components() {
         let cases = [
