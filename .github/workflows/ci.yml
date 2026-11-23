@@ -87,8 +87,36 @@ jobs:
           cargo build -p ynz-runtime --release
           cargo build --workspace --release
 
+      # TRIAL (spike S1, card #676): the baseline `cargo test` is split into a compile-only
+      # step and the run step below, so the job log shows how the Test time divides between
+      # compiling the test binaries and running them. Total work is unchanged: the run step
+      # reuses what this step built. Remove with the rest of the trial if nextest is not adopted.
+      - name: Test (compile only, timing split)
+        run: cargo test --workspace --no-run
+
+      # TRIAL (spike S1): resource evidence for "CPU, disk or locks?". Prints the runner's
+      # shape, then samples vmstat every 5 s into vmstat.log while the Test step runs.
+      # Kernel PSI counters (cumulative stall microseconds) are read before and after.
+      - name: Sample resources (start)
+        shell: bash
+        run: |
+          echo "nproc=$(nproc)"; free -m; df -h / /tmp; mount | grep -E ' / | /tmp ' || true
+          echo "--- PSI at start"; grep -H . /proc/pressure/cpu /proc/pressure/io /proc/pressure/memory || echo "PSI unavailable"
+          nohup vmstat -w -n 5 > vmstat.log 2>&1 &
+
       - name: Test
         run: cargo test --workspace
+
+      - name: Sample resources (summary)
+        if: always()
+        shell: bash
+        run: |
+          echo "--- PSI at end"; grep -H . /proc/pressure/cpu /proc/pressure/io /proc/pressure/memory || echo "PSI unavailable"
+          # vmstat -w columns: r b swpd free buff cache si so bi bo in cs us sy id wa st
+          # (+ guest column on newer procps). Skip the two header lines and the since-boot row.
+          awk 'NR>3 { r+=$1; b+=$2; us+=$13; sy+=$14; id+=$15; wa+=$16; n++ }
+               END { if (n) printf "samples=%d avg_runnable=%.1f avg_blocked=%.1f us=%.1f sy=%.1f id=%.1f wa=%.1f\n", n, r/n, b/n, us/n, sy/n, id/n, wa/n }' vmstat.log
+          echo "--- vmstat.log (every 5 s)"; cat vmstat.log
 
       # Loom model-checking harness (v0.3-M8 Phase 3). `--cfg loom` swaps ynz-runtime's
       # `crate::sync` primitives to loom's and compiles `src/loom_tests.rs`; nothing else in the
@@ -115,6 +143,119 @@ jobs:
 
       - name: Verify --version
         run: ./target/release/ynz --version
+
+  # TRIAL (spike S1, card #676): build every test binary once, archive it, then run the
+  # archive split across N runners with cargo-nextest partitions. `build-and-test` above keeps
+  # its `cargo test --workspace` step during the trial so both are measured on one commit.
+  # nextest is pinned to an exact version (same version as the local spike measurement).
+  nextest-archive:
+    name: Nextest archive (build tests once)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LLVM 18
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-18 llvm-18-dev libclang-18-dev clang-18
+          echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> $GITHUB_ENV
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-nextest (pinned)
+        run: curl -LsSf https://get.nexte.st/0.9.152/linux | tar zxf - -C "$HOME/.cargo/bin"
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-nextest-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      # Same reason as in build-and-test: driver/watch include_bytes! the runtime staticlib.
+      - name: Build runtime archive (required by include_bytes! in driver/watch)
+        run: cargo build -p ynz-runtime
+
+      - name: Archive test binaries
+        run: cargo nextest archive --workspace --archive-file nextest-archive.tar.zst
+
+      - name: Upload archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextest-archive
+          path: nextest-archive.tar.zst
+          # The archive is already zstd-compressed; re-zipping it costs time for nothing.
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+
+  nextest-test:
+    name: Nextest partition ${{ matrix.partition }}/4
+    needs: nextest-archive
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # N = 4 here and in `--partition count:<i>/4` below: keep the two in step.
+        partition: [1, 2, 3, 4]
+    steps:
+      # Checkout is still needed: tests read fixtures and sources through paths remapped to
+      # the workspace (`--workspace-remap .`).
+      - uses: actions/checkout@v4
+
+      # The archived tests spawn `ynz`, which links with clang-18, and call opt-18/llc-18 and
+      # load libLLVM at run time, so the runtime packages are needed here; the -dev packages
+      # (headers, libclang) are only needed to BUILD, which the archive job already did.
+      # libclang-rt-18-dev is named explicitly: the ASan fixtures link against its
+      # libclang_rt.asan, and the install must not depend on apt's Recommends.
+      - name: Install LLVM 18 runtime tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends llvm-18 clang-18 libclang-rt-18-dev
+          echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> $GITHUB_ENV
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-nextest (pinned)
+        run: curl -LsSf https://get.nexte.st/0.9.152/linux | tar zxf - -C "$HOME/.cargo/bin"
+
+      - name: Download archive
+        uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive
+
+      - name: Runner shape
+        run: |
+          echo "nproc=$(nproc)"; free -m; df -h / /tmp
+          echo "--- PSI at start"; grep -H . /proc/pressure/cpu /proc/pressure/io /proc/pressure/memory || echo "PSI unavailable"
+          nohup vmstat -w -n 5 > vmstat.log 2>&1 &
+
+      - name: Run partition
+        run: |
+          cargo nextest run --archive-file nextest-archive.tar.zst --workspace-remap . \
+            --partition count:${{ matrix.partition }}/4 --profile ci
+
+      - name: Sample resources (summary)
+        if: always()
+        shell: bash
+        run: |
+          echo "--- PSI at end"; grep -H . /proc/pressure/cpu /proc/pressure/io /proc/pressure/memory || echo "PSI unavailable"
+          awk 'NR>3 { r+=$1; b+=$2; us+=$13; sy+=$14; id+=$15; wa+=$16; n++ }
+               END { if (n) printf "samples=%d avg_runnable=%.1f avg_blocked=%.1f us=%.1f sy=%.1f id=%.1f wa=%.1f\n", n, r/n, b/n, us/n, sy/n, id/n, wa/n }' vmstat.log
+
+      - name: Upload JUnit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextest-junit-${{ matrix.partition }}
+          path: |
+            target/nextest/ci/junit.xml
+            vmstat.log
+          if-no-files-found: warn
 
   fuzz:
     name: Structured fuzzing lane (generated .ynz corpus × mode matrix)

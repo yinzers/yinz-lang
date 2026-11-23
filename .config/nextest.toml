@@ -1,0 +1,17 @@
+# cargo-nextest configuration. Only the `ci` profile is used by CI (see
+# .github/workflows/ci.yml, job `nextest-test`); the default profile is nextest's own.
+#
+# Timeouts here are for LIVENESS only (kill a hung test), never performance: a test sharing
+# cores with hundreds of siblings cannot measure speed. `period` x `terminate-after` is the
+# hard ceiling per test.
+
+[profile.ci]
+# Report every failure, not just the first: a CI run must show the whole red set.
+fail-fast = false
+# Flag a test as SLOW after 2 min, kill it after 10 min (5 x 2 min). The slowest local test
+# is far below this (see spike S1 findings); the ceiling only catches deadlocks.
+slow-timeout = { period = "120s", terminate-after = 5 }
+
+[profile.ci.junit]
+# Written to target/nextest/ci/junit.xml; uploaded as an artifact by the CI job.
+path = "junit.xml"
