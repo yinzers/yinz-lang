@@ -8,9 +8,10 @@
 [profile.ci]
 # Report every failure, not just the first: a CI run must show the whole red set.
 fail-fast = false
-# Flag a test as SLOW after 2 min, kill it after 10 min (5 x 2 min). The slowest local test
-# is far below this (see spike S1 findings); the ceiling only catches deadlocks.
-slow-timeout = { period = "120s", terminate-after = 5 }
+# Flag a test SLOW every 10 min, kill it after 2 h (12 x 10 min). Spike S1 measured two
+# `ynz-driver::cross_impl_consistency` corpus sweeps at 6 to 13 min each under load, so the
+# ceiling is about 10x the slowest observed test. It only catches deadlocks.
+slow-timeout = { period = "600s", terminate-after = 12 }
 
 [profile.ci.junit]
 # Written to target/nextest/ci/junit.xml; uploaded as an artifact by the CI job.
