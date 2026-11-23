@@ -12,7 +12,7 @@ use ynz_lsp::{
 // the `int` token.
 #[test]
 fn old_lowercase_type_spelling_gets_a_quick_fix_to_pascal_case() {
-    let src = "function entrypoint() -> Nothing {\n  let count: int = 1\n  print(count)\n}\n";
+    let src = "function entrypoint() -> Nothing {\n  let count: Int = 1\n  print(count)\n}\n";
     let mut state = ServerState::new(PositionEncoding::Utf8);
     let uri = lsp_types::Url::from_file_path("/tmp/ynz_old_builtin_type.ynz").expect("valid path");
     state.open_document(uri.clone(), src.to_string());

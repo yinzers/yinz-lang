@@ -17,7 +17,7 @@ fn check(source: &str) -> CheckOutput {
 #[test]
 fn old_lowercase_type_spelling_gets_the_teaching_error() {
     let out =
-        check("function entrypoint() -> Nothing {\n  let count: int = 1\n  print(count)\n}\n");
+        check("function entrypoint() -> Nothing {\n  let count: Int = 1\n  print(count)\n}\n");
     let teaching: Vec<_> = out
         .diagnostics
         .iter()
@@ -35,7 +35,7 @@ fn old_lowercase_type_spelling_gets_the_teaching_error() {
 // construction form, which take a different parser/typeck path than a plain `int`.
 #[test]
 fn old_lowercase_generic_and_channel_spellings_get_the_teaching_error() {
-    let generic = check("function f(items: array<Int>) -> Nothing {\n}\n");
+    let generic = check("function f(items: Array<Int>) -> Nothing {\n}\n");
     assert!(
         generic
             .diagnostics
@@ -44,7 +44,7 @@ fn old_lowercase_generic_and_channel_spellings_get_the_teaching_error() {
         "got: {:#?}",
         generic.diagnostics
     );
-    let channel = check("function entrypoint() -> Nothing {\n  let c = channel<Int>(8)\n}\n");
+    let channel = check("function entrypoint() -> Nothing {\n  let c = Channel<Int>(8)\n}\n");
     assert!(
         channel
             .diagnostics
