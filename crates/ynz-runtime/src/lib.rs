@@ -3249,59 +3249,45 @@ mod m7_string_runtime {
         std::ffi::CStr::from_ptr(p as *const i8).to_str().unwrap()
     }
 
-    // bug: ynz_string_eq reports two equal ASCII strings unequal, or two different ASCII strings equal | tier: Medium
-    #[test]
-    fn nfc_equality_ascii_fast_path() {
-        // WHY: ASCII strings must go through the fast path (byte comparison).
-        // If ASCII strings disagree despite being byte-equal, the fast path is broken.
-        unsafe {
-            assert_eq!(ynz_string_eq(c(b"hello\0"), c(b"hello\0")), 1);
-            assert_eq!(ynz_string_eq(c(b"hello\0"), c(b"world\0")), 0);
-        }
+    /// `string_eq_case!(case_name: left_bytes, right_bytes => expected_answer)`: the ASCII bytes
+    /// compare by the byte fast path; precomposed é (U+00E9) and decomposed e + U+0301 compare
+    /// equal only through NFC normalization.
+    macro_rules! string_eq_case {
+        ($($name:ident: $left:expr, $right:expr => $expected:expr,)*) => {$(
+            // bug: ynz_string_eq reports equal text unequal (an ASCII pair, or a precomposed and a decomposed spelling because NFC normalization is skipped) or different ASCII text equal | tier: Medium
+            #[test]
+            fn $name() {
+                unsafe {
+                    assert_eq!(ynz_string_eq(c($left), c($right)), $expected);
+                }
+            }
+        )*};
+    }
+    string_eq_case! {
+        nfc_equality_ascii_fast_path_equal: b"hello\0", b"hello\0" => 1,
+        nfc_equality_ascii_fast_path_different: b"hello\0", b"world\0" => 0,
+        nfc_equality_precomposed_vs_decomposed: b"\xC3\xA9\0", b"\x65\xCC\x81\0" => 1,
     }
 
-    // bug: ynz_string_eq compares bytes without NFC normalization, so a precomposed and a decomposed spelling of the same text are unequal | tier: Medium
-    #[test]
-    fn nfc_equality_precomposed_vs_decomposed() {
-        // WHY: NFC normalization closes the canonical-equivalence obligation from M3.
-        // Precomposed é (U+00E9) and decomposed e + combining accent (U+0065 U+0301)
-        // must compare as equal. Without NFC normalization, byte comparison returns 0.
-        unsafe {
-            // U+00E9 = precomposed é (UTF-8 bytes: 0xC3 0xA9)
-            let precomposed = b"\xC3\xA9\0";
-            // U+0065 + U+0301 = e (0x65) + combining acute accent (UTF-8: 0xCC 0x81)
-            let decomposed = b"\x65\xCC\x81\0";
-            assert_eq!(
-                ynz_string_eq(c(precomposed), c(decomposed)),
-                1,
-                "NFC: precomposed e-acute must equal decomposed e + combining accent"
-            );
-        }
+    /// `string_concat_case!(case_name: left, right => expected_text)`: the result is non-null,
+    /// NUL-terminated (readable as a C string, as `puts` reads it) and holds both sides.
+    macro_rules! string_concat_case {
+        ($($name:ident: $left:expr, $right:expr => $expected:expr,)*) => {$(
+            // bug: ynz_string_concat returns null or text that is not NUL-terminated or loses a side (two empty strings included), so puts reads past the string | tier: Medium
+            #[test]
+            fn $name() {
+                unsafe {
+                    let result = ynz_string_concat(c($left), c($right));
+                    assert!(!result.is_null());
+                    assert_eq!(str_from_ptr(result), $expected);
+                    ynz_string_release(result);
+                }
+            }
+        )*};
     }
-
-    // bug: ynz_string_concat returns text that is not NUL-terminated or loses a side, so puts reads past the string | tier: Medium
-    #[test]
-    fn string_concat_produces_null_terminated() {
-        // WHY: concatenation must produce a null-terminated result that can be passed
-        // to puts() or any other C string function without corruption.
-        unsafe {
-            let result = ynz_string_concat(c(b"Hello\0"), c(b" World\0"));
-            assert!(!result.is_null());
-            assert_eq!(str_from_ptr(result), "Hello World");
-            ynz_string_release(result);
-        }
-    }
-
-    // bug: ynz_string_concat of two empty strings returns null or non-terminated memory | tier: Medium
-    #[test]
-    fn string_concat_empty_strings() {
-        // WHY: concatenating two empty strings must produce an empty null-terminated string.
-        unsafe {
-            let r = ynz_string_concat(c(b"\0"), c(b"\0"));
-            assert!(!r.is_null());
-            assert_eq!(str_from_ptr(r), "");
-            ynz_string_release(r);
-        }
+    string_concat_case! {
+        string_concat_produces_null_terminated: b"Hello\0", b" World\0" => "Hello World",
+        string_concat_empty_strings: b"\0", b"\0" => "",
     }
 
     // bug: ynz_string_count counts bytes instead of code points, so a multibyte string reports the wrong length | tier: Medium
@@ -3326,28 +3312,32 @@ mod m7_string_runtime {
         }
     }
 
-    // bug: ynz_string_codepoint_at returns the wrong character for an in-range index | tier: Medium
-    #[test]
-    fn string_codepoint_at_ascii() {
-        // WHY: codepoint_at on ASCII must return each character as a 1-byte string.
-        unsafe {
-            let s = b"hello\0";
-            let ch = ynz_string_codepoint_at(c(s), 1); // 'e'
-            assert!(!ch.is_null());
-            assert_eq!(str_from_ptr(ch), "e");
-            ynz_string_release(ch);
-        }
+    /// `string_codepoint_at_case!(case_name: text, index => expected)`: `Some(character)` for an
+    /// in-range index, `None` (a null pointer) for an index past the end or below zero.
+    macro_rules! string_codepoint_at_case {
+        ($($name:ident: $text:expr, $index:expr => $expected:expr,)*) => {$(
+            // bug: ynz_string_codepoint_at returns the wrong character for an in-range index, or garbage or a panic instead of null for an out-of-range or negative one | tier: Medium
+            #[test]
+            fn $name() {
+                unsafe {
+                    let character = ynz_string_codepoint_at(c($text), $index);
+                    let expected: Option<&str> = $expected;
+                    match expected {
+                        Some(text) => {
+                            assert!(!character.is_null());
+                            assert_eq!(str_from_ptr(character), text);
+                            ynz_string_release(character);
+                        }
+                        None => assert!(character.is_null()),
+                    }
+                }
+            }
+        )*};
     }
-
-    // bug: ynz_string_codepoint_at of an out-of-range or negative index returns garbage or panics instead of null | tier: Medium
-    #[test]
-    fn string_codepoint_at_oob_returns_null() {
-        // WHY: out-of-bounds index must return null, not garbage or a panic.
-        unsafe {
-            let s = b"hi\0";
-            assert!(ynz_string_codepoint_at(c(s), 10).is_null());
-            assert!(ynz_string_codepoint_at(c(s), -1).is_null());
-        }
+    string_codepoint_at_case! {
+        string_codepoint_at_ascii: b"hello\0", 1 => Some("e"),
+        string_codepoint_at_past_the_end_returns_null: b"hi\0", 10 => None,
+        string_codepoint_at_negative_index_returns_null: b"hi\0", -1 => None,
     }
 
     // bug: ynz_string_contains misses a present substring, finds an absent one, or rejects the empty needle | tier: Medium
