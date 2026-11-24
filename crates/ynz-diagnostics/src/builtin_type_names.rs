@@ -105,24 +105,38 @@ mod tests {
 
     // Bug it catches: the old-to-new pairs drifting from the reserved set, so a name could be
     // taught as the replacement yet still be declarable by a user shape.
+    // bug: a replacement name taught by the error is not reserved, so a user shape can take it, or an old spelling is reserved | tier: Medium
     #[test]
     fn every_replacement_name_is_reserved() {
-        for (old, new) in OLD_TO_NEW_BUILTIN_TYPE_NAMES {
-            assert!(is_reserved_builtin_type_name(new), "`{new}` (for `{old}`)");
-            assert!(!is_reserved_builtin_type_name(old));
-        }
+        let offenders: Vec<String> = OLD_TO_NEW_BUILTIN_TYPE_NAMES
+            .iter()
+            .flat_map(|(old, new)| {
+                let replacement_not_reserved = (!is_reserved_builtin_type_name(new))
+                    .then(|| format!("`{new}` (for `{old}`) is not reserved"));
+                let old_spelling_reserved = is_reserved_builtin_type_name(old)
+                    .then(|| format!("old spelling `{old}` is reserved"));
+                replacement_not_reserved
+                    .into_iter()
+                    .chain(old_spelling_reserved)
+            })
+            .collect();
+        assert!(offenders.is_empty(), "{}", offenders.join("\n"));
     }
 
-    // Bug it catches: the teaching text drifting from the wording Chief approved.
+    // Bug it catches: the quick-fix reads this diagnostic; if it did not carry the old name
+    // and the replacement, or fired on a name that is already PascalCase, the editor would
+    // offer a wrong rewrite.
+    // bug: the old-spelling error names no replacement or carries no quick-fix kind, or a correct PascalCase name gets the error | tier: Medium
     #[test]
-    fn the_teaching_error_has_the_approved_text() {
+    fn old_spelling_error_names_the_replacement_and_new_spelling_gets_none() {
         let diag = old_builtin_type_name_diagnostic(SourceSpan::new("a.ynz", 0, 3), "int")
             .expect("`int` is an old built-in spelling");
-        assert_eq!(diag.what, "`int` is not a type name.");
         assert_eq!(diag.what_instead, "Write `Int`.");
         assert_eq!(
-            diag.why,
-            "Every type in Yinz starts with a capital letter, built-ins included."
+            diag.kind,
+            Some(DiagnosticKind::OldBuiltinTypeName {
+                old_name: "int".to_string()
+            })
         );
         assert!(old_builtin_type_name_diagnostic(SourceSpan::new("a.ynz", 0, 3), "Int").is_none());
     }

@@ -139,6 +139,7 @@ fn contains_whole_word(haystack: &str, needle: &str) -> bool {
     false
 }
 
+// bug: user-facing text in a Diagnostic constructor string uses banned jargon | tier: Low
 #[test]
 fn no_banned_jargon_in_diagnostic_strings() {
     let mut violations: Vec<String> = Vec::new();
@@ -185,6 +186,7 @@ fn lsp_message(what: &str, what_instead: &str, why: &str) -> String {
 }
 
 /// Walk every diagnostic site and check the LSP-rendered form for banned jargon.
+// bug: user-facing text in an LSP-rendered diagnostic message uses banned jargon | tier: Low
 #[test]
 fn no_banned_jargon_in_lsp_rendered_messages() {
     let mut violations: Vec<String> = Vec::new();
@@ -275,6 +277,7 @@ fn no_banned_jargon_in_lsp_rendered_messages() {
 /// Explicitly EXCLUDED: Yinz source content that the formatter passes through
 /// byte-exact — a user can legitimately write `// type` in a comment and the
 /// formatter must not be flagged for that.
+// bug: user-facing text in an ynz fmt CLI message uses banned jargon | tier: Low
 #[test]
 fn fmt_cli_messages_contain_no_banned_jargon() {
     let banned: Vec<_> = ynz_registry::banned_jargon().collect();
@@ -326,6 +329,7 @@ fn fmt_cli_messages_contain_no_banned_jargon() {
 //      deferred_tooling_feature entries currently have no LSP render path, but the check is
 //      included so that adding a render path in the future automatically inherits jargon
 //      enforcement — catching the class that slipped through in v0.3-M2 Phase 4.
+// bug: user-facing text in a deferred-feature hover or completion field uses banned jargon | tier: Low
 #[test]
 fn no_banned_jargon_in_deferred_feature_user_facing_fields() {
     let banned: Vec<_> = ynz_registry::banned_jargon().collect();
@@ -390,6 +394,7 @@ fn no_banned_jargon_in_deferred_feature_user_facing_fields() {
 //      (`s`, `d`, `n`) breaks the word boundary. All three inflected forms are equally banned
 //      from user-facing diagnostic text. This test closes the gap so that any reintroduction
 //      of an inflected form is caught at CI time by `cargo test -p ynz-diagnostics`.
+// bug: user-facing text in a diagnostic string (typo or inflected form of a banned verb) uses banned jargon | tier: Low
 #[test]
 fn no_typo_booleanean_or_verb_infers_in_diagnostic_strings() {
     let mut violations: Vec<String> = Vec::new();
@@ -447,6 +452,7 @@ fn no_typo_booleanean_or_verb_infers_in_diagnostic_strings() {
 //      These strings bypass the `Diagnostic::*` constructor path (which the main jargon audit
 //      scans), so they need a dedicated check. A banned word like "infer" or "null" in a
 //      status line would be the same UX failure as in a compiler error.
+// bug: user-facing text in an ynz watch status, error or help message uses banned jargon | tier: Low
 #[test]
 fn watch_cli_messages_contain_no_banned_jargon() {
     let banned: Vec<_> = ynz_registry::banned_jargon().collect();
@@ -519,6 +525,7 @@ fn watch_cli_messages_contain_no_banned_jargon() {
 //      values have explicit arms), so the runtime-domain loop below can't reach it.
 //      The source-scan test catches reintroduction to ANY arm, including the fallback.
 //      The runtime test catches jargon in any output actually produced by real registry data.
+// bug: user-facing text in the LSP inlay-hint hover WHY source uses banned jargon | tier: Low
 #[test]
 fn no_infer_jargon_in_lsp_inlay_hint_hover_why_source() {
     // Locate lib.rs relative to this test crate.
@@ -638,6 +645,7 @@ fn no_infer_jargon_in_lsp_inlay_hint_hover_why_source() {
     }
 }
 
+// bug: user-facing text in the LSP inlay-hint hover output uses banned jargon | tier: Low
 #[test]
 fn no_banned_jargon_in_lsp_inlay_hint_hover_output() {
     // WHY: Complements the source-scan above. Exercises the actual return value of
@@ -706,6 +714,7 @@ fn no_banned_jargon_in_lsp_inlay_hint_hover_output() {
 //      array-using-soa-layout alike), so a future rule inherits enforcement automatically.
 //      The rule NAME is deliberately NOT audited: it is a registry-internal identifier
 //      convention (e.g. "soa" in `array-using-soa-layout`, plan decision D9), not prose.
+// bug: user-facing text in a lint-rule template or description uses banned jargon | tier: Low
 #[test]
 fn no_banned_jargon_in_lint_rule_templates() {
     let banned: Vec<_> = ynz_registry::banned_jargon().collect();
@@ -759,6 +768,7 @@ fn no_banned_jargon_in_lint_rule_templates() {
 //      as readily as any `Diagnostic::error` string — same ban applies. This test catches
 //      regressions when editing registry/features.toml directly, which the Diagnostic-site
 //      scanner above doesn't reach.
+// bug: user-facing text in a muted-hint-domain description uses banned jargon | tier: Low
 #[test]
 fn no_banned_jargon_in_muted_hint_domain_descriptions() {
     let banned: Vec<_> = ynz_registry::banned_jargon().collect();
@@ -876,6 +886,7 @@ fn banned_word_forms(banned_name: &str, is_acronym: bool) -> Vec<String> {
 //      A banned word shipped in a template and was caught only by hand (plan #17 after-action
 //      review). Word forms ("wrapping", "catches", "tried") are scanned too: the whole-word
 //      check alone lets them through.
+// bug: user-facing text in a registry diagnostic template uses banned jargon | tier: Low
 #[test]
 fn no_banned_jargon_in_diagnostic_templates() {
     let banned: Vec<_> = ynz_registry::banned_jargon().collect();

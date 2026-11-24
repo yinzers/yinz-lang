@@ -1,10 +1,16 @@
-//! Shared proptest strategies for `proptest_idempotency` and `proptest_smoke`.
+//! Shared test support for the formatter's integration tests.
 //!
-//! Both test files import this module via `mod common;`.  The smoke test's
-//! strategy-quality gate runs against the SAME `arb_module` as the idempotency
-//! test so the gate actually guards the strategy it claims to guard.
+//! * proptest strategies (`arb_module` and friends) for `proptest_idempotency` and
+//!   `proptest_smoke`. The smoke test's strategy-quality gate runs against the SAME
+//!   `arb_module` as the idempotency test so the gate actually guards the strategy it
+//!   claims to guard.
+//! * the fixture sweeps (`fmt_fixture_files`, `example_files`, `driver_fixture_files`,
+//!   `check_all_parallel`) shared by `semantic_roundtrip` and `idempotency`.
 
 #![allow(dead_code)]
+
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use proptest::prelude::*;
 use proptest::strategy::BoxedStrategy;
@@ -298,4 +304,108 @@ pub fn arb_module() -> BoxedStrategy<Module> {
     prop::collection::vec(arb_item(), 1..=3)
         .prop_map(|items| Module { items, span: zs() })
         .boxed()
+}
+
+// ---------------------------------------------------------------------------
+// Fixture sweeps
+// ---------------------------------------------------------------------------
+
+fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("could not find workspace root")
+}
+
+/// Every `.ynz` file under `dir`, recursively. Panics when `dir` or a subdirectory cannot
+/// be read, or holds no `.ynz` file, so a moved fixture folder fails the sweep instead of
+/// shrinking it to nothing.
+fn walk_ynz_files(dir: &Path) -> Vec<PathBuf> {
+    let mut files = vec![];
+    let entries = std::fs::read_dir(dir)
+        .unwrap_or_else(|read_error| panic!("could not read {}: {read_error}", dir.display()));
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            files.extend(walk_ynz_files(&path));
+        } else if path.extension().and_then(|extension| extension.to_str()) == Some("ynz") {
+            files.push(path);
+        }
+    }
+    files
+}
+
+fn non_empty_sweep(dir: &Path) -> Vec<PathBuf> {
+    let files = walk_ynz_files(dir);
+    assert!(
+        !files.is_empty(),
+        "no .ynz files found under {}",
+        dir.display()
+    );
+    files
+}
+
+/// The formatter's own fixtures (`crates/ynz-fmt/tests/fixtures`).
+pub fn fmt_fixture_files() -> Vec<PathBuf> {
+    non_empty_sweep(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures"))
+}
+
+/// Every example program except `fmt_demo`, which is intentionally non-canonical.
+pub fn example_files() -> Vec<PathBuf> {
+    non_empty_sweep(&workspace_root().join("examples"))
+        .into_iter()
+        .filter(|file| !file.to_string_lossy().contains("fmt_demo"))
+        .collect()
+}
+
+/// The driver crate's fixtures (`crates/ynz-driver/tests/fixtures`).
+pub fn driver_fixture_files() -> Vec<PathBuf> {
+    non_empty_sweep(&workspace_root().join("crates/ynz-driver/tests/fixtures"))
+}
+
+/// True when the parser reports a diagnostic for `source`. Such files are intentional
+/// error-gallery inputs: `format` rejects them, so they are not formatter targets.
+pub fn parses_with_errors(file_name: &str, source: &str) -> bool {
+    let db = ynz_parser::CompilerDb::default();
+    let source_file = ynz_parser::SourceFile::new(&db, file_name.to_string(), source.to_string());
+    !ynz_parser::parse_query(&db, source_file)
+        .diagnostics
+        .is_empty()
+}
+
+/// Run `check` over every file across all available cores.
+///
+/// Same shape as the canonical `parallel_sweep` in
+/// `crates/ynz-driver/tests/cross_impl_consistency.rs` (duplicated rather than shared because
+/// these are separate crates' test targets, with no shared test-support crate between them).
+/// Per `.claude/rules/test-parallelism.md`, the four independence questions are answered here
+/// so the next reader does not re-derive them:
+///
+///   1. No shared mutable state — each `check` builds its OWN
+///      `ynz_parser::CompilerDb::default()` per call; nothing is threaded between files.
+///   2. No ordering dependency — each file is checked in isolation.
+///   3. No shared filesystem path — the checks are read-only (`read_to_string`); they write
+///      nothing and spawn no subprocess.
+///   4. No global process state — no env mutation, no `set_current_dir`, no singleton.
+///
+/// A failing file panics inside its worker with the path already in the assert message;
+/// `std::thread::scope` propagates that panic on join, so a failure still fails the test.
+pub fn check_all_parallel(files: &[PathBuf], check: impl Fn(&Path) + Sync) {
+    let workers = std::thread::available_parallelism()
+        .map(|parallelism| parallelism.get())
+        .unwrap_or(4)
+        .min(files.len().max(1));
+    let cursor = AtomicUsize::new(0);
+
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| loop {
+                let file_index = cursor.fetch_add(1, Ordering::Relaxed);
+                let Some(file) = files.get(file_index) else {
+                    break;
+                };
+                check(file);
+            });
+        }
+    });
 }

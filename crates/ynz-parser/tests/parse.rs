@@ -1,1611 +1,220 @@
-// WHY: the parser must accumulate errors, not bail on the first one. The
-// snapshot tests guard against silent regression to "return on first error."
-// Each negative case asserts both the diagnostic count AND that a partial AST
-// was produced (no panic, no empty module where items were expected).
+// The parser must accumulate errors, not bail on the first one, and must hand later
+// stages an AST whose shape they can rely on. Every table below is a generating macro:
+// one named test per case, so nextest runs the cases in parallel and names the failing one.
+//
+//   * `ast_cases!`        valid source parses with no diagnostic and has this AST shape
+//   * `recovery_cases!`   invalid source yields this many diagnostics and a recovered AST
+//   * `precedence_cases!` parity: each infix operator's binding power equals the spec table
+//   * `snapshot_cases!`   whole programs against insta snapshots (own harness)
 
+mod common;
+
+use common::{AtLeast, ExpectedDiagnosticCount};
 use insta::assert_debug_snapshot;
-use salsa::Setter as _;
-use ynz_ast::nodes::{BinOpKind, Expr, Item, MatchPatternKind, Stmt, Type};
+use ynz_ast::nodes::{
+    BinOpKind, Expr, FunctionDecl, Item, MatchPatternKind, OptionsDecl, OwnershipModifier,
+    PostfixOpKind, ReceiverKind, ShapeDecl, Stmt, StringPart, Type, UnaryOpKind,
+};
 use ynz_diagnostics::SourceSpan;
-use ynz_parser::{parse_query, CompilerDb, SourceFile};
+use ynz_parser::{parse_query, CompilerDb, ParseOutput, SourceFile, Token};
 
-// ── M5 parse helpers ─────────────────────────────────────────────────────────
-fn parse_fn_body(source: &str) -> Vec<Stmt> {
-    let output = parse(source);
-    assert_eq!(
-        output.diagnostics.len(),
-        0,
-        "unexpected diagnostics: {:?}",
-        output.diagnostics
-    );
-    match &output.module.items[0] {
-        Item::Function(f) => f.body.stmts.clone(),
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function"),
-    }
+const FILE: &str = "test.ynz";
+
+fn parse(source: &str) -> ParseOutput {
+    let db = CompilerDb::default();
+    let source_file = SourceFile::new(&db, FILE.to_string(), source.to_string());
+    let output = parse_query(&db, source_file);
+    (*output).clone()
 }
 
 fn wrap(inner: &str) -> String {
     format!("function entrypoint() -> Nothing {{ {inner} }}")
 }
 
-const FILE: &str = "test.ynz";
-
-fn span(start: usize, end: usize) -> SourceSpan {
-    SourceSpan::new(FILE, start, end)
-}
-
-fn parse(source: &str) -> ynz_parser::ParseOutput {
-    let db = CompilerDb::default();
-    let sf = SourceFile::new(&db, FILE.to_string(), source.to_string());
-    let output = parse_query(&db, sf);
-    (*output).clone()
-}
-
-#[test]
-fn m3_stmt_variant_count_locked() {
-    // WHY: Stmt variants beyond the M3 set are M4+ work. This test pins the count.
-    // Add a `// test-ratchet: <reason>` comment to unlock.
-    //
-    // test-ratchet: M2 adds 2 variants over M1's 1: Let and Assign.
-    //   M1: Expr(1). M2: Let(2), Assign(3). Total: 3.
-    //
-    // test-ratchet: M3 adds 5 variants for control flow.
-    //   If(4), Match(5), While(6), For(7), Return(8). Total: 8.
-    use ynz_ast::nodes::Stmt::*;
-    let err = ynz_ast::nodes::Expr::Error(span(0, 0));
-    let empty_block = ynz_ast::nodes::Block {
-        stmts: vec![],
-        span: span(0, 0),
-    };
-    let all_variants: &[Stmt] = &[
-        Expr(err.clone()),
-        Let {
-            is_const: false,
-            name: String::new(),
-            name_span: span(0, 0),
-            ty: None,
-            value: err.clone(),
-            span: span(0, 0),
-        },
-        Assign {
-            target: String::new(),
-            target_span: span(0, 0),
-            value: err.clone(),
-            span: span(0, 0),
-        },
-        If {
-            cond: err.clone(),
-            body: empty_block.clone(),
-            span: span(0, 0),
-        },
-        Match {
-            scrutinee: err.clone(),
-            arms: vec![],
-            else_arm: None,
-            span: span(0, 0),
-        },
-        While {
-            cond: err.clone(),
-            body: empty_block.clone(),
-            span: span(0, 0),
-        },
-        For {
-            var: String::new(),
-            var_span: span(0, 0),
-            iter: err.clone(),
-            body: empty_block.clone(),
-            span: span(0, 0),
-            destructure_pattern: None,
-            map_destructure_pattern: None,
-        },
-        Return {
-            value: None,
-            span: span(0, 0),
-        },
-    ];
-    assert_eq!(
-        all_variants.len(),
-        8,
-        "Stmt variant count changed from 8 — add a // test-ratchet: comment"
-    );
-}
-
-#[test]
-fn m3_match_pattern_kind_variant_count_locked() {
-    // WHY: Only three MatchPatternKind variants exist through M6: Value (active),
-    // Is and OptionName (both widened from M3 stubs in M6 P2).
-    // Locking this prevents accidentally adding a fourth without documenting the milestone.
-    //
-    // test-ratchet: M3 adds 3 variants: Value(1), IsType(2), Variant(3).
-    //   IsType and Variant are deferred to M6 — parser emits diagnostics.
-    // test-ratchet: M6 P2 renames IsType → Is(TypePath) and Variant → OptionName(String).
-    //   Variant count stays 3; payloads widened.
-    use ynz_ast::nodes::MatchPatternKind::*;
-    let all_variants: &[MatchPatternKind] = &[
-        Value(ynz_ast::nodes::Expr::Error(span(0, 0))),
-        Is(ynz_ast::nodes::TypePath {
-            name: "Foo".into(),
-            span: span(0, 3),
-        }),
-        OptionName("bar".into()),
-    ];
-    assert_eq!(
-        all_variants.len(),
-        3,
-        "MatchPatternKind variant count changed from 3"
-    );
-}
-
-#[test]
-fn m2_expr_variant_count_locked() {
-    // WHY: BinOp, UnaryOp, etc. beyond M2 are M3+ work. This pins the count.
-    // Add a `// test-ratchet: <reason>` comment to unlock.
-    //
-    // test-ratchet: M2 adds 6 variants over M1's 4.
-    //   M1: Ident(1), StringLit(2), Call(3), Error(4).
-    //   M2: IntLit(5), NumberLit(6), BoolLit(7), BinOp(8), UnaryOp(9), MethodCall(10).
-    //   Total: 10.
-    use ynz_ast::nodes::Expr::*;
-    let all_variants: &[Expr] = &[
-        Ident("x".into(), span(0, 1)),
-        StringLit(vec![], span(0, 0)),
-        Call(Box::new(ynz_ast::nodes::CallExpr {
-            callee: Ident("f".into(), span(0, 1)),
-            type_args: None,
-            args: vec![],
-            span: span(0, 3),
-        })),
-        Error(span(0, 0)),
-        IntLit(0, span(0, 1)),
-        NumberLit("0".into(), span(0, 1)),
-        BoolLit(true, span(0, 4)),
-        BinOp {
-            op: BinOpKind::Add,
-            lhs: Box::new(Error(span(0, 0))),
-            rhs: Box::new(Error(span(0, 0))),
-            span: span(0, 0),
-        },
-        UnaryOp {
-            op: ynz_ast::nodes::UnaryOpKind::Neg,
-            operand: Box::new(Error(span(0, 0))),
-            span: span(0, 0),
-        },
-        MethodCall {
-            receiver: Box::new(Error(span(0, 0))),
-            method: "toString".into(),
-            method_span: span(0, 0),
-            args: vec![],
-            span: span(0, 0),
-        },
-    ];
-    assert_eq!(all_variants.len(), 10, "Expr variant count changed from 10");
-}
-
-#[test]
-fn m3_type_variant_count_locked() {
-    // WHY: Type variants beyond M3 are M4+ work. This pins the count.
-    // Add a `// test-ratchet: <reason>` comment to unlock.
-    //
-    // test-ratchet: M2 adds 4 variants over M1's 3.
-    //   M1: Nothing(1), Named(2), Error(3).
-    //   M2: Int(4), Float(5), Number(6), Bool(7).
-    //   Total: 7.
-    //
-    // test-ratchet: M3 adds 1 variant for the range builtin iterable type.
-    //   Range is restricted to for-loop iterable position only.
-    //   Full Iterable[T] protocol replaces it in M7.
-    //   Total: 8.
-    use ynz_ast::nodes::Type::*;
-    let all_variants: &[Type] = &[
-        Nothing,
-        Named("foo".into(), span(0, 3)),
-        Error,
-        Int,
-        Float,
-        Number { precision: 34 },
-        Bool,
-        Range {
-            element: Box::new(Int),
-            end_inclusive: false,
-        },
-    ];
-    assert_eq!(
-        all_variants.len(),
-        8,
-        "Type variant count changed from 8 — add a // test-ratchet: comment"
-    );
-}
-
-// ── M4 variant count ratchets ────────────────────────────────────────────────
-
-#[test]
-fn m4_item_variant_count_locked() {
-    // WHY: Item variants beyond M4 are M5+ work. This pins the count.
-    // Add a `// test-ratchet: <reason>` comment to unlock.
-    //
-    // test-ratchet: M1 adds 1 variant: Function(1).
-    // test-ratchet: M4 adds 1 variant: ShapeDecl(2).
-    use ynz_ast::nodes::{Block, FunctionDecl, Item, ShapeDecl, Type};
-    let empty_block = Block {
-        stmts: vec![],
-        span: span(0, 0),
-    };
-    let all_variants: &[Item] = &[
-        Item::Function(FunctionDecl {
-            name: "f".into(),
-            name_span: span(0, 1),
-            generics: vec![],
-            params: vec![],
-            return_type: Type::Nothing,
-            body: empty_block,
-            span: span(0, 0),
-            // test-ratchet: M7 P1 adds errors_capable field to FunctionDecl
-            errors_capable: false,
-            // test-ratchet: M8 P1 adds is_exported
-            is_exported: false,
-            // test-ratchet: M8 P3 adds doc
-            doc: None,
-        }),
-        Item::ShapeDecl(ShapeDecl {
-            name: "Foo".into(),
-            name_span: span(0, 3),
-            is_base: false,
-            generics: vec![],
-            extends: None,
-            follows: vec![],
-            fields: vec![],
-            contract_sigs: vec![],
-            alias_ty: None,
-            span: span(0, 0),
-            // test-ratchet: M8 P1 adds is_exported
-            is_exported: false,
-            // test-ratchet: M8 P3 adds doc
-            doc: None,
-        }),
-    ];
-    assert_eq!(
-        all_variants.len(),
-        2,
-        "Item variant count changed from 2 — add a // test-ratchet: comment"
-    );
-}
-
-#[test]
-fn m4_stmt_variant_count_locked() {
-    // WHY: Stmt variants beyond M4 are M5+ work. This pins the count.
-    //
-    // test-ratchet: M4 adds 1 variant over M3's 8: FieldAssign(9).
-    use ynz_ast::nodes::Stmt::*;
-    let err = ynz_ast::nodes::Expr::Error(span(0, 0));
-    let empty_block = ynz_ast::nodes::Block {
-        stmts: vec![],
-        span: span(0, 0),
-    };
-    let all_variants: &[Stmt] = &[
-        Expr(err.clone()),
-        Let {
-            is_const: false,
-            name: String::new(),
-            name_span: span(0, 0),
-            ty: None,
-            value: err.clone(),
-            span: span(0, 0),
-        },
-        Assign {
-            target: String::new(),
-            target_span: span(0, 0),
-            value: err.clone(),
-            span: span(0, 0),
-        },
-        If {
-            cond: err.clone(),
-            body: empty_block.clone(),
-            span: span(0, 0),
-        },
-        Match {
-            scrutinee: err.clone(),
-            arms: vec![],
-            else_arm: None,
-            span: span(0, 0),
-        },
-        While {
-            cond: err.clone(),
-            body: empty_block.clone(),
-            span: span(0, 0),
-        },
-        For {
-            var: String::new(),
-            var_span: span(0, 0),
-            iter: err.clone(),
-            body: empty_block.clone(),
-            span: span(0, 0),
-            destructure_pattern: None,
-            map_destructure_pattern: None,
-        },
-        Return {
-            value: None,
-            span: span(0, 0),
-        },
-        FieldAssign {
-            target: Box::new(err.clone()),
-            value: err.clone(),
-            span: span(0, 0),
-        },
-    ];
-    assert_eq!(
-        all_variants.len(),
-        9,
-        "Stmt variant count changed from 9 — add a // test-ratchet: comment"
-    );
-}
-
-#[test]
-fn m4_expr_variant_count_locked() {
-    // WHY: Expr variants beyond M4 are M5+ work. This pins the count.
-    //
-    // test-ratchet: M4 adds 4 variants over M2's 10: FieldAccess(11), StructLit(12), PostfixOp(13), SelfValue(14).
-    use ynz_ast::nodes::{BinOpKind, Expr::*, PostfixOpKind};
-    let err = || Box::new(Error(span(0, 0)));
-    let all_variants: &[ynz_ast::nodes::Expr] = &[
-        Ident("x".into(), span(0, 1)),
-        StringLit(vec![], span(0, 0)),
-        Call(Box::new(ynz_ast::nodes::CallExpr {
-            callee: Ident("f".into(), span(0, 1)),
-            type_args: None,
-            args: vec![],
-            span: span(0, 3),
-        })),
-        Error(span(0, 0)),
-        IntLit(0, span(0, 1)),
-        NumberLit("0".into(), span(0, 1)),
-        BoolLit(true, span(0, 4)),
-        BinOp {
-            op: BinOpKind::Add,
-            lhs: err(),
-            rhs: err(),
-            span: span(0, 0),
-        },
-        UnaryOp {
-            op: ynz_ast::nodes::UnaryOpKind::Neg,
-            operand: err(),
-            span: span(0, 0),
-        },
-        MethodCall {
-            receiver: err(),
-            method: "m".into(),
-            method_span: span(0, 1),
-            args: vec![],
-            span: span(0, 0),
-        },
-        FieldAccess {
-            receiver: err(),
-            field: "f".into(),
-            field_span: span(0, 1),
-            span: span(0, 0),
-        },
-        StructLit {
-            fields: vec![],
-            span: span(0, 0),
-        },
-        PostfixOp {
-            receiver: err(),
-            op: PostfixOpKind::Copy,
-            span: span(0, 0),
-        },
-        SelfValue { span: span(0, 0) },
-    ];
-    assert_eq!(
-        all_variants.len(),
-        14,
-        "Expr variant count changed from 14 — add a // test-ratchet: comment"
-    );
-}
-
-#[test]
-fn m4_type_variant_count_locked() {
-    // WHY: Type variants beyond M4 are M5+ work. This pins the count.
-    //
-    // test-ratchet: M4 adds 2 variants over M3's 8: Dynamic(9), SelfType(10).
-    use ynz_ast::nodes::Type::*;
-    let all_variants: &[ynz_ast::nodes::Type] = &[
-        Nothing,
-        Named("foo".into(), span(0, 3)),
-        Error,
-        Int,
-        Float,
-        Number { precision: 34 },
-        Bool,
-        Range {
-            element: Box::new(Int),
-            end_inclusive: false,
-        },
-        Dynamic {
-            contract: "Foo".into(),
-            span: span(0, 3),
-        },
-        SelfType { span: span(0, 4) },
-    ];
-    assert_eq!(
-        all_variants.len(),
-        10,
-        "Type variant count changed from 10 — add a // test-ratchet: comment"
-    );
-}
-
-// ── M5 variant-count locks ───────────────────────────────────────────────────
-
-#[test]
-fn m5_stmt_variant_count_locked() {
-    // WHY: Stmt variants beyond M5 are M6+ work. This pins the count.
-    //
-    // test-ratchet: M5 adds 1 variant over M4's 9: IndexAssign(10).
-    use ynz_ast::nodes::Stmt::*;
-    let err = ynz_ast::nodes::Expr::Error(span(0, 0));
-    let empty_block = ynz_ast::nodes::Block {
-        stmts: vec![],
-        span: span(0, 0),
-    };
-    let all_variants: &[Stmt] = &[
-        Expr(err.clone()),
-        Let {
-            is_const: false,
-            name: String::new(),
-            name_span: span(0, 0),
-            ty: None,
-            value: err.clone(),
-            span: span(0, 0),
-        },
-        Assign {
-            target: String::new(),
-            target_span: span(0, 0),
-            value: err.clone(),
-            span: span(0, 0),
-        },
-        If {
-            cond: err.clone(),
-            body: empty_block.clone(),
-            span: span(0, 0),
-        },
-        Match {
-            scrutinee: err.clone(),
-            arms: vec![],
-            else_arm: None,
-            span: span(0, 0),
-        },
-        While {
-            cond: err.clone(),
-            body: empty_block.clone(),
-            span: span(0, 0),
-        },
-        For {
-            var: String::new(),
-            var_span: span(0, 0),
-            iter: err.clone(),
-            body: empty_block.clone(),
-            span: span(0, 0),
-            destructure_pattern: None,
-            map_destructure_pattern: None,
-        },
-        Return {
-            value: None,
-            span: span(0, 0),
-        },
-        FieldAssign {
-            target: Box::new(err.clone()),
-            value: err.clone(),
-            span: span(0, 0),
-        },
-        IndexAssign {
-            receiver: Box::new(err.clone()),
-            index: Box::new(err.clone()),
-            value: err.clone(),
-            span: span(0, 0),
-        },
-    ];
-    assert_eq!(
-        all_variants.len(),
-        10,
-        "Stmt variant count changed from 10 — add a // test-ratchet: comment"
-    );
-}
-
-#[test]
-fn m5_expr_variant_count_locked() {
-    // WHY: Expr variants beyond M5 are M6+ work. This pins the count.
-    //
-    // test-ratchet: M5 P3b adds 1 variant: ArrayLit(17), over P1's NoneLit(15) and IndexAccess(16).
-    // test-ratchet: M5 P3c adds 1 variant: MapLit(18), for map literal syntax.
-    use ynz_ast::nodes::{BinOpKind, Expr::*, PostfixOpKind};
-    let err = || Box::new(Error(span(0, 0)));
-    let all_variants: &[ynz_ast::nodes::Expr] = &[
-        Ident("x".into(), span(0, 1)),
-        StringLit(vec![], span(0, 0)),
-        Call(Box::new(ynz_ast::nodes::CallExpr {
-            callee: Ident("f".into(), span(0, 1)),
-            type_args: None,
-            args: vec![],
-            span: span(0, 3),
-        })),
-        Error(span(0, 0)),
-        IntLit(0, span(0, 1)),
-        NumberLit("0".into(), span(0, 1)),
-        BoolLit(true, span(0, 4)),
-        BinOp {
-            op: BinOpKind::Add,
-            lhs: err(),
-            rhs: err(),
-            span: span(0, 0),
-        },
-        UnaryOp {
-            op: ynz_ast::nodes::UnaryOpKind::Neg,
-            operand: err(),
-            span: span(0, 0),
-        },
-        MethodCall {
-            receiver: err(),
-            method: "m".into(),
-            method_span: span(0, 1),
-            args: vec![],
-            span: span(0, 0),
-        },
-        FieldAccess {
-            receiver: err(),
-            field: "f".into(),
-            field_span: span(0, 1),
-            span: span(0, 0),
-        },
-        StructLit {
-            fields: vec![],
-            span: span(0, 0),
-        },
-        PostfixOp {
-            receiver: err(),
-            op: PostfixOpKind::Copy,
-            span: span(0, 0),
-        },
-        SelfValue { span: span(0, 0) },
-        NoneLit { span: span(0, 0) },
-        IndexAccess {
-            receiver: err(),
-            index: err(),
-            span: span(0, 0),
-        },
-        ArrayLit {
-            elements: vec![],
-            span: span(0, 0),
-        },
-        MapLit {
-            entries: vec![],
-            span: span(0, 0),
-        },
-    ];
-    assert_eq!(
-        all_variants.len(),
-        18,
-        "Expr variant count changed from 18 — add a // test-ratchet: comment"
-    );
-}
-
-#[test]
-fn m6_expr_variant_count_locked() {
-    // WHY: Expr variants beyond M6 are M7+ work. This pins the count.
-    //
-    // test-ratchet: M6 P3b adds Is(19) for `x is Foo` type-narrowing condition form.
-    use ynz_ast::nodes::{BinOpKind, Expr::*, PostfixOpKind};
-    let err = || Box::new(Error(span(0, 0)));
-    let all_variants: &[ynz_ast::nodes::Expr] = &[
-        Ident("x".into(), span(0, 1)),
-        StringLit(vec![], span(0, 0)),
-        Call(Box::new(ynz_ast::nodes::CallExpr {
-            callee: Ident("f".into(), span(0, 1)),
-            type_args: None,
-            args: vec![],
-            span: span(0, 3),
-        })),
-        Error(span(0, 0)),
-        IntLit(0, span(0, 1)),
-        NumberLit("0".into(), span(0, 1)),
-        BoolLit(true, span(0, 4)),
-        BinOp {
-            op: BinOpKind::Add,
-            lhs: err(),
-            rhs: err(),
-            span: span(0, 0),
-        },
-        UnaryOp {
-            op: ynz_ast::nodes::UnaryOpKind::Neg,
-            operand: err(),
-            span: span(0, 0),
-        },
-        MethodCall {
-            receiver: err(),
-            method: "m".into(),
-            method_span: span(0, 1),
-            args: vec![],
-            span: span(0, 0),
-        },
-        FieldAccess {
-            receiver: err(),
-            field: "f".into(),
-            field_span: span(0, 1),
-            span: span(0, 0),
-        },
-        StructLit {
-            fields: vec![],
-            span: span(0, 0),
-        },
-        PostfixOp {
-            receiver: err(),
-            op: PostfixOpKind::Copy,
-            span: span(0, 0),
-        },
-        SelfValue { span: span(0, 0) },
-        NoneLit { span: span(0, 0) },
-        IndexAccess {
-            receiver: err(),
-            index: err(),
-            span: span(0, 0),
-        },
-        ArrayLit {
-            elements: vec![],
-            span: span(0, 0),
-        },
-        MapLit {
-            entries: vec![],
-            span: span(0, 0),
-        },
-        Is {
-            expr: err(),
-            ty: ynz_ast::nodes::TypePath {
-                name: "Foo".into(),
-                span: span(0, 3),
-            },
-            span: span(0, 0),
-        },
-    ];
-    assert_eq!(
-        all_variants.len(),
-        19,
-        "Expr variant count changed from 19 — add a // test-ratchet: comment"
-    );
-}
-
-#[test]
-fn m5_type_variant_count_locked() {
-    // WHY: Type variants beyond M5 are M6+ work. This pins the count.
-    //
-    // test-ratchet: M5 adds 3 variants over M4's 10: TypeParam(11), Generic(12), Maybe(13).
-    use ynz_ast::nodes::Type::*;
-    let all_variants: &[ynz_ast::nodes::Type] = &[
-        Nothing,
-        Named("foo".into(), span(0, 3)),
-        Error,
-        Int,
-        Float,
-        Number { precision: 34 },
-        Bool,
-        Range {
-            element: Box::new(Int),
-            end_inclusive: false,
-        },
-        Dynamic {
-            contract: "Foo".into(),
-            span: span(0, 3),
-        },
-        SelfType { span: span(0, 4) },
-        TypeParam {
-            name: "T".into(),
-            span: span(0, 1),
-        },
-        Generic {
-            name: "Array".into(),
-            name_span: span(0, 5),
-            args: vec![Int],
-            span: span(0, 10),
-        },
-        Maybe {
-            inner: Box::new(Int),
-            span: span(0, 9),
-        },
-    ];
-    assert_eq!(
-        all_variants.len(),
-        13,
-        "Type variant count changed from 13 — add a // test-ratchet: comment"
-    );
-}
-
-// ── M6 variant-count locks ───────────────────────────────────────────────────
-
-#[test]
-fn m6_item_variant_count_locked() {
-    // WHY: Item variants beyond M6 are M7+ work. This pins the count.
-    //
-    // test-ratchet: M6 adds OptionsDecl(3) for `options Status { ... }` declarations.
-    //   M1: Function(1). M4: ShapeDecl(2). M6: OptionsDecl(3). Total: 3.
-    use ynz_ast::nodes::Item::*;
-    let all_variants: &[Item] = &[
-        Function(ynz_ast::nodes::FunctionDecl {
-            name: String::new(),
-            name_span: span(0, 0),
-            generics: vec![],
-            params: vec![],
-            return_type: Type::Nothing,
-            body: ynz_ast::nodes::Block {
-                stmts: vec![],
-                span: span(0, 0),
-            },
-            span: span(0, 0),
-            // test-ratchet: M7 P1 adds errors_capable field to FunctionDecl
-            errors_capable: false,
-            // test-ratchet: M8 P1 adds is_exported
-            is_exported: false,
-            // test-ratchet: M8 P3 adds doc
-            doc: None,
-        }),
-        ShapeDecl(ynz_ast::nodes::ShapeDecl {
-            name: String::new(),
-            name_span: span(0, 0),
-            is_base: false,
-            generics: vec![],
-            extends: None,
-            follows: vec![],
-            fields: vec![],
-            contract_sigs: vec![],
-            alias_ty: None,
-            span: span(0, 0),
-            // test-ratchet: M8 P1 adds is_exported
-            is_exported: false,
-            // test-ratchet: M8 P3 adds doc
-            doc: None,
-        }),
-        OptionsDecl(ynz_ast::nodes::OptionsDecl {
-            name: "Status".into(),
-            name_span: span(0, 6),
-            variants: vec![],
-            span: span(0, 20),
-            // test-ratchet: M8 P1 adds is_exported
-            is_exported: false,
-            // test-ratchet: M8 P3 adds doc
-            doc: None,
-        }),
-    ];
-    assert_eq!(
-        all_variants.len(),
-        3,
-        "Item variant count changed from 3 — add a // test-ratchet: comment"
-    );
-}
-
-#[test]
-fn m6_type_variant_count_locked() {
-    // WHY: Type variants beyond M6 are M7+ work. This pins the count.
-    //
-    // test-ratchet: M6 adds Union(14) for `A | B | C` union type syntax.
-    use ynz_ast::nodes::Type::*;
-    let all_variants: &[Type] = &[
-        Nothing,
-        Named("foo".into(), span(0, 3)),
-        Error,
-        Int,
-        Float,
-        Number { precision: 34 },
-        Bool,
-        Range {
-            element: Box::new(Int),
-            end_inclusive: false,
-        },
-        Dynamic {
-            contract: "Foo".into(),
-            span: span(0, 3),
-        },
-        SelfType { span: span(0, 4) },
-        TypeParam {
-            name: "T".into(),
-            span: span(0, 1),
-        },
-        Generic {
-            name: "Array".into(),
-            name_span: span(0, 5),
-            args: vec![Int],
-            span: span(0, 10),
-        },
-        Maybe {
-            inner: Box::new(Int),
-            span: span(0, 9),
-        },
-        Union {
-            variants: vec![Int, Float],
-            span: span(0, 10),
-        },
-    ];
-    assert_eq!(
-        all_variants.len(),
-        14,
-        "Type variant count changed from 14 — add a // test-ratchet: comment"
-    );
-}
-
-// ── M6 parse tests ───────────────────────────────────────────────────────────
-
-#[test]
-fn m6_options_decl_parses() {
-    // WHY: The simplest valid options declaration must parse into OptionsDecl with
-    // the correct variant list. If this fails, every options-using program fails.
-    let output = parse("options Status { active, inactive, banned }");
+fn assert_no_diagnostics(output: &ParseOutput) {
     assert_eq!(
         output.diagnostics.len(),
         0,
         "unexpected diagnostics: {:?}",
         output.diagnostics
     );
+}
+
+fn first_function(output: &ParseOutput) -> &FunctionDecl {
     match &output.module.items[0] {
-        Item::OptionsDecl(o) => {
-            assert_eq!(o.name, "Status");
-            assert_eq!(o.variants.len(), 3);
-            assert_eq!(o.variants[0].0, "active");
-            assert_eq!(o.variants[1].0, "inactive");
-            assert_eq!(o.variants[2].0, "banned");
-        }
-        other => panic!("expected OptionsDecl, got {other:?}"),
+        Item::Function(function) => function,
+        other => panic!("expected a function item, got {other:?}"),
     }
 }
 
-#[test]
-fn m6_options_decl_empty_body_parses_tolerantly() {
-    // WHY: Empty options body must parse (typeck rejects it with a teaching error).
-    // If the parser panics or produces 0 items, typeck never gets the chance to teach.
-    let output = parse("options Empty { }");
-    assert_eq!(
-        output.module.items.len(),
-        1,
-        "expected 1 item (OptionsDecl) even for empty body"
-    );
+fn first_shape(output: &ParseOutput) -> &ShapeDecl {
     match &output.module.items[0] {
-        Item::OptionsDecl(o) => {
-            assert_eq!(o.name, "Empty");
-            assert_eq!(o.variants.len(), 0, "empty body produces 0 variants");
-        }
-        other => panic!("expected OptionsDecl, got {other:?}"),
+        Item::ShapeDecl(shape) => shape,
+        other => panic!("expected a shape item, got {other:?}"),
     }
 }
 
-#[test]
-fn m6_union_type_in_return_position_parses() {
-    // WHY: `A | B` in a let annotation type position must produce Type::Union.
-    // If it produces two separate Named types, union narrowing is never reachable.
-    let stmts = parse_fn_body(&wrap("let x: Circle | Square = { radius: 5.0 }"));
-    match &stmts[0] {
-        ynz_ast::nodes::Stmt::Let {
-            ty: Some(Type::Union { variants, .. }),
-            ..
-        } => {
-            assert_eq!(variants.len(), 2, "expected 2 union variants");
-        }
-        other => panic!("expected Let with Union type, got {other:?}"),
-    }
-}
-
-#[test]
-fn m6_union_type_three_variants_parses() {
-    // WHY: Three-variant union `A | B | C` must parse into a single Union with 3 variants,
-    // not nested two-variant unions. Codegen relies on the flat list for tag assignment.
-    let stmts = parse_fn_body(&wrap("let x: Circle | Square | Triangle = { radius: 5.0 }"));
-    match &stmts[0] {
-        ynz_ast::nodes::Stmt::Let {
-            ty: Some(Type::Union { variants, .. }),
-            ..
-        } => {
-            assert_eq!(variants.len(), 3, "expected 3 union variants in flat list");
-        }
-        other => panic!("expected Let with Union type, got {other:?}"),
-    }
-}
-
-#[test]
-fn m6_is_arm_produces_is_pattern() {
-    // WHY: `is Circle =>` in a multi-case arm must produce MatchPatternKind::Is(TypePath),
-    // not a generic Value pattern. Typeck and codegen key on this variant for union narrowing.
-    let output = parse(
-        r#"function entrypoint() -> Nothing {
-  if (x) {
-    is Circle => print("circle")
-    else => print("other")
-  }
-}"#,
-    );
-    // Parser emits a deferral diagnostic (P3b removes it); but the AST node must be Is.
-    let func = match &output.module.items[0] {
-        Item::Function(f) => f,
-        other => panic!("expected Function, got {other:?}"),
-    };
-    let is_arm_found = func.body.stmts.iter().any(|stmt| {
-        if let ynz_ast::nodes::Stmt::Match { arms, .. } = stmt {
-            arms.iter()
-                .any(|arm| matches!(&arm.pattern.kind, MatchPatternKind::Is(_)))
-        } else {
-            false
-        }
-    });
-    assert!(
-        is_arm_found,
-        "expected at least one MatchPatternKind::Is arm"
-    );
-}
-
-// ── M4 parse tests ───────────────────────────────────────────────────────────
-
-#[test]
-fn shape_declaration_parses() {
-    // WHY: The simplest valid shape must parse cleanly. If this fails,
-    // every downstream shape test is meaningless.
-    let output = parse("shape Player { name: String\n health: Int }");
-    assert_eq!(
-        output.diagnostics.len(),
-        0,
-        "Simple shape must parse with 0 diagnostics"
-    );
-    assert!(
-        matches!(&output.module.items[0], Item::ShapeDecl(s) if s.name == "Player"),
-        "Expected ShapeDecl(Player)"
-    );
+fn first_options(output: &ParseOutput) -> &OptionsDecl {
     match &output.module.items[0] {
-        Item::ShapeDecl(s) => {
-            assert_eq!(s.fields.len(), 2, "Expected 2 fields");
-            assert_eq!(s.fields[0].name, "name");
-            assert_eq!(s.fields[1].name, "health");
-            assert!(!s.is_base);
-            assert!(s.extends.is_none());
-            assert!(s.follows.is_empty());
-        }
-        _ => panic!("expected ShapeDecl"),
+        Item::OptionsDecl(options) => options,
+        other => panic!("expected an options item, got {other:?}"),
     }
 }
 
-#[test]
-fn base_shape_parses() {
-    // WHY: `base shape` is the Yinz form for non-instantiable types. The parser must
-    // set is_base=true and not confuse it with a regular shape.
-    let output = parse("base shape Entity { name: String }");
-    assert_eq!(output.diagnostics.len(), 0);
-    match &output.module.items[0] {
-        Item::ShapeDecl(s) => {
-            assert!(s.is_base, "Expected is_base=true");
-            assert_eq!(s.name, "Entity");
-        }
-        _ => panic!("expected ShapeDecl"),
+fn body_stmts(output: &ParseOutput) -> &[Stmt] {
+    &first_function(output).body.stmts
+}
+
+/// The value of the first statement of the first function, which must be a `let`.
+fn first_let_value(output: &ParseOutput) -> &Expr {
+    match &body_stmts(output)[0] {
+        Stmt::Let { value, .. } => value,
+        other => panic!("expected a let statement, got {other:?}"),
     }
 }
 
-#[test]
-fn shape_with_extends_and_follows_parses() {
-    // WHY: `shape Warrior extends Entity follows Damageable` must parse the
-    // inheritance and contract declarations correctly into the AST.
-    let output = parse("shape Warrior extends Entity follows Damageable { weapon: String }");
-    assert_eq!(output.diagnostics.len(), 0);
-    match &output.module.items[0] {
-        Item::ShapeDecl(s) => {
+/// The type annotation of the first statement of the first function, a `let` with a type.
+fn first_let_type(output: &ParseOutput) -> &Type {
+    match &body_stmts(output)[0] {
+        Stmt::Let { ty: Some(ty), .. } => ty,
+        other => panic!("expected a let statement with a type annotation, got {other:?}"),
+    }
+}
+
+/// The parts of the backtick string bound by the first `let` of the first function.
+fn first_let_string_parts(output: &ParseOutput) -> &[StringPart] {
+    match first_let_value(output) {
+        Expr::InterpolatedString(parts, _) => parts,
+        other => panic!("expected an interpolated string, got {other:?}"),
+    }
+}
+
+fn is_literal_part(part: &StringPart, expected: &[u8]) -> bool {
+    matches!(part, StringPart::Lit(bytes, _) if bytes == expected)
+}
+
+/// Asserts `type_` is `Fixed<Int, length>`, the length arriving as `Type::Length`.
+fn assert_fixed_length(type_: &Type, length: u64) {
+    match type_ {
+        Type::Generic { name, args, .. } => {
+            assert_eq!(name, "Fixed");
+            assert_eq!(args.len(), 2, "{length}");
+            assert!(matches!(args[0], Type::Int), "{length}");
             assert!(
-                s.extends.as_ref().is_some_and(|(n, _)| n == "Entity"),
-                "Expected extends=Entity"
-            );
-            assert_eq!(s.follows.len(), 1);
-            assert_eq!(s.follows[0].0, "Damageable");
-        }
-        _ => panic!("expected ShapeDecl"),
-    }
-}
-
-#[test]
-fn hidden_field_parses() {
-    // WHY: `hidden cache: int` must set is_hidden=true on the FieldDecl.
-    let output = parse("shape Player { name: String\n hidden cache: Int }");
-    assert_eq!(output.diagnostics.len(), 0);
-    match &output.module.items[0] {
-        Item::ShapeDecl(s) => {
-            assert!(!s.fields[0].is_hidden, "name should not be hidden");
-            assert!(s.fields[1].is_hidden, "cache should be hidden");
-        }
-        _ => panic!("expected ShapeDecl"),
-    }
-}
-
-#[test]
-fn contract_sig_in_shape_parses() {
-    // WHY: Bare method signatures `greet(share self) -> string` inside a shape
-    // are how contracts are declared. Parser must distinguish them from fields.
-    let output = parse("shape Greetable { greet(share self) -> String }");
-    assert_eq!(output.diagnostics.len(), 0);
-    match &output.module.items[0] {
-        Item::ShapeDecl(s) => {
-            assert_eq!(s.fields.len(), 0, "No data fields");
-            assert_eq!(s.contract_sigs.len(), 1, "Expected 1 contract sig");
-            assert_eq!(s.contract_sigs[0].name, "greet");
-            assert!(matches!(
-                s.contract_sigs[0].receiver,
-                Some(ynz_ast::nodes::ReceiverKind::Share)
-            ));
-        }
-        _ => panic!("expected ShapeDecl"),
-    }
-}
-
-#[test]
-fn anonymous_struct_lit_parses() {
-    // WHY: `let p: Player = { name: "Patrick", health: 100 }` — the annotation-only
-    // struct literal form — must produce Expr::StructLit with 2 fields.
-    // test-ratchet: M7 P1 — migrated to backtick syntax
-    let output = parse("function entrypoint() -> Nothing { let p: String = { name: `Patrick` } }");
-    assert_eq!(output.diagnostics.len(), 0, "Struct lit must parse cleanly");
-    let body = match &output.module.items[0] {
-        Item::Function(f) => &f.body,
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
-    };
-    match &body.stmts[0] {
-        Stmt::Let {
-            value: ynz_ast::nodes::Expr::StructLit { fields, .. },
-            ..
-        } => {
-            assert_eq!(fields.len(), 1, "Expected 1 field");
-            assert_eq!(fields[0].name, "name");
-        }
-        other => panic!("Expected Let with StructLit value, got {other:?}"),
-    }
-}
-
-#[test]
-fn field_access_parses() {
-    // WHY: `player.health` must produce Expr::FieldAccess (no parens = pure read
-    // per dot-postfix rule). If it accidentally becomes MethodCall, codegen breaks.
-    let output = parse("function entrypoint() -> Nothing { let x = player.health }");
-    assert_eq!(output.diagnostics.len(), 0);
-    let body = match &output.module.items[0] {
-        Item::Function(f) => &f.body,
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
-    };
-    match &body.stmts[0] {
-        Stmt::Let {
-            value: ynz_ast::nodes::Expr::FieldAccess { field, .. },
-            ..
-        } => {
-            assert_eq!(field, "health");
-        }
-        other => panic!("Expected Let with FieldAccess, got {other:?}"),
-    }
-}
-
-#[test]
-fn field_assignment_parses() {
-    // WHY: `player.health = 50` must produce Stmt::FieldAssign, not Stmt::Assign.
-    // If it becomes Stmt::Assign, the typeck won't enforce field-mutation rules.
-    let output = parse("function entrypoint() -> Nothing { player.health = 50 }");
-    assert_eq!(output.diagnostics.len(), 0);
-    let body = match &output.module.items[0] {
-        Item::Function(f) => &f.body,
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
-    };
-    match &body.stmts[0] {
-        Stmt::FieldAssign {
-            target,
-            value: ynz_ast::nodes::Expr::IntLit(50, _),
-            ..
-        } => {
-            assert!(
-                matches!(**target, ynz_ast::nodes::Expr::FieldAccess { ref field, .. } if field == "health")
+                matches!(&args[1], Type::Length { value, .. } if *value == length),
+                "{length}: {:?}",
+                args[1]
             );
         }
-        other => panic!("Expected FieldAssign, got {other:?}"),
+        other => panic!("expected `Fixed` with a length, got {other:?}"),
     }
 }
 
-#[test]
-fn copy_postfix_op_parses() {
-    // WHY: `value.copy()` must produce Expr::PostfixOp { op: Copy }. This is a
-    // body operation (parens required) per the dot-postfix rule.
-    let output = parse("function entrypoint() -> Nothing { let b = a.copy() }");
-    assert_eq!(output.diagnostics.len(), 0);
-    let body = match &output.module.items[0] {
-        Item::Function(f) => &f.body,
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
-    };
-    match &body.stmts[0] {
-        Stmt::Let {
-            value:
-                ynz_ast::nodes::Expr::PostfixOp {
-                    op: ynz_ast::nodes::PostfixOpKind::Copy,
-                    ..
-                },
-            ..
-        } => {}
-        other => panic!("Expected Let with PostfixOp(Copy), got {other:?}"),
+/// Binary operator at the top of the first `let` value, with its two operands.
+fn first_let_binop(output: &ParseOutput) -> (&BinOpKind, &Expr, &Expr) {
+    match first_let_value(output) {
+        Expr::BinOp { op, lhs, rhs, .. } => (op, lhs.as_ref(), rhs.as_ref()),
+        other => panic!("expected a binary operation, got {other:?}"),
     }
 }
 
-#[test]
-fn freeze_postfix_op_parses() {
-    // WHY: `value.freeze()` must produce Expr::PostfixOp { op: Freeze }.
-    let output = parse("function entrypoint() -> Nothing { cfg.freeze() }");
-    assert_eq!(output.diagnostics.len(), 0);
-    let body = match &output.module.items[0] {
-        Item::Function(f) => &f.body,
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
-    };
-    match &body.stmts[0] {
-        Stmt::Expr(ynz_ast::nodes::Expr::PostfixOp {
-            op: ynz_ast::nodes::PostfixOpKind::Freeze,
-            ..
-        }) => {}
-        other => panic!("Expected Expr(PostfixOp(Freeze)), got {other:?}"),
+fn binop_kind(expr: &Expr) -> Option<&BinOpKind> {
+    match expr {
+        Expr::BinOp { op, .. } => Some(op),
+        _ => None,
     }
 }
 
-#[test]
-fn dynamic_type_in_type_position_parses() {
-    // WHY: `let d: dynamic Damageable = p` — `dynamic Foo` is a valid type annotation.
-    // Must produce Type::Dynamic, not Type::Named.
-    let output = parse("function entrypoint() -> Nothing { let d: dynamic Foo = p }");
-    assert_eq!(output.diagnostics.len(), 0);
-    let body = match &output.module.items[0] {
-        Item::Function(f) => &f.body,
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
-    };
-    match &body.stmts[0] {
-        Stmt::Let {
-            ty: Some(ynz_ast::nodes::Type::Dynamic { contract, .. }),
-            ..
-        } => {
-            assert_eq!(contract, "Foo");
+/// One case per valid source: it parses with no diagnostic and `$assertions` holds.
+macro_rules! ast_cases {
+    ($($case:ident: $source:expr => |$output:ident| $assertions:block)+) => {$(
+        // bug: parser builds the wrong AST node or shape for valid source, or reports a diagnostic on it | tier: High
+        #[test]
+        fn $case() {
+            let $output = parse(&$source);
+            assert_no_diagnostics(&$output);
+            $assertions
         }
-        other => panic!("Expected Let with Type::Dynamic, got {other:?}"),
-    }
+    )+};
 }
 
-#[test]
-fn prefix_form_struct_lit_produces_teaching_diagnostic() {
-    // WHY: `Player { name: "x" }` is the banned prefix form. The parser must emit
-    // a teaching diagnostic redirecting to the annotation-only form, recover cleanly,
-    // and NOT produce an Expr::StructLit (since the prefix form is compile-time banned).
-    // test-ratchet: M7 P1 — migrated to backtick syntax
-    let output = parse("function entrypoint() -> Nothing { let x = Player { name: `Patrick` } }");
-    assert_eq!(
-        output.diagnostics.len(),
-        1,
-        "Prefix-form struct literal must produce exactly 1 teaching diagnostic"
-    );
-    assert!(
-        output.diagnostics[0].what_instead.contains("annotation"),
-        "Teaching diagnostic must mention annotation-driven form, got: {:?}",
-        output.diagnostics[0].what_instead
-    );
-}
-
-#[test]
-fn method_body_inside_shape_produces_diagnostic() {
-    // WHY: Yinz is not OOP — method bodies cannot be declared inside shapes.
-    // The parser must emit a clear teaching diagnostic and recover.
-    // test-ratchet: M7 P1 — migrated to backtick syntax
-    let output = parse("shape Player { function greet() -> String { return `hi` } }");
-    assert_eq!(
-        output.diagnostics.len(),
-        1,
-        "Method inside shape must produce exactly 1 diagnostic"
-    );
-    assert!(
-        output.diagnostics[0].what_instead.contains("outside"),
-        "Diagnostic must tell user to move the function outside the shape, got: {:?}",
-        output.diagnostics[0].what_instead
-    );
-}
-
-#[test]
-fn self_value_in_function_body_parses() {
-    // WHY: `self` (lowercase) in an expression position produces Expr::SelfValue.
-    // This enables receiver-style functions: `function greet(share self: Player) { print(self.name) }`.
-    let output = parse("function greet(share self: String) -> Nothing { print(self) }");
-    assert_eq!(output.diagnostics.len(), 0);
-    let body = match &output.module.items[0] {
-        Item::Function(f) => &f.body,
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
-    };
-    match &body.stmts[0] {
-        Stmt::Expr(ynz_ast::nodes::Expr::Call(c)) => {
+/// One case per invalid source: the diagnostic count, an optional key phrase in a named
+/// field (`what` or `what_instead`) of some diagnostic, and an optional extra check on the
+/// recovered module.
+macro_rules! recovery_cases {
+    ($($case:ident: $source:expr => $count:expr
+        $(, says $field:ident $phrase:expr)?
+        $(, then |$output:ident| $checks:block)?;)+) => {$(
+        // bug: parser misses, duplicates or cascades the diagnostic for invalid source, or loses the recovered AST | tier: High
+        #[test]
+        #[allow(unused_variables)] // `output` is read only by cases with a `then` check
+        fn $case() {
+            let output = parse(&$source);
             assert!(
-                matches!(c.args[0], ynz_ast::nodes::Expr::SelfValue { .. }),
-                "Arg must be SelfValue"
+                ExpectedDiagnosticCount::accepts(&$count, output.diagnostics.len()),
+                "diagnostic count {} for {:?}: {:?}",
+                output.diagnostics.len(),
+                $source,
+                output.diagnostics
+            );
+            $(
+                assert!(
+                    output.diagnostics.iter().any(|diagnostic| diagnostic.$field.contains($phrase)),
+                    "no diagnostic {} contains {:?}: {:?}",
+                    stringify!($field),
+                    $phrase,
+                    output.diagnostics
+                );
+            )?
+            $(
+                let $output = &output;
+                $checks
+            )?
+        }
+    )+};
+}
+
+/// One case per infix operator: the spec table (docs/reference/REF-operators.md) and the
+/// parser's `infix_bp` agree on its precedence level. Level N maps to lbp = (13 - N) * 2.
+macro_rules! precedence_cases {
+    ($($case:ident: $operator:literal, level $level:literal, $token:expr;)+) => {$(
+        // bug: parser binding power for the operator drifts from the precedence table in the language spec | tier: High
+        #[test]
+        fn $case() {
+            let spec_level = spec_precedence_level($operator);
+            assert_eq!(
+                spec_level, $level,
+                "operator `{}`: spec says level {spec_level} but the test table says level {}. \
+                 Update one to match.",
+                $operator, $level
+            );
+            let expected_lbp: u8 = (13 - $level) * 2;
+            let (actual_lbp, _) = ynz_parser::parser::infix_bp(&$token)
+                .unwrap_or_else(|| panic!("infix_bp returned None for `{}`", $operator));
+            assert_eq!(
+                actual_lbp, expected_lbp,
+                "operator `{}`: expected lbp {expected_lbp} (spec level {}), got lbp {actual_lbp}",
+                $operator, $level
             );
         }
-        other => panic!("Expected Expr(Call) with SelfValue arg, got {other:?}"),
-    }
+    )+};
 }
 
-#[test]
-fn m4_parse_snapshot() {
-    // WHY: Snapshot locks the full M4 AST for a realistic shape-declaration source
-    // so any parser regression shows up as an insta diff.
-    // test-ratchet: M7 P1 — migrated to backtick syntax
-    let source = "shape Player {\n  name: String\n  health: Int\n  hidden cache: Int\n}\n\nfunction greet(share self: Player) -> String {\n  return self.name\n}\n\nfunction entrypoint() -> Nothing {\n  let p: Player = { name: `Patrick`, health: 100 }\n  p.health = 90\n  let h = p.health\n  let b = p.copy()\n}";
-    let output = parse(source);
-    assert_eq!(
-        output.diagnostics.len(),
-        0,
-        "M4 fixture must parse with 0 diagnostics"
-    );
-    assert_debug_snapshot!("m4_ast", output.module);
+/// One case per realistic program: it parses clean and its whole AST matches the snapshot.
+macro_rules! snapshot_cases {
+    ($($case:ident: $snapshot_name:literal, $source:expr;)+) => {$(
+        // bug: a parser change silently alters the AST that typeck and codegen read for a realistic program | tier: High
+        #[test]
+        fn $case() {
+            let output = parse($source);
+            assert_no_diagnostics(&output);
+            assert_debug_snapshot!($snapshot_name, output.module);
+        }
+    )+};
 }
 
-#[test]
-fn m1_source_parses_to_expected_ast() {
-    // WHY: the AST shape that Phase 5 type-checker depends on is locked here.
-    // A silent change to this snapshot breaks the typeck layer.
-    //
-    // test-ratchet: M7 P1 — migrated to backtick syntax
-    let output = parse("function entrypoint() -> Nothing { print(`hello, yinz`) }");
-    assert_eq!(
-        output.diagnostics.len(),
-        0,
-        "M1 source must parse with no diagnostics"
-    );
-    assert_debug_snapshot!("m1_ast", output.module);
-}
-
-#[test]
-fn m2_source_parses_to_expected_ast() {
-    // WHY: this is the exact AST the Phase 4 type-checker depends on for M2.
-    // A silent change here means typeck breaks on the M2 smoke test.
-    let source = r#"function entrypoint() -> Nothing {
-  let price = 0.1 + 0.2
-  let count: Int = 42
-  let active = true
-  print(price)
-  print(count * count - 1)
-  print(active && (count > 0))
-}"#;
-    let output = parse(source);
-    assert_eq!(
-        output.diagnostics.len(),
-        0,
-        "M2 smoke test source must parse with zero diagnostics"
-    );
-    assert_debug_snapshot!("m2_ast", output.module);
-}
-
-#[test]
-fn type_annotations_parse_correctly() {
-    // WHY: `let x: int = 1` needs to produce Type::Int, not Type::Named("int").
-    // If primitive types are not recognized, typeck will fail to match them.
-    let output = parse("function entrypoint() -> Nothing { let x: Int = 1 }");
-    assert_eq!(output.diagnostics.len(), 0);
-    let body = match &output.module.items[0] {
-        Item::Function(f) => &f.body,
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
-    };
-    match &body.stmts[0] {
-        Stmt::Let {
-            ty: Some(Type::Int),
-            ..
-        } => {}
-        other => panic!("Expected Let with Type::Int, got {other:?}"),
-    }
-}
-
-#[test]
-fn number_type_without_brackets_is_34_precision() {
-    // WHY: `number` without `[N]` should default to 34 decimal digits.
-    let output = parse("function entrypoint() -> Nothing { let x: Number = 3.14 }");
-    assert_eq!(output.diagnostics.len(), 0);
-    let body = match &output.module.items[0] {
-        Item::Function(f) => &f.body,
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
-    };
-    match &body.stmts[0] {
-        Stmt::Let {
-            ty: Some(Type::Number { precision: 34 }),
-            ..
-        } => {}
-        other => panic!("Expected Let with Type::Number{{34}}, got {other:?}"),
-    }
-}
-
-#[test]
-fn number_bracket_syntax_produces_migration_diagnostic() {
-    // WHY: M5 unified all generic syntax on `<>`. `number[N]` is the pre-M5 form;
-    // the parser must reject it with a teaching migration diagnostic, not silently
-    // parse it or emit the old deferral. This guards against the old bracket form
-    // slipping back in if parse_number_type is refactored.
-    //
-    // test-ratchet: M8 P0 replaces the old deferral check (which tested `why.contains("v0.7")`)
-    // with a migration-diagnostic check. The old test was: `number[128]` → deferral.
-    // New behavior: `number[128]` → migration redirect; `number<128>` → deferral.
-    let output = parse("function entrypoint() -> Nothing { let x: Number[128] = 0 }");
-    assert_eq!(
-        output.diagnostics.len(),
-        1,
-        "Number[N] must produce exactly 1 migration diagnostic"
-    );
-    assert!(
-        output.diagnostics[0].what.contains("angle brackets"),
-        "Migration diagnostic must mention angle brackets, got: {:?}",
-        output.diagnostics[0].what
-    );
-    assert!(
-        output.diagnostics[0].what_instead.contains("Number<"),
-        "Migration diagnostic what-instead must show the angle-bracket form, got: {:?}",
-        output.diagnostics[0].what_instead
-    );
-}
-
-#[test]
-fn number_angle_bracket_34_accepts() {
-    // WHY: `number<34>` is the explicit angle-bracket form of the default precision.
-    // It must parse successfully and produce Type::Number{34}.
-    let output = parse("function entrypoint() -> Nothing { let x: Number<34> = 3.14 }");
-    assert_eq!(
-        output.diagnostics.len(),
-        0,
-        "Number<34> must have no diagnostics"
-    );
-    let body = match &output.module.items[0] {
-        Item::Function(f) => &f.body,
-        _ => panic!("expected a function item"),
-    };
-    match &body.stmts[0] {
-        Stmt::Let {
-            ty: Some(Type::Number { precision: 34 }),
-            ..
-        } => {}
-        other => panic!("Expected Let with Type::Number{{34}}, got {other:?}"),
-    }
-}
-
-#[test]
-fn number_angle_bracket_non34_parses_in_m8() {
-    // WHY: M8 P6 lifts the N != 34 deferral. `number<128>` must now parse without
-    // error — the bignum runtime ships in M8. Guards that the deferral diagnostic
-    // was fully removed and doesn't fire for any valid precision 1..=4096.
-    //
-    // test-ratchet: M8 P6 changes behavior from "1 deferral diagnostic" to "0 diagnostics".
-    // The old test (number_angle_bracket_non34_produces_deferral) is replaced by this one.
-    let output = parse("function entrypoint() -> Nothing { let x: Number<128> = 0 }");
-    assert_eq!(
-        output.diagnostics.len(),
-        0,
-        "Number<128> must parse without diagnostics in M8 (bignum ships): {:?}",
-        output.diagnostics
-    );
-}
-
-#[test]
-fn mul_binds_tighter_than_add() {
-    // WHY: `1 + 2 * 3` must parse as `1 + (2 * 3)`, not `(1 + 2) * 3`.
-    // If * and + have the same BP, PEMDAS breaks everywhere.
-    let output = parse("function entrypoint() -> Nothing { let x = 1 + 2 * 3 }");
-    assert_eq!(output.diagnostics.len(), 0);
-    let body = match &output.module.items[0] {
-        Item::Function(f) => &f.body,
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
-    };
-    match &body.stmts[0] {
-        Stmt::Let { value, .. } => match value {
-            Expr::BinOp {
-                op: BinOpKind::Add,
-                rhs,
-                ..
-            } => match rhs.as_ref() {
-                Expr::BinOp {
-                    op: BinOpKind::Mul, ..
-                } => {}
-                other => panic!("rhs of + should be Mul, got {other:?}"),
-            },
-            other => panic!("top should be Add, got {other:?}"),
-        },
-        other => panic!("Expected Stmt::Let, got {other:?}"),
-    }
-}
-
-#[test]
-fn comparison_binds_tighter_than_and() {
-    // WHY: `1 < 2 && 3 > 4` must parse as `(1 < 2) && (3 > 4)`.
-    // Mixing comparison and boolean operators is a common source of bugs.
-    let output = parse("function entrypoint() -> Nothing { let x = 1 < 2 && 3 > 4 }");
-    assert_eq!(output.diagnostics.len(), 0);
-    let body = match &output.module.items[0] {
-        Item::Function(f) => &f.body,
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
-    };
-    match &body.stmts[0] {
-        Stmt::Let { value, .. } => match value {
-            Expr::BinOp {
-                op: BinOpKind::And,
-                lhs,
-                rhs,
-                ..
-            } => {
-                assert!(matches!(
-                    lhs.as_ref(),
-                    Expr::BinOp {
-                        op: BinOpKind::Lt,
-                        ..
-                    }
-                ));
-                assert!(matches!(
-                    rhs.as_ref(),
-                    Expr::BinOp {
-                        op: BinOpKind::Gt,
-                        ..
-                    }
-                ));
-            }
-            other => panic!("top should be And, got {other:?}"),
-        },
-        other => panic!("Expected Stmt::Let, got {other:?}"),
-    }
-}
-
-#[test]
-fn binary_ops_are_left_associative() {
-    // WHY: `1 - 2 - 3` must parse as `(1 - 2) - 3`, not `1 - (2 - 3)`.
-    // Right-associativity would silently produce different runtime values.
-    let output = parse("function entrypoint() -> Nothing { let x = 1 - 2 - 3 }");
-    assert_eq!(output.diagnostics.len(), 0);
-    let body = match &output.module.items[0] {
-        Item::Function(f) => &f.body,
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
-    };
-    match &body.stmts[0] {
-        Stmt::Let { value, .. } => match value {
-            Expr::BinOp {
-                op: BinOpKind::Sub,
-                lhs,
-                rhs,
-                ..
-            } => {
-                // lhs should be (1 - 2), rhs should be 3
-                assert!(matches!(
-                    lhs.as_ref(),
-                    Expr::BinOp {
-                        op: BinOpKind::Sub,
-                        ..
-                    }
-                ));
-                assert!(matches!(rhs.as_ref(), Expr::IntLit(3, _)));
-            }
-            other => panic!("Expected Sub, got {other:?}"),
-        },
-        other => panic!("Expected Stmt::Let, got {other:?}"),
-    }
-}
-
-#[test]
-fn or_binds_looser_than_and() {
-    // WHY: `a || b && c` must be `a || (b && c)`, matching standard boolean precedence.
-    let output = parse("function entrypoint() -> Nothing { let x = a || b && c }");
-    assert_eq!(output.diagnostics.len(), 0);
-    let body = match &output.module.items[0] {
-        Item::Function(f) => &f.body,
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
-    };
-    match &body.stmts[0] {
-        Stmt::Let { value, .. } => match value {
-            Expr::BinOp {
-                op: BinOpKind::Or,
-                rhs,
-                ..
-            } => {
-                assert!(matches!(
-                    rhs.as_ref(),
-                    Expr::BinOp {
-                        op: BinOpKind::And,
-                        ..
-                    }
-                ));
-            }
-            other => panic!("top should be Or, got {other:?}"),
-        },
-        other => panic!("Expected Stmt::Let, got {other:?}"),
-    }
-}
-
-#[test]
-fn parentheses_override_precedence() {
-    // WHY: `(1 + 2) * 3` must parse as `Mul(Add(1,2), 3)`, not `Add(1, Mul(2,3))`.
-    // Parentheses are the user's escape valve from the precedence table.
-    let output = parse("function entrypoint() -> Nothing { let x = (1 + 2) * 3 }");
-    assert_eq!(output.diagnostics.len(), 0);
-    let body = match &output.module.items[0] {
-        Item::Function(f) => &f.body,
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
-    };
-    match &body.stmts[0] {
-        Stmt::Let { value, .. } => match value {
-            Expr::BinOp {
-                op: BinOpKind::Mul,
-                lhs,
-                ..
-            } => {
-                assert!(matches!(
-                    lhs.as_ref(),
-                    Expr::BinOp {
-                        op: BinOpKind::Add,
-                        ..
-                    }
-                ));
-            }
-            other => panic!("top should be Mul, got {other:?}"),
-        },
-        other => panic!("Expected Stmt::Let, got {other:?}"),
-    }
-}
-
-#[test]
-fn parser_precedence_table_matches_spec() {
-    // WHY: the Pratt binding powers in parser.rs must match the precedence table
-    // in docs/reference/REF-operators.md. If these drift, the compiler enforces
-    // different precedence than the language spec promises — a silent correctness bug.
-    // This test parses the spec table at runtime and compares it to the code.
-    use std::collections::HashMap;
-    use ynz_parser::Token;
-
-    // Read the spec precedence table
+/// Level the spec's "Operator precedence" code block gives `operator`.
+fn spec_precedence_level(operator: &str) -> u8 {
     let spec_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap() // crates/
@@ -1614,24 +223,20 @@ fn parser_precedence_table_matches_spec() {
         .join("docs/reference/REF-operators.md");
     let spec = std::fs::read_to_string(&spec_path)
         .unwrap_or_else(|_| panic!("Could not read {:?}", spec_path));
-
-    // Find the "Operator precedence" code block
-    let prec_section = spec
+    let section_start = spec
         .find("## Operator precedence")
-        .expect("spec/operators.md must have an '## Operator precedence' section");
-    let after = &spec[prec_section..];
-    // Find the opening ``` of the code block
+        .expect("REF-operators.md must have an '## Operator precedence' section");
+    let after = &spec[section_start..];
     let block_start = after
         .find("```\n")
         .expect("Operator precedence section must have a ``` code block")
         + 4;
-    let block_end = after[block_start..]
+    let block_length = after[block_start..]
         .find("```")
         .expect("Code block must be closed");
-    let block = &after[block_start..block_start + block_end];
+    let block = &after[block_start..block_start + block_length];
 
-    // Parse each line: "N.  op1  op2  // comment"
-    let mut spec_table: HashMap<&str, u8> = HashMap::new();
+    // Each line reads "N.  op1  op2  // comment".
     for line in block.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with("//") {
@@ -1639,407 +244,748 @@ fn parser_precedence_table_matches_spec() {
         }
         let without_comment = line.split("//").next().unwrap_or("").trim();
         let mut parts = without_comment.split_whitespace();
-        let level_str = match parts.next() {
-            Some(s) => s,
-            None => continue,
+        let Some(level_text) = parts.next() else {
+            continue;
         };
-        let level: u8 = match level_str.trim_end_matches('.').parse() {
-            Ok(n) => n,
-            Err(_) => continue,
+        let Ok(level) = level_text.trim_end_matches('.').parse::<u8>() else {
+            continue;
         };
-        for op in parts {
-            spec_table.insert(op, level);
+        if parts.any(|written| written == operator) {
+            return level;
         }
     }
+    panic!(
+        "Operator `{operator}` is in the code's infix_bp table but missing from \
+         REF-operators.md's precedence list. Add it to the spec."
+    );
+}
 
-    // The code table: (token, spec-level).  Level 1 = parentheses (handled in
-    // parse_atom, not infix_bp), level 2 = unary (handled in parse_prefix).
-    // This table covers only the INFIX binary operators in infix_bp().
-    let code_table: &[(&str, u8, Token)] = &[
-        ("*", 3, Token::Star),
-        ("/", 3, Token::Slash),
-        ("%", 3, Token::Percent),
-        ("+", 4, Token::Plus),
-        ("-", 4, Token::Minus),
-        ("<<", 5, Token::LtLt),
-        (">>", 5, Token::GtGt),
-        ("<", 6, Token::Lt),
-        (">", 6, Token::Gt),
-        ("<=", 6, Token::LtEq),
-        (">=", 6, Token::GtEq),
-        ("==", 7, Token::EqEq),
-        ("!=", 7, Token::NotEq),
-        ("&", 8, Token::Amp),
-        ("^", 9, Token::Caret),
-        ("|", 10, Token::Pipe),
-        ("&&", 11, Token::AmpAmp),
-        ("||", 12, Token::PipePipe),
-    ];
+ast_cases! {
+    // The empty source is the only input with no item at all.
+    empty_source_produces_empty_module: "" => |output| {
+        assert_eq!(output.module.items.len(), 0);
+    }
+    // ── options, shapes, contracts ───────────────────────────────────────────
+    options_decl_lists_its_variants: "options Status { active, inactive, banned }" => |output| {
+        let options = first_options(&output);
+        assert_eq!(options.name, "Status");
+        let variant_names: Vec<&str> = options.variants.iter().map(|variant| variant.0.as_str()).collect();
+        assert_eq!(variant_names, ["active", "inactive", "banned"]);
+    }
+    // An empty body must still parse (typeck rejects it with a teaching error).
+    options_decl_with_empty_body_still_yields_the_item: "options Empty { }" => |output| {
+        assert_eq!(output.module.items.len(), 1);
+        let options = first_options(&output);
+        assert_eq!(options.name, "Empty");
+        assert_eq!(options.variants.len(), 0);
+    }
+    shape_declaration_lists_fields: "shape Player { name: String\n health: Int }" => |output| {
+        let shape = first_shape(&output);
+        assert_eq!(shape.name, "Player");
+        assert_eq!(shape.fields.len(), 2);
+        assert_eq!(shape.fields[0].name, "name");
+        assert_eq!(shape.fields[1].name, "health");
+        assert!(!shape.is_base);
+        assert!(shape.extends.is_none());
+        assert!(shape.follows.is_empty());
+    }
+    base_shape_sets_is_base: "base shape Entity { name: String }" => |output| {
+        let shape = first_shape(&output);
+        assert!(shape.is_base);
+        assert_eq!(shape.name, "Entity");
+    }
+    shape_with_extends_and_follows: "shape Warrior extends Entity follows Damageable { weapon: String }" => |output| {
+        let shape = first_shape(&output);
+        assert!(shape.extends.as_ref().is_some_and(|(parent, _)| parent == "Entity"));
+        assert_eq!(shape.follows.len(), 1);
+        assert_eq!(shape.follows[0].0, "Damageable");
+    }
+    hidden_field_sets_is_hidden: "shape Player { name: String\n hidden cache: Int }" => |output| {
+        let shape = first_shape(&output);
+        assert!(!shape.fields[0].is_hidden);
+        assert!(shape.fields[1].is_hidden);
+    }
+    // A bare method signature inside a shape declares a contract, not a field.
+    contract_signature_in_shape: "shape Greetable { greet(share self) -> String }" => |output| {
+        let shape = first_shape(&output);
+        assert_eq!(shape.fields.len(), 0);
+        assert_eq!(shape.contract_sigs.len(), 1);
+        assert_eq!(shape.contract_sigs[0].name, "greet");
+        assert!(matches!(shape.contract_sigs[0].receiver, Some(ReceiverKind::Share)));
+    }
+    generic_shape_with_two_params: "shape Pair<A, B> { first: A second: B }" => |output| {
+        let shape = first_shape(&output);
+        assert_eq!(shape.generics.len(), 2);
+        assert_eq!(shape.generics[0].name, "A");
+        assert_eq!(shape.generics[1].name, "B");
+    }
+    generic_shape_with_one_param: "shape Box<T> { value: T }" => |output| {
+        let shape = first_shape(&output);
+        assert_eq!(shape.generics.len(), 1);
+        assert_eq!(shape.generics[0].name, "T");
+    }
+    non_generic_shape_has_empty_generics: "shape Player { name: Int }" => |output| {
+        assert!(first_shape(&output).generics.is_empty());
+    }
 
-    for (op_str, expected_level, tok) in code_table {
-        // Verify spec has the operator
-        let spec_level = spec_table.get(op_str).unwrap_or_else(|| {
-            panic!(
-                "Operator `{op_str}` is in the code's infix_bp table but missing from \
-                 spec/operators.md's precedence list. Add it to the spec."
-            )
-        });
-        assert_eq!(
-            spec_level, expected_level,
-            "Operator `{op_str}`: spec says level {spec_level} but code says level {expected_level}. \
-             Update one to match."
+    // ── function declarations ────────────────────────────────────────────────
+    function_with_parameters: "function add(x: Int, y: Int) -> Int { return x }" => |output| {
+        let function = first_function(&output);
+        assert_eq!(function.params.len(), 2);
+        assert_eq!(function.params[0].name, "x");
+        assert_eq!(function.params[1].name, "y");
+        assert!(matches!(function.params[0].ty, Type::Int));
+        assert!(matches!(function.params[1].ty, Type::Int));
+    }
+    // Zero parameters must not require at least one.
+    function_with_no_params: "function entrypoint() -> Nothing { }" => |output| {
+        assert_eq!(first_function(&output).params.len(), 0);
+    }
+    trailing_comma_in_params_is_accepted: "function foo(x: Int,) -> Nothing { }" => |output| {
+        assert_eq!(first_function(&output).params.len(), 1);
+    }
+    ownership_annotation_on_param: "function foo(share x: Int) -> Nothing { }" => |output| {
+        let function = first_function(&output);
+        assert_eq!(function.params.len(), 1);
+        assert!(matches!(function.params[0].ownership, Some(OwnershipModifier::Share)));
+        assert_eq!(function.params[0].name, "x");
+    }
+    two_functions_are_two_items: "function add(a: Int, b: Int) -> Int { return a }\nfunction entrypoint() -> Nothing { let x = add(1, 2) }" => |output| {
+        assert_eq!(output.module.items.len(), 2);
+    }
+    generic_function_with_one_type_param: "function identity<T>(give value: T) -> T { return value }" => |output| {
+        let function = first_function(&output);
+        assert_eq!(function.generics.len(), 1);
+        assert_eq!(function.generics[0].name, "T");
+        assert!(function.generics[0].constraints.is_empty());
+    }
+    generic_function_with_two_type_params: "function pair<A, B>(give first: A, give second: B) -> Nothing { }" => |output| {
+        let function = first_function(&output);
+        assert_eq!(function.generics.len(), 2);
+        assert_eq!(function.generics[0].name, "A");
+        assert_eq!(function.generics[1].name, "B");
+    }
+    generic_function_with_constraint: "function sort<T follows Comparable>(share items: T) -> Nothing { }" => |output| {
+        let function = first_function(&output);
+        assert_eq!(function.generics.len(), 1);
+        assert_eq!(function.generics[0].name, "T");
+        assert_eq!(function.generics[0].constraints.len(), 1);
+        assert_eq!(function.generics[0].constraints[0].0, "Comparable");
+    }
+    // The `,` must end T's constraint list and start U's entry.
+    generic_function_with_one_constrained_param_then_one_plain: "function f<T follows Comparable, U>(share a: T, give b: U) -> Nothing { }" => |output| {
+        let function = first_function(&output);
+        assert_eq!(function.generics.len(), 2);
+        assert_eq!(function.generics[0].name, "T");
+        assert_eq!(function.generics[0].constraints.len(), 1);
+        assert_eq!(function.generics[1].name, "U");
+        assert!(function.generics[1].constraints.is_empty());
+    }
+    non_generic_function_has_empty_generics: "function add(a: Int, b: Int) -> Int { return a }" => |output| {
+        assert!(first_function(&output).generics.is_empty());
+    }
+
+    // ── return types: `errors` makes a function fallible ─────────────────────
+    errors_return_type_over_named_type: "function readFile() -> String errors { }" => |output| {
+        let function = first_function(&output);
+        assert!(function.errors_capable);
+        assert!(matches!(function.return_type, Type::ErrorCapable { .. }), "{:?}", function.return_type);
+    }
+    errors_return_type_over_nothing: "function writeFile() -> Nothing errors { }" => |output| {
+        let function = first_function(&output);
+        assert!(function.errors_capable);
+        assert!(
+            matches!(function.return_type, Type::ErrorCapable { ref inner, .. } if matches!(**inner, Type::Nothing)),
+            "{:?}",
+            function.return_type
         );
-
-        // Verify code's infix_bp returns the right BP for this operator.
-        // Level N maps to lbp = (13 - N) * 2.
-        let expected_lbp = (13 - expected_level) * 2;
-        let (actual_lbp, _) = ynz_parser::parser::infix_bp(tok)
-            .unwrap_or_else(|| panic!("infix_bp returned None for `{op_str}`"));
-        assert_eq!(
-            actual_lbp, expected_lbp,
-            "Operator `{op_str}`: expected lbp {expected_lbp} (spec level {expected_level}), \
-             got lbp {actual_lbp}"
-        );
     }
-}
-
-#[test]
-fn missing_rhs_produces_diagnostic_and_recovers() {
-    // WHY: `let x = 1 +` must emit a diagnostic and still produce a parseable
-    // AST. If the parser panics or produces no AST, all other errors in the
-    // file are hidden.
-    let output = parse("function entrypoint() -> Nothing { let x = 1 + }");
-    assert_eq!(
-        output.diagnostics.len(),
-        1,
-        "Missing RHS must produce exactly 1 diagnostic"
-    );
-    // Module must still have 1 function item (recovery succeeded)
-    assert_eq!(output.module.items.len(), 1);
-}
-
-#[test]
-fn missing_let_identifier_produces_diagnostic_and_recovers() {
-    // WHY: `let : int = 5` (missing the variable name) must emit a diagnostic
-    // but not crash. The block should continue parsing.
-    let output = parse("function entrypoint() -> Nothing { let : Int = 5 }");
-    assert!(
-        !output.diagnostics.is_empty(),
-        "Missing variable name must produce at least 1 diagnostic"
-    );
-    assert_eq!(
-        output.module.items.len(),
-        1,
-        "Function must still be in AST"
-    );
-}
-
-#[test]
-fn let_type_mismatch_parses_cleanly() {
-    // WHY: `let x: int = 1.5` is a TYPE error, not a PARSE error. The parser
-    // must accept it without diagnostics — the type checker catches it in P4.
-    // If the parser rejects it, P4 never gets to produce the teaching diagnostic.
-    let output = parse("function entrypoint() -> Nothing { let x: Int = 1.5 }");
-    assert_eq!(
-        output.diagnostics.len(),
-        0,
-        "Type annotation mismatch is a typeck error, not a parse error"
-    );
-    let body = match &output.module.items[0] {
-        Item::Function(f) => &f.body,
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
-    };
-    match &body.stmts[0] {
-        Stmt::Let {
-            ty: Some(Type::Int),
-            value: Expr::NumberLit(s, _),
-            ..
-        } => {
-            assert_eq!(s, "1.5");
+    errors_return_type_over_maybe: "function findUser() -> Maybe<String> errors { }" => |output| {
+        let function = first_function(&output);
+        assert!(function.errors_capable);
+        match &function.return_type {
+            Type::ErrorCapable { inner, .. } => assert!(matches!(**inner, Type::Maybe { .. }), "{inner:?}"),
+            other => panic!("expected ErrorCapable, got {other:?}"),
         }
-        other => panic!("Expected Let with Int type and NumberLit value, got {other:?}"),
     }
-}
-
-#[test]
-fn unexpected_rbrace_in_expression_recovers() {
-    // WHY: `let x = }` must not eat the `}` that closes the function body.
-    // If the parser consumes the `}`, the enclosing block is left unclosed
-    // and the rest of the file is misparsed.
-    let output = parse("function entrypoint() -> Nothing { let x = }");
-    assert_eq!(
-        output.diagnostics.len(),
-        1,
-        "Unexpected `}}` as expression must produce exactly 1 diagnostic"
-    );
-    assert_eq!(output.module.items.len(), 1, "Function must still parse");
-}
-
-#[test]
-fn multi_arg_call_parses_cleanly() {
-    // WHY: `print(1, 2, 3)` has the wrong arity for M2 but the PARSER must
-    // accept it — arity enforcement is typeck's job. If the parser rejects
-    // multi-arg calls, the typeck teaching diagnostic about arity is unreachable.
-    let output = parse("function entrypoint() -> Nothing { print(1, 2, 3) }");
-    assert_eq!(
-        output.diagnostics.len(),
-        0,
-        "Multi-arg call must parse without diagnostics (arity is a typeck concern)"
-    );
-    let body = match &output.module.items[0] {
-        Item::Function(f) => &f.body,
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
-    };
-    match &body.stmts[0] {
-        Stmt::Expr(Expr::Call(c)) => {
-            assert_eq!(c.args.len(), 3, "Expected 3 args in print(1, 2, 3)");
+    // Guards against double wrapping: the inner type is exactly what was written.
+    errors_return_type_keeps_inner_type_unwrapped: "function compute() -> Int errors { }" => |output| {
+        match &first_function(&output).return_type {
+            Type::ErrorCapable { inner, .. } => assert!(matches!(**inner, Type::Int), "{inner:?}"),
+            other => panic!("expected ErrorCapable, got {other:?}"),
         }
-        other => panic!("Expected Expr(Call), got {other:?}"),
     }
-}
+    plain_return_type_is_not_errors_capable: "function getGreeting() -> String { }" => |output| {
+        let function = first_function(&output);
+        assert!(!function.errors_capable);
+        assert!(matches!(&function.return_type, Type::Named(name, _) if name == "String"), "{:?}", function.return_type);
+    }
 
-#[test]
-fn chained_comparison_parses_as_left_associative() {
-    // WHY: `1 < 2 < 3` parses as `(1 < 2) < 3` per left-associativity.
-    // Typeck will reject this in P4 because `bool < int` is a type error.
-    // The test documents that the PARSE result is deterministic — the typeck
-    // diagnostic targets the outer `<`, not the inner one.
-    let output = parse("function entrypoint() -> Nothing { let x = 1 < 2 < 3 }");
-    assert_eq!(
-        output.diagnostics.len(),
-        0,
-        "Chained comparison parses clean"
-    );
-    let body = match &output.module.items[0] {
-        Item::Function(f) => &f.body,
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
-    };
-    match &body.stmts[0] {
-        Stmt::Let { value, .. } => match value {
-            Expr::BinOp {
-                op: BinOpKind::Lt,
-                lhs,
-                rhs,
-                ..
-            } => {
-                // outer: (1 < 2) < 3
-                assert!(matches!(
-                    lhs.as_ref(),
-                    Expr::BinOp {
-                        op: BinOpKind::Lt,
-                        ..
-                    }
-                ));
-                assert!(matches!(rhs.as_ref(), Expr::IntLit(3, _)));
+    // ── doc comments attach to the item that follows ─────────────────────────
+    doc_comment_attaches_to_function: "/// fetches a user.\nfunction entrypoint() -> Nothing {}" => |output| {
+        assert_eq!(first_function(&output).doc, Some("fetches a user.".to_string()));
+    }
+    doc_comment_lines_join_with_newline: "/// line1\n/// line2\nfunction entrypoint() -> Nothing {}" => |output| {
+        assert_eq!(first_function(&output).doc, Some("line1\nline2".to_string()));
+    }
+    doc_comment_before_blank_line_does_not_attach: "/// orphan\n\nfunction entrypoint() -> Nothing {}" => |output| {
+        assert_eq!(first_function(&output).doc, None);
+    }
+    doc_comment_attaches_to_exported_const: "/// Maximum health.\nexport const MAX_HEALTH = 100" => |output| {
+        match &output.module.items[0] {
+            Item::ConstDecl(constant) => assert_eq!(constant.doc, Some("Maximum health.".to_string())),
+            other => panic!("expected a const item, got {other:?}"),
+        }
+    }
+    doc_comment_before_blank_line_does_not_attach_to_const: "/// orphan\n\nexport const MAX = 10" => |output| {
+        match &output.module.items[0] {
+            Item::ConstDecl(constant) => assert_eq!(constant.doc, None),
+            other => panic!("expected a const item, got {other:?}"),
+        }
+    }
+
+    // ── statements ───────────────────────────────────────────────────────────
+    let_with_int_annotation: wrap("let x: Int = 1") => |output| {
+        assert!(matches!(first_let_type(&output), Type::Int));
+    }
+    // A type mismatch is typeck's error, not a parse error.
+    let_with_mismatched_annotation_still_parses: wrap("let x: Int = 1.5") => |output| {
+        assert!(matches!(first_let_type(&output), Type::Int));
+        assert!(matches!(first_let_value(&output), Expr::NumberLit(text, _) if text == "1.5"));
+    }
+    assignment_is_stmt_assign: wrap("let x = 0\nx = 5") => |output| {
+        assert!(matches!(&body_stmts(&output)[1], Stmt::Assign { target, .. } if target == "x"));
+    }
+    field_assignment_is_stmt_field_assign: wrap("player.health = 50") => |output| {
+        match &body_stmts(&output)[0] {
+            Stmt::FieldAssign { target, value: Expr::IntLit(50, _), .. } => {
+                assert!(matches!(**target, Expr::FieldAccess { ref field, .. } if field == "health"));
             }
-            other => panic!("Expected Lt, got {other:?}"),
-        },
-        other => panic!("Expected Stmt::Let, got {other:?}"),
-    }
-}
-
-#[test]
-fn assignment_parses_as_stmt_assign() {
-    // WHY: `x = 5` after a `let x = 0` must parse as Stmt::Assign, not as
-    // a bare expression. If assignment is misparsed as Expr::BinOp(Eq, x, 5)
-    // the type-checker would see a boolean expression in a statement position.
-    let source = "function entrypoint() -> Nothing { let x = 0\nx = 5 }";
-    let output = parse(source);
-    assert_eq!(output.diagnostics.len(), 0);
-    let body = match &output.module.items[0] {
-        Item::Function(f) => &f.body,
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
-    };
-    assert!(
-        matches!(&body.stmts[1], Stmt::Assign { target, .. } if target == "x"),
-        "Second stmt must be Stmt::Assign with target x"
-    );
-}
-
-#[test]
-fn method_call_parses_correctly() {
-    // WHY: `count.toString()` must produce MethodCall, not a BinOp(Dot) hack.
-    // If method calls are misparsed, the P4 intrinsic dispatch never fires.
-    let output = parse("function entrypoint() -> Nothing { let s = count.toString() }");
-    assert_eq!(output.diagnostics.len(), 0);
-    let body = match &output.module.items[0] {
-        Item::Function(f) => &f.body,
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
-    };
-    match &body.stmts[0] {
-        Stmt::Let {
-            value: Expr::MethodCall { method, .. },
-            ..
-        } => {
-            assert_eq!(method, "toString");
+            other => panic!("expected FieldAssign, got {other:?}"),
         }
-        other => panic!("Expected Let with MethodCall value, got {other:?}"),
     }
-}
-
-#[test]
-fn unary_neg_parses_correctly() {
-    // WHY: `-x` must produce UnaryOp(Neg, x), not BinOp(Sub, _, x).
-    // If unary minus is misparsed as subtraction, negation diagnostics are wrong.
-    let output = parse("function entrypoint() -> Nothing { let x = -5 }");
-    assert_eq!(output.diagnostics.len(), 0);
-    let body = match &output.module.items[0] {
-        Item::Function(f) => &f.body,
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
-    };
-    match &body.stmts[0] {
-        Stmt::Let {
-            value: Expr::UnaryOp { op, operand, .. },
-            ..
-        } => {
-            assert_eq!(*op, ynz_ast::nodes::UnaryOpKind::Neg);
-            assert!(matches!(operand.as_ref(), Expr::IntLit(5, _)));
+    index_assign_with_int_key: wrap("arr[0] = 5") => |output| {
+        match &body_stmts(&output)[0] {
+            Stmt::IndexAssign { index, value: Expr::IntLit(5, _), .. } => {
+                assert!(matches!(**index, Expr::IntLit(0, _)));
+            }
+            other => panic!("expected IndexAssign, got {other:?}"),
         }
-        other => panic!("Expected Let with UnaryOp(Neg), got {other:?}"),
     }
-}
-
-#[test]
-fn missing_arrow_produces_diagnostic_and_recovers() {
-    // WHY: parser must recover from a missing `->` and continue.
-    let output = parse("function entrypoint() nothing { }");
-    assert!(
-        !output.diagnostics.is_empty(),
-        "Missing `->` must produce at least one diagnostic"
-    );
-    assert_debug_snapshot!("missing_arrow_diagnostic", output.diagnostics);
-}
-
-#[test]
-fn missing_closing_brace_produces_diagnostic() {
-    let output = parse("function entrypoint() -> Nothing { print(\"hi\")");
-    assert!(
-        !output.diagnostics.is_empty(),
-        "Missing `}}` must produce at least one diagnostic"
-    );
-    assert_debug_snapshot!("missing_brace_diagnostic", output.diagnostics);
-}
-
-#[test]
-fn trailing_garbage_after_function_produces_diagnostic() {
-    let output = parse("function entrypoint() -> Nothing { } extra }");
-    assert!(
-        !output.diagnostics.is_empty(),
-        "Trailing garbage must produce at least one diagnostic"
-    );
-    assert_eq!(
-        output.module.items.len(),
-        1,
-        "The valid function must still appear in the AST"
-    );
-}
-
-#[test]
-fn hardening_expression_nesting_depth_cap() {
-    // WHY: ~50k nested open parens deterministically crash the compiler with a
-    // stack overflow (SIGABRT). The 256-level cap must fire a diagnostic and
-    // return an Error node — NOT overflow the stack.
-    //
-    // The test runs on a 16 MB thread stack because debug-mode parse frames are
-    // large. The production cap (256) is what we're testing — the extra stack
-    // just ensures the test harness can REACH the cap without itself overflowing.
-    let result = std::thread::Builder::new()
-        .stack_size(16 * 1024 * 1024)
-        .spawn(|| {
-            let depth = 300usize;
-            let source = format!(
-                "function entrypoint() -> Nothing {{ let x = {}1{} }}",
-                "(".repeat(depth),
-                ")".repeat(depth)
-            );
-            parse(&source)
-        })
-        .expect("thread spawn failed")
-        .join()
-        .expect("thread panicked");
-    assert!(
-        !result.diagnostics.is_empty(),
-        "Must produce at least one diagnostic for 300 levels of nesting"
-    );
-    let depth_diag = result.diagnostics.iter().find(|d| d.what.contains("256"));
-    assert!(
-        depth_diag.is_some(),
-        "A diagnostic mentioning the 256 limit must be present, got: {:?}",
-        result.diagnostics
-    );
-    // Partial AST still produced — no panic, no empty module.
-    assert_eq!(
-        result.module.items.len(),
-        1,
-        "The function item must still appear in the AST"
-    );
-}
-
-#[test]
-fn empty_source_produces_empty_module() {
-    let output = parse("");
-    assert_eq!(output.diagnostics.len(), 0);
-    assert_eq!(output.module.items.len(), 0);
-}
-
-#[test]
-fn whitespace_and_comment_only_produces_empty_module() {
-    let output = parse("   \n\t  ");
-    assert_eq!(output.diagnostics.len(), 0);
-    assert_eq!(output.module.items.len(), 0);
-}
-
-#[test]
-fn wrong_return_type_parses_with_named_type() {
-    // test-ratchet: M7 P1 — migrated to backtick syntax
-    let output = parse("function entrypoint() -> String { print(`hi`) }");
-    assert_eq!(output.diagnostics.len(), 0);
-    match &output.module.items[0] {
-        Item::Function(f) => {
-            assert!(
-                matches!(&f.return_type, Type::Named(n, _) if n == "String"),
-                "Expected Type::Named(\"String\"), got {:?}",
-                f.return_type
-            );
+    index_assign_with_string_key: wrap("scores[`alice`] = 90") => |output| {
+        match &body_stmts(&output)[0] {
+            Stmt::IndexAssign { index, value: Expr::IntLit(90, _), .. } => {
+                assert!(matches!(**index, Expr::InterpolatedString(_, _)));
+            }
+            other => panic!("expected IndexAssign, got {other:?}"),
         }
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
+    }
+    simple_if_is_stmt_if: wrap("if (x > 0) { print(x) }") => |output| {
+        assert!(matches!(body_stmts(&output)[0], Stmt::If { .. }));
+    }
+    while_is_stmt_while: wrap("while (x > 0) { x = x - 1 }") => |output| {
+        assert!(matches!(body_stmts(&output)[0], Stmt::While { .. }));
+    }
+    for_is_stmt_for_with_loop_variable: wrap("for (i in range(0, 5)) { print(i) }") => |output| {
+        match &body_stmts(&output)[0] {
+            Stmt::For { var, .. } => assert_eq!(var, "i"),
+            other => panic!("expected For, got {other:?}"),
+        }
+    }
+    return_with_value: "function foo() -> Int { return 42 }" => |output| {
+        assert!(matches!(body_stmts(&output)[0], Stmt::Return { value: Some(_), .. }));
+    }
+    return_without_value: wrap("return") => |output| {
+        assert!(matches!(body_stmts(&output)[0], Stmt::Return { value: None, .. }));
+    }
+    nested_if_inside_for_keeps_block_ends: wrap("for (i in range(0, 5)) {\n  if (i > 2) {\n    print(i)\n  }\n}") => |output| {
+        match &body_stmts(&output)[0] {
+            Stmt::For { body, .. } => assert!(matches!(body.stmts[0], Stmt::If { .. })),
+            other => panic!("expected For, got {other:?}"),
+        }
+    }
+
+    // ── multi-case `if` becomes a match ──────────────────────────────────────
+    multi_case_if_with_value_arms: wrap("if (x) { 1 => print(1) 2 => print(2) }") => |output| {
+        match &body_stmts(&output)[0] {
+            Stmt::Match { arms, else_arm: None, .. } => assert_eq!(arms.len(), 2),
+            other => panic!("expected Match, got {other:?}"),
+        }
+    }
+    multi_case_if_with_else_arm: wrap("if (x) { 1 => print(1) else => print(0) }") => |output| {
+        match &body_stmts(&output)[0] {
+            Stmt::Match { arms, else_arm: Some(_), .. } => assert_eq!(arms.len(), 1),
+            other => panic!("expected Match with else_arm, got {other:?}"),
+        }
+    }
+    multi_case_if_with_only_else_arm: wrap("if (x) { else => print(0) }") => |output| {
+        match &body_stmts(&output)[0] {
+            Stmt::Match { arms, else_arm: Some(_), .. } => assert_eq!(arms.len(), 0),
+            other => panic!("expected Match with else_arm only, got {other:?}"),
+        }
+    }
+    // Typeck and codegen key on `MatchPatternKind::Is` for union narrowing.
+    multi_case_if_is_arm_is_an_is_pattern: wrap("if (value) { is Circle => print(1) }") => |output| {
+        let found = body_stmts(&output).iter().any(|stmt| match stmt {
+            Stmt::Match { arms, .. } => arms
+                .iter()
+                .any(|arm| matches!(&arm.pattern.kind, MatchPatternKind::Is(_))),
+            _ => false,
+        });
+        assert!(found, "expected an Is arm in {:?}", output.module);
+    }
+
+    // ── expressions: precedence, associativity, call shapes ──────────────────
+    mul_binds_tighter_than_add: wrap("let x = 1 + 2 * 3") => |output| {
+        let (op, _, rhs) = first_let_binop(&output);
+        assert_eq!(op, &BinOpKind::Add);
+        assert_eq!(binop_kind(rhs), Some(&BinOpKind::Mul));
+    }
+    comparison_binds_tighter_than_and: wrap("let x = 1 < 2 && 3 > 4") => |output| {
+        let (op, lhs, rhs) = first_let_binop(&output);
+        assert_eq!(op, &BinOpKind::And);
+        assert_eq!(binop_kind(lhs), Some(&BinOpKind::Lt));
+        assert_eq!(binop_kind(rhs), Some(&BinOpKind::Gt));
+    }
+    subtraction_is_left_associative: wrap("let x = 1 - 2 - 3") => |output| {
+        let (op, lhs, rhs) = first_let_binop(&output);
+        assert_eq!(op, &BinOpKind::Sub);
+        assert_eq!(binop_kind(lhs), Some(&BinOpKind::Sub));
+        assert!(matches!(rhs, Expr::IntLit(3, _)));
+    }
+    or_binds_looser_than_and: wrap("let x = a || b && c") => |output| {
+        let (op, _, rhs) = first_let_binop(&output);
+        assert_eq!(op, &BinOpKind::Or);
+        assert_eq!(binop_kind(rhs), Some(&BinOpKind::And));
+    }
+    parentheses_override_precedence: wrap("let x = (1 + 2) * 3") => |output| {
+        let (op, lhs, _) = first_let_binop(&output);
+        assert_eq!(op, &BinOpKind::Mul);
+        assert_eq!(binop_kind(lhs), Some(&BinOpKind::Add));
+    }
+    // Typeck rejects `bool < int`; the parse result must still be the deterministic `(1 < 2) < 3`.
+    chained_comparison_is_left_associative: wrap("let x = 1 < 2 < 3") => |output| {
+        let (op, lhs, rhs) = first_let_binop(&output);
+        assert_eq!(op, &BinOpKind::Lt);
+        assert_eq!(binop_kind(lhs), Some(&BinOpKind::Lt));
+        assert!(matches!(rhs, Expr::IntLit(3, _)));
+    }
+    unary_minus_is_unary_neg: wrap("let x = -5") => |output| {
+        match first_let_value(&output) {
+            Expr::UnaryOp { op, operand, .. } => {
+                assert_eq!(*op, UnaryOpKind::Neg);
+                assert!(matches!(operand.as_ref(), Expr::IntLit(5, _)));
+            }
+            other => panic!("expected UnaryOp(Neg), got {other:?}"),
+        }
+    }
+    method_call_is_method_call_node: wrap("let s = count.toString()") => |output| {
+        assert!(matches!(first_let_value(&output), Expr::MethodCall { method, .. } if method == "toString"));
+    }
+    // Arity is typeck's job, so the parser accepts a call with any number of arguments.
+    call_with_three_arguments: wrap("print(1, 2, 3)") => |output| {
+        match &body_stmts(&output)[0] {
+            Stmt::Expr(Expr::Call(call)) => assert_eq!(call.args.len(), 3),
+            other => panic!("expected Expr(Call), got {other:?}"),
+        }
+    }
+    // A dot without parens is a read: FieldAccess, never MethodCall.
+    field_read_is_field_access: wrap("let x = player.health") => |output| {
+        assert!(matches!(first_let_value(&output), Expr::FieldAccess { field, .. } if field == "health"));
+    }
+    copy_postfix_op: wrap("let b = a.copy()") => |output| {
+        assert!(matches!(first_let_value(&output), Expr::PostfixOp { op: PostfixOpKind::Copy, .. }));
+    }
+    freeze_postfix_op: wrap("cfg.freeze()") => |output| {
+        assert!(matches!(
+            &body_stmts(&output)[0],
+            Stmt::Expr(Expr::PostfixOp { op: PostfixOpKind::Freeze, .. })
+        ));
+    }
+    self_value_in_function_body: "function greet(share self: String) -> Nothing { print(self) }" => |output| {
+        match &body_stmts(&output)[0] {
+            Stmt::Expr(Expr::Call(call)) => assert!(matches!(call.args[0], Expr::SelfValue { .. })),
+            other => panic!("expected Expr(Call) with a SelfValue argument, got {other:?}"),
+        }
+    }
+    anonymous_struct_literal: wrap("let p: String = { name: `Patrick` }") => |output| {
+        match first_let_value(&output) {
+            Expr::StructLit { fields, .. } => {
+                assert_eq!(fields.len(), 1);
+                assert_eq!(fields[0].name, "name");
+            }
+            other => panic!("expected StructLit, got {other:?}"),
+        }
+    }
+    none_literal_is_none_lit: wrap("let x = none") => |output| {
+        assert!(matches!(first_let_value(&output), Expr::NoneLit { .. }));
+    }
+    // `none` must work in any expression position, not only as a binding value.
+    none_inside_a_comparison: wrap("if (x == none) { }") => |_output| {}
+
+    // ── indexing ─────────────────────────────────────────────────────────────
+    index_access_with_int_key: wrap("let x = arr[0]") => |output| {
+        match first_let_value(&output) {
+            Expr::IndexAccess { index, .. } => assert!(matches!(**index, Expr::IntLit(0, _))),
+            other => panic!("expected IndexAccess, got {other:?}"),
+        }
+    }
+    index_access_with_string_key: wrap("let x = m[`alice`]") => |output| {
+        match first_let_value(&output) {
+            Expr::IndexAccess { index, .. } => assert!(matches!(**index, Expr::InterpolatedString(_, _))),
+            other => panic!("expected IndexAccess, got {other:?}"),
+        }
+    }
+    chained_index_access: wrap("let x = m[`alice`][0]") => |output| {
+        match first_let_value(&output) {
+            Expr::IndexAccess { receiver, .. } => assert!(matches!(**receiver, Expr::IndexAccess { .. })),
+            other => panic!("expected IndexAccess, got {other:?}"),
+        }
+    }
+    index_access_as_a_bare_statement: wrap("arr[0]") => |output| {
+        assert!(matches!(body_stmts(&output)[0], Stmt::Expr(Expr::IndexAccess { .. })));
+    }
+
+    // ── generics in type position and at call sites ──────────────────────────
+    array_type_annotation_is_generic: wrap("let arr: Array<Int> = arr") => |output| {
+        match first_let_type(&output) {
+            Type::Generic { name, args, .. } => {
+                assert_eq!(name, "Array");
+                assert_eq!(args.len(), 1);
+                assert!(matches!(args[0], Type::Int));
+            }
+            other => panic!("expected a Generic type, got {other:?}"),
+        }
+    }
+    // `Maybe` has its own variant (not Generic) so typeck can apply flow-sensitive `.value` rules.
+    maybe_type_annotation_is_maybe: wrap("let x: Maybe<Int> = none") => |output| {
+        match first_let_type(&output) {
+            Type::Maybe { inner, .. } => assert!(matches!(**inner, Type::Int)),
+            other => panic!("expected Maybe<Int>, got {other:?}"),
+        }
+        assert!(matches!(first_let_value(&output), Expr::NoneLit { .. }));
+    }
+    maybe_of_named_type: wrap("let x: Maybe<Player> = none") => |output| {
+        match first_let_type(&output) {
+            Type::Maybe { inner, .. } => assert!(matches!(**inner, Type::Named(ref name, _) if name == "Player")),
+            other => panic!("expected Maybe<Player>, got {other:?}"),
+        }
+    }
+    // Nested `<>` must not trip the generic depth cap.
+    nested_generic_type: wrap("let x: Pair<Pair<Int, Int>, Int> = x") => |output| {
+        match first_let_type(&output) {
+            Type::Generic { name, args, .. } => {
+                assert_eq!(name, "Pair");
+                assert_eq!(args.len(), 2);
+                assert!(matches!(&args[0], Type::Generic { name, .. } if name == "Pair"));
+                assert!(matches!(args[1], Type::Int));
+            }
+            other => panic!("expected a nested Generic type, got {other:?}"),
+        }
+    }
+    union_type_with_two_variants: wrap("let x: Circle | Square = { radius: 5.0 }") => |output| {
+        match first_let_type(&output) {
+            Type::Union { variants, .. } => assert_eq!(variants.len(), 2),
+            other => panic!("expected a Union type, got {other:?}"),
+        }
+    }
+    // Codegen relies on one flat variant list for tag assignment, not nested pairs.
+    union_type_with_three_variants_is_flat: wrap("let x: Circle | Square | Triangle = { radius: 5.0 }") => |output| {
+        match first_let_type(&output) {
+            Type::Union { variants, .. } => assert_eq!(variants.len(), 3),
+            other => panic!("expected a Union type, got {other:?}"),
+        }
+    }
+    dynamic_type_annotation: wrap("let d: dynamic Foo = p") => |output| {
+        assert!(matches!(first_let_type(&output), Type::Dynamic { contract, .. } if contract == "Foo"));
+    }
+    number_without_precision_defaults_to_34: wrap("let x: Number = 3.14") => |output| {
+        assert!(matches!(first_let_type(&output), Type::Number { precision: 34 }));
+    }
+    number_with_explicit_precision_34: wrap("let x: Number<34> = 3.14") => |output| {
+        assert!(matches!(first_let_type(&output), Type::Number { precision: 34 }));
+    }
+    // The precision deferral is gone: a non-default precision parses with no diagnostic.
+    number_with_precision_128: wrap("let x: Number<128> = 0") => |_output| {}
+    // `fixed<T, N>`: each written length reaches typeck as `Type::Length`, the u32 extremes included.
+    fixed_length_zero: wrap("let x: Fixed<Int, 0> = x") => |output| {
+        assert_fixed_length(first_let_type(&output), 0);
+    }
+    fixed_length_one: wrap("let x: Fixed<Int, 1> = x") => |output| {
+        assert_fixed_length(first_let_type(&output), 1);
+    }
+    fixed_length_four: wrap("let x: Fixed<Int, 4> = x") => |output| {
+        assert_fixed_length(first_let_type(&output), 4);
+    }
+    fixed_length_largest_u32: wrap("let x: Fixed<Int, 4294967295> = x") => |output| {
+        assert_fixed_length(first_let_type(&output), u64::from(u32::MAX));
+    }
+    generic_call_with_one_type_arg: wrap("let x = identity<Int>(5)") => |output| {
+        match first_let_value(&output) {
+            Expr::Call(call) => {
+                let type_args = call.type_args.as_ref().expect("type_args must be Some");
+                assert_eq!(type_args.len(), 1);
+                assert!(matches!(type_args[0], Type::Int));
+            }
+            other => panic!("expected Call with type_args, got {other:?}"),
+        }
+    }
+    generic_call_with_two_type_args: wrap("let x = pair<Int, String>(1, `a`)") => |output| {
+        match first_let_value(&output) {
+            Expr::Call(call) => {
+                let type_args = call.type_args.as_ref().expect("type_args must be Some");
+                assert_eq!(type_args.len(), 2);
+                assert!(matches!(type_args[0], Type::Int));
+                assert!(matches!(type_args[1], Type::Named(ref name, _) if name == "String"));
+            }
+            other => panic!("expected Call with two type_args, got {other:?}"),
+        }
+    }
+    // `None` means no explicit type arguments; `Some([])` would mean an empty explicit list.
+    plain_call_has_no_type_args: wrap("let x = add(1, 2)") => |output| {
+        match first_let_value(&output) {
+            Expr::Call(call) => assert!(call.type_args.is_none()),
+            other => panic!("expected Call, got {other:?}"),
+        }
+    }
+
+    // ── `<` is a comparison unless a generic call follows ────────────────────
+    less_than_stays_a_comparison: wrap("let x = a < b") => |output| {
+        assert_eq!(binop_kind(first_let_value(&output)), Some(&BinOpKind::Lt));
+    }
+    comparison_chain_is_not_a_generic_call: wrap("let x = a < b > c") => |output| {
+        let (op, lhs, _) = first_let_binop(&output);
+        assert_eq!(op, &BinOpKind::Gt);
+        assert_eq!(binop_kind(lhs), Some(&BinOpKind::Lt));
+    }
+    comparison_inside_index_is_not_a_generic: wrap("let x = arr[a < b]") => |output| {
+        match first_let_value(&output) {
+            Expr::IndexAccess { index, .. } => assert_eq!(binop_kind(index), Some(&BinOpKind::Lt)),
+            other => panic!("expected IndexAccess with a Lt index, got {other:?}"),
+        }
+    }
+    // `foo < Int > 5` has a type-looking middle but no `(` after `>`: a comparison, not a generic call.
+    type_like_comparison_without_call_is_a_comparison: wrap("let x = foo < Int > 5") => |output| {
+        assert_eq!(binop_kind(first_let_value(&output)), Some(&BinOpKind::Gt));
+    }
+
+    // ── backtick strings ─────────────────────────────────────────────────────
+    backtick_plain_literal_is_one_literal_part: wrap("let s = `hello`") => |output| {
+        let parts = first_let_string_parts(&output);
+        assert_eq!(parts.len(), 1);
+        assert!(is_literal_part(&parts[0], b"hello"));
+    }
+    // The lexer always closes an interpolation with a literal segment, so `${name}` is Lit + Expr + Lit.
+    backtick_single_interpolation_is_three_parts: wrap("let s = `hello ${name}`") => |output| {
+        let parts = first_let_string_parts(&output);
+        assert_eq!(parts.len(), 3);
+        assert!(is_literal_part(&parts[0], b"hello "));
+        assert!(matches!(&parts[1], StringPart::Expr(_, _)));
+        assert!(is_literal_part(&parts[2], b""));
+    }
+    backtick_two_interpolations_are_five_parts: wrap("let s = `${a} + ${b}`") => |output| {
+        let parts = first_let_string_parts(&output);
+        assert_eq!(parts.len(), 5);
+        assert!(is_literal_part(&parts[0], b""));
+        assert!(matches!(&parts[1], StringPart::Expr(_, _)));
+        assert!(is_literal_part(&parts[2], b" + "));
+        assert!(matches!(&parts[3], StringPart::Expr(_, _)));
+        assert!(is_literal_part(&parts[4], b""));
+    }
+    // The interpolated slot holds the full expression AST (here an identifier), not a string.
+    backtick_interpolated_slot_holds_an_expression: wrap("let s = `value=${x}`") => |output| {
+        let parts = first_let_string_parts(&output);
+        assert_eq!(parts.len(), 3);
+        match &parts[1] {
+            StringPart::Expr(inner, _) => assert!(matches!(**inner, Expr::Ident(ref name, _) if name == "x")),
+            other => panic!("expected an Expr part, got {other:?}"),
+        }
+    }
+    // Downstream stages assume at least one segment always exists.
+    backtick_empty_string_is_one_empty_literal_part: wrap("let s = ``") => |output| {
+        let parts = first_let_string_parts(&output);
+        assert_eq!(parts.len(), 1);
+        assert!(is_literal_part(&parts[0], b""));
+    }
+
+    // ── `for ((key, value) in map)` desugars to a synthetic entry ────────────
+    for_destructure_loops_over_a_synthetic_entry: wrap("for ((k, v) in myMap) { }") => |output| {
+        match &body_stmts(&output)[0] {
+            Stmt::For { var, body, .. } => {
+                assert_eq!(var, "__entry");
+                assert!(body.stmts.len() >= 2, "body must hold the 2 injected let bindings");
+                assert!(matches!(&body.stmts[0], Stmt::Let { name, .. } if name == "k"));
+                assert!(matches!(&body.stmts[1], Stmt::Let { name, .. } if name == "v"));
+            }
+            other => panic!("expected For, got {other:?}"),
+        }
+    }
+    // User statements come after the two injected lets, not instead of them.
+    for_destructure_keeps_the_user_body: wrap("for ((k, v) in m) { print(k) }") => |output| {
+        match &body_stmts(&output)[0] {
+            Stmt::For { body, .. } => {
+                assert_eq!(body.stmts.len(), 3, "2 injected lets + 1 user stmt");
+                assert!(matches!(&body.stmts[2], Stmt::Expr(_)));
+            }
+            other => panic!("expected For, got {other:?}"),
+        }
+    }
+    // The injected `let k` reads `__entry.key` as a FieldAccess so typeck can resolve it on MapEntry.
+    for_destructure_key_binding_reads_the_key_field: wrap("for ((k, v) in m) { }") => |output| {
+        match &body_stmts(&output)[0] {
+            Stmt::For { body, .. } => match &body.stmts[0] {
+                Stmt::Let { value: Expr::FieldAccess { field, .. }, .. } => assert_eq!(field, "key"),
+                other => panic!("expected Let with FieldAccess, got {other:?}"),
+            },
+            other => panic!("expected For, got {other:?}"),
+        }
+    }
+    // Card #399: typeck keys `expr_types` by span, so the `.key` access, the `.value` access, the
+    // `__entry` receiver and the iterated map need four different spans (they have four types).
+    for_destructure_synthetic_expressions_have_distinct_spans: wrap("for ((k, v) in m) { }") => |output| {
+        let Stmt::For { iter, body, .. } = &body_stmts(&output)[0] else {
+            panic!("expected For, got {:?}", body_stmts(&output)[0]);
+        };
+        let access_parts = |stmt: &Stmt| match stmt {
+            Stmt::Let { value: Expr::FieldAccess { receiver, span, .. }, .. } => {
+                (receiver.span().clone(), span.clone())
+            }
+            other => panic!("expected `let` of a field access, got {other:?}"),
+        };
+        let (key_receiver, key_access) = access_parts(&body.stmts[0]);
+        let (value_receiver, value_access) = access_parts(&body.stmts[1]);
+        let start_and_end = |span: &SourceSpan| (span.start, span.end);
+        let spans = [
+            start_and_end(iter.span()),
+            start_and_end(&key_access),
+            start_and_end(&value_access),
+            start_and_end(&key_receiver),
+        ];
+        for (position, first) in spans.iter().enumerate() {
+            for second in &spans[position + 1..] {
+                assert_ne!(first, second, "synthetic span collision: {spans:?}");
+            }
+        }
+        assert_eq!(
+            start_and_end(&key_receiver),
+            start_and_end(&value_receiver),
+            "both receivers are the same MapEntry-typed `__entry`, so they may share one span"
+        );
+    }
+    // The `((` look-ahead must not fire for a plain `(x`.
+    for_single_binding_keeps_the_user_name: wrap("for (entry in myMap) { }") => |output| {
+        assert!(matches!(&body_stmts(&output)[0], Stmt::For { var, .. } if var == "entry"));
     }
 }
 
-#[test]
-fn m3_source_parses_to_expected_ast() {
-    // WHY: Snapshot locks the full M3 AST shape including function parameters,
-    // if/while/for/return, and multi-case match arms. Any silent regression in
-    // parser output breaks the typeck and codegen stages that depend on this shape.
-    let source = r#"function fib(n: Int) -> Int {
+recovery_cases! {
+    // ── missing or malformed pieces: one diagnostic, the module still has its item ──
+    missing_rhs_recovers: "function entrypoint() -> Nothing { let x = 1 + }" => 1,
+        then |output| { assert_eq!(output.module.items.len(), 1); };
+    missing_let_identifier_recovers: "function entrypoint() -> Nothing { let : Int = 5 }" => AtLeast(1),
+        then |output| { assert_eq!(output.module.items.len(), 1); };
+    // `let x = }` must not eat the `}` that closes the function body.
+    unexpected_rbrace_in_expression_recovers: "function entrypoint() -> Nothing { let x = }" => 1,
+        then |output| { assert_eq!(output.module.items.len(), 1); };
+    missing_arrow_recovers: "function entrypoint() nothing { }" => 2,
+        says what "Missing return type";
+    missing_closing_brace_is_reported: "function entrypoint() -> Nothing { print(\"hi\")" => 2,
+        says what "Missing closing";
+    trailing_garbage_after_function_keeps_the_function: "function entrypoint() -> Nothing { } extra }" => AtLeast(1),
+        then |output| { assert_eq!(output.module.items.len(), 1); };
+    if_without_parens_is_reported: "function entrypoint() -> Nothing { if x > 0 { print(x) } }" => AtLeast(1);
+    duplicate_param_name_is_reported: "function foo(a: Int, a: Int) -> Int { return a }" => AtLeast(1),
+        says what "Duplicate";
+
+    // ── teaching diagnostics for syntax from other languages ─────────────────
+    prefix_form_struct_literal_is_one_teaching_diagnostic:
+        "function entrypoint() -> Nothing { let x = Player { name: `Patrick` } }" => 1,
+        says what_instead "annotation";
+    method_body_inside_shape_is_one_teaching_diagnostic:
+        "shape Player { function greet() -> String { return `hi` } }" => 1,
+        says what_instead "outside";
+    // `number[N]` is the pre-generics form; it must redirect to `Number<N>`, not parse silently.
+    number_bracket_syntax_redirects_to_angle_brackets:
+        "function entrypoint() -> Nothing { let x: Number[128] = 0 }" => 1,
+        says what "angle brackets";
+
+    // ── generics and indexing ────────────────────────────────────────────────
+    unclosed_generic_param_list_keeps_the_next_function: "function foo< { } function bar() -> Nothing { }" => AtLeast(1),
+        then |output| {
+            let function_names: Vec<&str> = output
+                .module
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    Item::Function(function) => Some(function.name.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert!(function_names.contains(&"bar"), "bar() must parse despite foo<'s error");
+        };
+    missing_type_arg_close_bracket_is_reported: wrap("let x: Array<Int = 5") => AtLeast(1);
+    index_missing_close_bracket_is_reported: wrap("let x = arr[0") => AtLeast(1);
+    bare_maybe_without_type_arg_is_reported: wrap("let x: Maybe = none") => AtLeast(1), says what "Maybe";
+    generic_type_nested_17_deep_is_reported:
+        format!(
+            "function entrypoint() -> Nothing {{ let x: {} = x }}",
+            "A<".repeat(17) + "Int" + &">".repeat(17)
+        ) => AtLeast(1);
+    // A fixed length not closed by `,` or `>` is one diagnostic, not a silent parse or a cascade.
+    fixed_length_followed_by_a_number_is_refused_once: wrap("let x: Fixed<Int, 3 4> = x") => AtLeast(1),
+        then |output| {
+            let refused = output.diagnostics.iter()
+                .filter(|diagnostic| diagnostic.what.contains("after the length in a generic type argument list"))
+                .count();
+            assert_eq!(refused, 1, "{:#?}", output.diagnostics);
+        };
+    fixed_length_followed_by_a_type_is_refused_once: wrap("let x: Fixed<Int, 3 Int> = x") => AtLeast(1),
+        then |output| {
+            let refused = output.diagnostics.iter()
+                .filter(|diagnostic| diagnostic.what.contains("after the length in a generic type argument list"))
+                .count();
+            assert_eq!(refused, 1, "{:#?}", output.diagnostics);
+        };
+
+    // ── `errors` is only a return-type modifier ──────────────────────────────
+    errors_in_expression_position_is_rejected: wrap("let x = errors") => AtLeast(1);
+    errors_after_a_let_annotation_is_rejected: wrap("let x: String errors = foo") => AtLeast(1);
+    errors_as_a_bare_statement_is_rejected: wrap("errors") => AtLeast(1);
+}
+
+precedence_cases! {
+    precedence_star: "*", level 3, Token::Star;
+    precedence_slash: "/", level 3, Token::Slash;
+    precedence_percent: "%", level 3, Token::Percent;
+    precedence_plus: "+", level 4, Token::Plus;
+    precedence_minus: "-", level 4, Token::Minus;
+    precedence_shift_left: "<<", level 5, Token::LtLt;
+    precedence_shift_right: ">>", level 5, Token::GtGt;
+    precedence_less_than: "<", level 6, Token::Lt;
+    precedence_greater_than: ">", level 6, Token::Gt;
+    precedence_less_or_equal: "<=", level 6, Token::LtEq;
+    precedence_greater_or_equal: ">=", level 6, Token::GtEq;
+    precedence_equal: "==", level 7, Token::EqEq;
+    precedence_not_equal: "!=", level 7, Token::NotEq;
+    precedence_bit_and: "&", level 8, Token::Amp;
+    precedence_bit_xor: "^", level 9, Token::Caret;
+    precedence_bit_or: "|", level 10, Token::Pipe;
+    precedence_logical_and: "&&", level 11, Token::AmpAmp;
+    precedence_logical_or: "||", level 12, Token::PipePipe;
+}
+
+snapshot_cases! {
+    operators_and_literals_program_snapshot: "m2_ast",
+        r#"function entrypoint() -> Nothing {
+  let price = 0.1 + 0.2
+  let count: Int = 42
+  let active = true
+  print(price)
+  print(count * count - 1)
+  print(active && (count > 0))
+}"#;
+    control_flow_program_snapshot: "m3_ast",
+        r#"function fib(n: Int) -> Int {
   if (n < 2) {
     return n
   }
@@ -2050,971 +996,10 @@ function entrypoint() -> Nothing {
   let result = fib(10)
   print(result)
 }"#;
-    let output = parse(source);
-    assert_eq!(
-        output.diagnostics.len(),
-        0,
-        "M3 fibonacci source must parse with no diagnostics"
-    );
-    assert_debug_snapshot!("m3_ast", output.module);
-}
-
-#[test]
-fn function_with_parameters_parses_correctly() {
-    // WHY: `function add(x: int, y: int) -> int { ... }` must produce a
-    // FunctionDecl with two Param entries. If params are silently dropped,
-    // typeck cannot check argument types at call sites.
-    let output = parse("function add(x: Int, y: Int) -> Int { return x }");
-    assert_eq!(output.diagnostics.len(), 0);
-    match &output.module.items[0] {
-        Item::Function(f) => {
-            assert_eq!(f.params.len(), 2, "Expected 2 params");
-            assert_eq!(f.params[0].name, "x");
-            assert_eq!(f.params[1].name, "y");
-            assert!(matches!(f.params[0].ty, Type::Int));
-            assert!(matches!(f.params[1].ty, Type::Int));
-        }
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
-    }
-}
-
-#[test]
-fn function_with_no_params_still_parses() {
-    // WHY: Zero-parameter functions were the only form in M1/M2. This guards
-    // against the M3 parameter parser accidentally requiring at least one param.
-    let output = parse("function entrypoint() -> Nothing { }");
-    assert_eq!(output.diagnostics.len(), 0);
-    match &output.module.items[0] {
-        Item::Function(f) => assert_eq!(f.params.len(), 0),
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
-    }
-}
-
-#[test]
-fn trailing_comma_in_params_is_accepted() {
-    // WHY: `function foo(x: int,) -> nothing { }` (trailing comma) must parse
-    // cleanly. Trailing commas are ergonomic when adding params line-by-line;
-    // rejecting them would be a footgun with no benefit.
-    let output = parse("function foo(x: Int,) -> Nothing { }");
-    assert_eq!(output.diagnostics.len(), 0);
-    match &output.module.items[0] {
-        Item::Function(f) => assert_eq!(f.params.len(), 1),
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
-    }
-}
-
-#[test]
-fn duplicate_param_name_produces_diagnostic() {
-    // WHY: `function foo(a: int, a: int) -> int { return a }` — two params with
-    // the same name — must produce a diagnostic. Silent acceptance would leave
-    // typeck to pick one arbitrarily (implementation-defined behavior = bug).
-    let output = parse("function foo(a: Int, a: Int) -> Int { return a }");
-    assert!(
-        !output.diagnostics.is_empty(),
-        "Duplicate param name must produce at least 1 diagnostic"
-    );
-    assert!(
-        output.diagnostics[0].what.contains("Duplicate"),
-        "Diagnostic should mention 'Duplicate', got: {:?}",
-        output.diagnostics[0].what
-    );
-}
-
-#[test]
-fn ownership_annotation_on_param_parses_correctly() {
-    // WHY: M4 ships ownership modifiers. `function foo(share x: int) -> nothing { }` must
-    // parse cleanly with no diagnostics, and the param must have ownership=Some(Share).
-    // This test replaced the M3 deferral test — ownership annotations now work.
-    // test-ratchet: M4 ships ownership modifiers — deferral replaced with success assertion.
-    let output = parse("function foo(share x: Int) -> Nothing { }");
-    assert_eq!(
-        output.diagnostics.len(),
-        0,
-        "share annotation must parse cleanly in M4"
-    );
-    match &output.module.items[0] {
-        Item::Function(f) => {
-            assert_eq!(f.params.len(), 1, "Expected 1 param");
-            assert!(
-                matches!(
-                    f.params[0].ownership,
-                    Some(ynz_ast::nodes::OwnershipModifier::Share)
-                ),
-                "Expected ownership=Share, got {:?}",
-                f.params[0].ownership
-            );
-            assert_eq!(f.params[0].name, "x");
-        }
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
-    }
-}
-
-#[test]
-fn simple_if_parses_correctly() {
-    // WHY: `if (cond) { body }` must produce Stmt::If, not Stmt::Match.
-    // If disambiguation defaults to multi-case, every simple if in the codebase
-    // would fail to parse.
-    let output = parse("function entrypoint() -> Nothing { if (x > 0) { print(x) } }");
-    assert_eq!(output.diagnostics.len(), 0);
-    match &output.module.items[0] {
-        Item::Function(f) => match &f.body.stmts[0] {
-            Stmt::If { .. } => {}
-            other => panic!("Expected Stmt::If, got {other:?}"),
-        },
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
-    }
-}
-
-#[test]
-fn while_loop_parses_correctly() {
-    // WHY: `while (cond) { body }` must produce Stmt::While. Regression would
-    // mean loops silently become expression statements or fail to parse.
-    let output = parse("function entrypoint() -> Nothing { while (x > 0) { x = x - 1 } }");
-    assert_eq!(output.diagnostics.len(), 0);
-    match &output.module.items[0] {
-        Item::Function(f) => match &f.body.stmts[0] {
-            Stmt::While { .. } => {}
-            other => panic!("Expected Stmt::While, got {other:?}"),
-        },
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
-    }
-}
-
-#[test]
-fn for_loop_parses_correctly() {
-    // WHY: `for (i in range(0, 5)) { body }` must produce Stmt::For with `var`
-    // set to "i" and `iter` as a Call to range. The loop variable and iterable
-    // expression are both critical for typeck's `range`-as-only-iterable check.
-    let output = parse("function entrypoint() -> Nothing { for (i in range(0, 5)) { print(i) } }");
-    assert_eq!(output.diagnostics.len(), 0);
-    match &output.module.items[0] {
-        Item::Function(f) => match &f.body.stmts[0] {
-            Stmt::For { var, .. } => assert_eq!(var, "i"),
-            other => panic!("Expected Stmt::For, got {other:?}"),
-        },
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
-    }
-}
-
-#[test]
-fn return_with_value_parses_correctly() {
-    // WHY: `return expr` must produce Stmt::Return with value Some(expr).
-    // If value is None when an expression is present, typeck cannot check
-    // the return type against the function signature.
-    let output = parse("function foo() -> Int { return 42 }");
-    assert_eq!(output.diagnostics.len(), 0);
-    match &output.module.items[0] {
-        Item::Function(f) => match &f.body.stmts[0] {
-            Stmt::Return { value: Some(_), .. } => {}
-            other => panic!("Expected Stmt::Return with value, got {other:?}"),
-        },
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
-    }
-}
-
-#[test]
-fn return_without_value_parses_correctly() {
-    // WHY: `return` alone (no expression) must produce Stmt::Return with value
-    // None. This is the only valid form for `-> nothing` functions; typeck
-    // uses the None/Some to determine whether a value was provided.
-    let output = parse("function entrypoint() -> Nothing { return }");
-    assert_eq!(output.diagnostics.len(), 0);
-    match &output.module.items[0] {
-        Item::Function(f) => match &f.body.stmts[0] {
-            Stmt::Return { value: None, .. } => {}
-            other => panic!("Expected Stmt::Return with no value, got {other:?}"),
-        },
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
-    }
-}
-
-#[test]
-fn multi_case_if_with_int_arms_parses_as_match() {
-    // WHY: `if (x) { 1 => ...; 2 => ... }` must produce Stmt::Match, not Stmt::If.
-    // If the parser always picks simple-if, multi-case `if` becomes syntactically
-    // impossible and the entire branching-by-value feature is dead.
-    let output =
-        parse("function entrypoint() -> Nothing { if (x) { 1 => print(1) 2 => print(2) } }");
-    assert_eq!(output.diagnostics.len(), 0);
-    match &output.module.items[0] {
-        Item::Function(f) => match &f.body.stmts[0] {
-            Stmt::Match {
-                arms,
-                else_arm: None,
-                ..
-            } => {
-                assert_eq!(arms.len(), 2, "Expected 2 arms");
-            }
-            other => panic!("Expected Stmt::Match, got {other:?}"),
-        },
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
-    }
-}
-
-#[test]
-fn multi_case_if_with_else_arm() {
-    // WHY: `if (x) { 1 => ...; else => ... }` must produce Stmt::Match with
-    // else_arm = Some(_). Typeck uses the presence of else_arm to determine
-    // whether the multi-case is exhaustive for return-path analysis.
-    let output =
-        parse("function entrypoint() -> Nothing { if (x) { 1 => print(1) else => print(0) } }");
-    assert_eq!(output.diagnostics.len(), 0);
-    match &output.module.items[0] {
-        Item::Function(f) => match &f.body.stmts[0] {
-            Stmt::Match {
-                arms,
-                else_arm: Some(_),
-                ..
-            } => {
-                assert_eq!(arms.len(), 1, "Expected 1 value arm + else");
-            }
-            other => panic!("Expected Stmt::Match with else_arm, got {other:?}"),
-        },
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
-    }
-}
-
-#[test]
-fn multi_case_else_only_parses_as_match() {
-    // WHY: `if (x) { else => ... }` (only a catch-all, no value arms) is a
-    // valid multi-case `if`. Typeck treats it as an exhaustive match that always
-    // executes the else_arm body. Parser must not reject it as malformed.
-    let output = parse("function entrypoint() -> Nothing { if (x) { else => print(0) } }");
-    assert_eq!(output.diagnostics.len(), 0);
-    match &output.module.items[0] {
-        Item::Function(f) => match &f.body.stmts[0] {
-            Stmt::Match {
-                arms,
-                else_arm: Some(_),
-                ..
-            } => {
-                assert_eq!(arms.len(), 0, "Else-only: 0 value arms");
-            }
-            other => panic!("Expected Stmt::Match with else_arm only, got {other:?}"),
-        },
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
-    }
-}
-
-#[test]
-fn is_type_arm_produces_is_pattern_no_deferral() {
-    // WHY: In M6 P3b, `is Circle =>` is a real implementation — no deferral diagnostic.
-    // The parser must produce a MatchPatternKind::Is arm cleanly.
-    // (Previously this test checked for a deferral; M6 P3b removes the deferral.)
-    let output = parse("function entrypoint() -> Nothing { if (value) { is Circle => print(1) } }");
-    // Parser produces 0 diagnostics — typeck handles semantic validation.
-    // (The scrutinee `value` being a string will produce a typeck error, but
-    // the PARSER itself is now clean for is-type arms.)
-    let is_arm_found = output.module.items.iter().any(|item| {
-        if let Item::Function(f) = item {
-            f.body.stmts.iter().any(|stmt| {
-                if let ynz_ast::nodes::Stmt::Match { arms, .. } = stmt {
-                    arms.iter()
-                        .any(|arm| matches!(&arm.pattern.kind, MatchPatternKind::Is(_)))
-                } else {
-                    false
-                }
-            })
-        } else {
-            false
-        }
-    });
-    assert!(
-        is_arm_found,
-        "expected Is arm in parsed AST; diagnostics: {:?}",
-        output.diagnostics
-    );
-}
-
-#[test]
-fn if_without_parens_produces_diagnostic() {
-    // WHY: `if cond { }` (no parentheses) is a common mistake from languages like
-    // Rust/Go. The parser must emit a teaching diagnostic, not silently misbehave.
-    // Yinz requires `if (cond)` consistently with `while (cond)` and `for (...)`.
-    let output = parse("function entrypoint() -> Nothing { if x > 0 { print(x) } }");
-    assert!(
-        !output.diagnostics.is_empty(),
-        "Missing parens on if must produce at least 1 diagnostic"
-    );
-}
-
-#[test]
-fn multi_function_module_parses_correctly() {
-    // WHY: M3 is the first milestone with multi-function modules. Both functions
-    // must appear as separate items in the AST. If the parser stops after the
-    // first function, mutual recursion and callee lookups in typeck fail silently.
-    let source = r#"function add(a: Int, b: Int) -> Int { return a }
-function entrypoint() -> Nothing { let x = add(1, 2) }"#;
-    let output = parse(source);
-    assert_eq!(output.diagnostics.len(), 0);
-    assert_eq!(output.module.items.len(), 2, "Expected 2 function items");
-}
-
-#[test]
-fn nested_if_inside_for_parses_correctly() {
-    // WHY: Control-flow nesting is the typical real-program pattern. If nested
-    // blocks corrupt the block-end tracking, only the outermost construct works
-    // and every realistic program fails to parse.
-    let source = r#"function entrypoint() -> Nothing {
-  for (i in range(0, 5)) {
-    if (i > 2) {
-      print(i)
-    }
-  }
-}"#;
-    let output = parse(source);
-    assert_eq!(
-        output.diagnostics.len(),
-        0,
-        "Nested if-inside-for must parse cleanly"
-    );
-    match &output.module.items[0] {
-        Item::Function(f) => match &f.body.stmts[0] {
-            Stmt::For { body, .. } => match &body.stmts[0] {
-                Stmt::If { .. } => {}
-                other => panic!("Inner stmt should be If, got {other:?}"),
-            },
-            other => panic!("Outer stmt should be For, got {other:?}"),
-        },
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
-    }
-}
-
-#[test]
-fn parse_re_runs_when_source_changes() {
-    // WHY: parse_query depends on lex_query. When the source text changes,
-    // salsa must re-run both. If it doesn't, the AST is stale.
-    let mut db = CompilerDb::default();
-    let sf = SourceFile::new(
-        &db,
-        FILE.to_string(),
-        "function entrypoint() -> Nothing { }".to_string(),
-    );
-
-    let items_before = parse_query(&db, sf).module.items.len();
-
-    // test-ratchet: M7 P1 — migrated to backtick syntax
-    sf.set_text(&mut db)
-        .to("function entrypoint() -> Nothing { print(`hi`) }".to_string());
-
-    let items_after = parse_query(&db, sf).module.items.len();
-    assert_eq!(items_before, 1);
-    assert_eq!(items_after, 1);
-
-    let stmts_after = match &parse_query(&db, sf).module.items[0] {
-        Item::Function(f) => f.body.stmts.len(),
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => panic!("expected a function item"),
-    };
-    assert_eq!(
-        stmts_after, 1,
-        "Updated source should have 1 stmt in the body"
-    );
-}
-
-// ── M5 P2: Generic function declarations ─────────────────────────────────────
-
-#[test]
-fn m5_generic_fn_single_type_param() {
-    // WHY: acceptance criterion — `function identity<T>(give value: T) -> T`
-    // must parse with `generics: [T]`. If the generic param is lost, typeck
-    // cannot substitute concrete types and monomorphization is impossible.
-    let output = parse("function identity<T>(give value: T) -> T { return value }");
-    assert_eq!(output.diagnostics.len(), 0);
-    match &output.module.items[0] {
-        Item::Function(f) => {
-            assert_eq!(f.generics.len(), 1);
-            assert_eq!(f.generics[0].name, "T");
-            assert!(f.generics[0].constraints.is_empty());
-        }
-        _ => panic!("expected Function"),
-    }
-}
-
-#[test]
-fn m5_generic_fn_two_type_params() {
-    // WHY: multi-param generics like `pair<A, B>` must produce two separate
-    // GenericParam entries. If they collapse to one, `B` is invisible to typeck.
-    let output = parse("function pair<A, B>(give first: A, give second: B) -> Nothing { }");
-    assert_eq!(output.diagnostics.len(), 0);
-    match &output.module.items[0] {
-        Item::Function(f) => {
-            assert_eq!(f.generics.len(), 2);
-            assert_eq!(f.generics[0].name, "A");
-            assert_eq!(f.generics[1].name, "B");
-        }
-        _ => panic!("expected Function"),
-    }
-}
-
-#[test]
-fn m5_generic_fn_with_constraint() {
-    // WHY: acceptance criterion — `function sort<T follows Comparable>(...)` must
-    // parse with `constraints: [("Comparable", _)]` on T. Without this, typeck
-    // cannot verify that the concrete type satisfies the contract.
-    let output = parse("function sort<T follows Comparable>(share items: T) -> Nothing { }");
-    assert_eq!(output.diagnostics.len(), 0);
-    match &output.module.items[0] {
-        Item::Function(f) => {
-            assert_eq!(f.generics.len(), 1);
-            assert_eq!(f.generics[0].name, "T");
-            assert_eq!(f.generics[0].constraints.len(), 1);
-            assert_eq!(f.generics[0].constraints[0].0, "Comparable");
-        }
-        _ => panic!("expected Function"),
-    }
-}
-
-#[test]
-fn m5_generic_fn_two_params_one_constrained() {
-    // WHY: `<T follows Comparable, U>` is two params — T with a constraint, U
-    // without. The `,` must terminate T's entry and start U's.
-    let output = parse("function f<T follows Comparable, U>(share a: T, give b: U) -> Nothing { }");
-    assert_eq!(output.diagnostics.len(), 0);
-    match &output.module.items[0] {
-        Item::Function(f) => {
-            assert_eq!(f.generics.len(), 2);
-            assert_eq!(f.generics[0].name, "T");
-            assert_eq!(f.generics[0].constraints.len(), 1);
-            assert_eq!(f.generics[1].name, "U");
-            assert!(f.generics[1].constraints.is_empty());
-        }
-        _ => panic!("expected Function"),
-    }
-}
-
-#[test]
-fn m5_non_generic_fn_has_empty_generics() {
-    // WHY: a non-generic function must produce `generics: []`. If it accidentally
-    // produces a non-empty list, every typeck path that checks for generic vs
-    // non-generic would be wrong.
-    let output = parse("function add(a: Int, b: Int) -> Int { return a }");
-    assert_eq!(output.diagnostics.len(), 0);
-    match &output.module.items[0] {
-        Item::Function(f) => assert!(f.generics.is_empty()),
-        _ => panic!("expected Function"),
-    }
-}
-
-// ── M5 P2: Generic shape declarations ────────────────────────────────────────
-
-#[test]
-fn m5_generic_shape_two_params() {
-    // WHY: acceptance criterion — `shape Pair<A, B> { first: A, second: B }` must
-    // parse with `generics: [A, B]`. Without this, the field types `A` and `B`
-    // cannot be resolved to type parameters in typeck.
-    let output = parse("shape Pair<A, B> { first: A second: B }");
-    assert_eq!(output.diagnostics.len(), 0);
-    match &output.module.items[0] {
-        Item::ShapeDecl(s) => {
-            assert_eq!(s.generics.len(), 2);
-            assert_eq!(s.generics[0].name, "A");
-            assert_eq!(s.generics[1].name, "B");
-        }
-        _ => panic!("expected ShapeDecl"),
-    }
-}
-
-#[test]
-fn m5_generic_shape_single_param() {
-    // WHY: `shape Box<T>` must parse with one generic param.
-    let output = parse("shape Box<T> { value: T }");
-    assert_eq!(output.diagnostics.len(), 0);
-    match &output.module.items[0] {
-        Item::ShapeDecl(s) => {
-            assert_eq!(s.generics.len(), 1);
-            assert_eq!(s.generics[0].name, "T");
-        }
-        _ => panic!("expected ShapeDecl"),
-    }
-}
-
-#[test]
-fn m5_non_generic_shape_has_empty_generics() {
-    // WHY: `shape Player { ... }` must keep `generics: []`. An accidental
-    // generic param would confuse the monomorphization table.
-    let output = parse("shape Player { name: Int }");
-    assert_eq!(output.diagnostics.len(), 0);
-    match &output.module.items[0] {
-        Item::ShapeDecl(s) => assert!(s.generics.is_empty()),
-        _ => panic!("expected ShapeDecl"),
-    }
-}
-
-// ── M5 P2: Generic type instantiations in type position ──────────────────────
-
-#[test]
-fn m5_array_type_annotation() {
-    // WHY: acceptance criterion — `let arr: array<int> = ...` must produce
-    // `Type::Generic { name: "array", args: [Int] }`. If it stays `Type::Named`,
-    // the typeck cannot resolve the element type.
-    let output = parse(&wrap("let arr: Array<Int> = arr"));
-    assert_eq!(output.diagnostics.len(), 0);
-    let stmts = parse_fn_body(&wrap("let arr: Array<Int> = arr"));
-    match &stmts[0] {
-        Stmt::Let {
-            ty: Some(Type::Generic { name, args, .. }),
-            ..
-        } => {
-            assert_eq!(name, "Array");
-            assert_eq!(args.len(), 1);
-            assert!(matches!(args[0], Type::Int));
-        }
-        other => panic!("expected Let with Generic type annotation, got {other:?}"),
-    }
-}
-
-#[test]
-fn m5_maybe_type_annotation() {
-    // WHY: acceptance criterion — `let x: maybe<int> = none` must produce
-    // `Type::Maybe { inner: Int }`. The distinct Maybe variant (not Generic)
-    // is required so typeck can apply flow-sensitive `.value` rules.
-    let stmts = parse_fn_body(&wrap("let x: Maybe<Int> = none"));
-    match &stmts[0] {
-        Stmt::Let {
-            ty: Some(Type::Maybe { inner, .. }),
-            value: Expr::NoneLit { .. },
-            ..
-        } => {
-            assert!(matches!(**inner, Type::Int));
-        }
-        other => panic!("expected Let with Maybe<Int> type and NoneLit, got {other:?}"),
-    }
-}
-
-#[test]
-fn m5_maybe_player_type_annotation() {
-    // WHY: `maybe<Player>` (named inner type) must produce `Maybe { inner: Named("Player") }`.
-    let stmts = parse_fn_body(&wrap("let x: Maybe<Player> = none"));
-    match &stmts[0] {
-        Stmt::Let {
-            ty: Some(Type::Maybe { inner, .. }),
-            ..
-        } => {
-            assert!(matches!(**inner, Type::Named(ref n, _) if n == "Player"));
-        }
-        other => panic!("expected Let with Maybe<Named>, got {other:?}"),
-    }
-}
-
-#[test]
-fn m5_nested_generic_type() {
-    // WHY: `Pair<Pair<int, string>, int>` tests nested angle brackets. The depth
-    // cap (16) must not fire here; the type must parse to a Generic with one
-    // Generic arg and one Int arg.
-    let stmts = parse_fn_body(&wrap("let x: Pair<Pair<Int, Int>, Int> = x"));
-    match &stmts[0] {
-        Stmt::Let {
-            ty: Some(Type::Generic { name, args, .. }),
-            ..
-        } => {
-            assert_eq!(name, "Pair");
-            assert_eq!(args.len(), 2);
-            assert!(matches!(&args[0], Type::Generic { name: n, .. } if n == "Pair"));
-            assert!(matches!(args[1], Type::Int));
-        }
-        other => panic!("expected nested Generic type, got {other:?}"),
-    }
-}
-
-// Bug (v0.3-M9 C1h, #433; High: parser of untrusted input): the length of `fixed<T, N>` is a
-// whole number in the argument list. Each written length must reach typeck as `Type::Length`
-// with its value (`0` and the largest `u32` included), and a number that is not closed by `,` or
-// `>` must be one diagnostic, not a silent parse or a cascade into the next item.
-#[test]
-fn a_whole_number_in_a_generic_argument_list_parses_as_a_length() {
-    for written in [0_u64, 1, 4, u32::MAX as u64] {
-        let stmts = parse_fn_body(&wrap(&format!("let x: Fixed<Int, {written}> = x")));
-        match &stmts[0] {
-            Stmt::Let {
-                ty: Some(Type::Generic { name, args, .. }),
-                ..
-            } => {
-                assert_eq!(name, "Fixed");
-                assert_eq!(args.len(), 2, "{written}");
-                assert!(matches!(args[0], Type::Int), "{written}");
-                assert!(
-                    matches!(&args[1], Type::Length { value, .. } if *value == written),
-                    "{written}: {:?}",
-                    args[1]
-                );
-            }
-            other => panic!("expected `Fixed` with a length, got {other:?}"),
-        }
-    }
-}
-
-#[test]
-fn a_length_not_closed_by_a_comma_or_angle_bracket_is_refused_once() {
-    for written in ["Fixed<Int, 3 4>", "Fixed<Int, 3 Int>"] {
-        let output = parse(&wrap(&format!("let x: {written} = x")));
-        let refused = output
-            .diagnostics
-            .iter()
-            .filter(|diagnostic| {
-                diagnostic
-                    .what
-                    .contains("after the length in a generic type argument list")
-            })
-            .count();
-        assert_eq!(refused, 1, "{written}: {:#?}", output.diagnostics);
-    }
-}
-
-#[test]
-fn m5_generic_type_depth_cap_error() {
-    // WHY: the depth cap (16) must produce exactly ONE diagnostic, not a
-    // cascade of errors. A cascade would hide the real error in noise.
-    // Build 17-deep nesting: `A<A<A<...<int>...>>>`.
-    let deep: String = "A<".repeat(17) + "Int" + &">".repeat(17);
-    let source = format!("function entrypoint() -> Nothing {{ let x: {deep} = x }}");
-    let output = parse(&source);
-    assert!(
-        !output.diagnostics.is_empty(),
-        "Expected at least one diagnostic for 17-deep nesting"
-    );
-}
-
-// ── M5 P2: `none` literal ────────────────────────────────────────────────────
-
-#[test]
-fn m5_none_literal_expr() {
-    // WHY: `none` must parse to `Expr::NoneLit`. If it parses as `Expr::Ident("none")`,
-    // typeck cannot recognize the absence value and the maybe<T> flow won't work.
-    let stmts = parse_fn_body(&wrap("let x = none"));
-    match &stmts[0] {
-        Stmt::Let {
-            value: Expr::NoneLit { .. },
-            ..
-        } => {}
-        other => panic!("expected NoneLit, got {other:?}"),
-    }
-}
-
-#[test]
-fn m5_none_in_condition() {
-    // WHY: `none` must be usable as an expression in any position, including
-    // comparisons. Restricting it to binding RHS would require special-casing
-    // in every expression context.
-    let output = parse(&wrap("if (x == none) { }"));
-    assert_eq!(output.diagnostics.len(), 0);
-}
-
-// ── M5 P2: Bracket index access ──────────────────────────────────────────────
-
-#[test]
-fn m5_index_access_expr() {
-    // WHY: acceptance criterion — `arr[0]` must produce `Expr::IndexAccess`.
-    // Without this, bracket access on collections has no AST representation.
-    let stmts = parse_fn_body(&wrap("let x = arr[0]"));
-    match &stmts[0] {
-        Stmt::Let {
-            value: Expr::IndexAccess { index, .. },
-            ..
-        } => {
-            assert!(matches!(**index, Expr::IntLit(0, _)));
-        }
-        other => panic!("expected IndexAccess, got {other:?}"),
-    }
-}
-
-#[test]
-fn m5_index_access_string_key() {
-    // WHY: `m[`alice`]` must work — map keys are not just integers.
-    //
-    // test-ratchet: M7 P1 — backtick strings produce InterpolatedString, not StringLit.
-    // The index token is now a BacktickString token that parses to InterpolatedString.
-    let stmts = parse_fn_body(&wrap("let x = m[`alice`]"));
-    match &stmts[0] {
-        Stmt::Let {
-            value: Expr::IndexAccess { index, .. },
-            ..
-        } => {
-            assert!(matches!(**index, Expr::InterpolatedString(_, _)));
-        }
-        other => panic!("expected IndexAccess with InterpolatedString index, got {other:?}"),
-    }
-}
-
-#[test]
-fn m5_chained_index_access() {
-    // WHY: `m[`alice`][0]` is an IndexAccess whose receiver is also IndexAccess.
-    // If chaining doesn't work, multi-dimensional access breaks.
-    //
-    // test-ratchet: M7 P1 — migrated to backtick syntax
-    let stmts = parse_fn_body(&wrap("let x = m[`alice`][0]"));
-    match &stmts[0] {
-        Stmt::Let {
-            value: Expr::IndexAccess { receiver, .. },
-            ..
-        } => {
-            assert!(matches!(**receiver, Expr::IndexAccess { .. }));
-        }
-        other => panic!("expected chained IndexAccess, got {other:?}"),
-    }
-}
-
-#[test]
-fn m5_index_access_standalone_stmt() {
-    // WHY: `arr[0]` as a bare statement (expression statement) must not produce
-    // a diagnostic. It's unusual but legal — typeck will warn about unused values.
-    let output = parse(&wrap("arr[0]"));
-    assert_eq!(output.diagnostics.len(), 0);
-    let stmts = parse_fn_body(&wrap("arr[0]"));
-    assert!(matches!(stmts[0], Stmt::Expr(Expr::IndexAccess { .. })));
-}
-
-// ── M5 P2: Index assign ───────────────────────────────────────────────────────
-
-#[test]
-fn m5_index_assign_stmt() {
-    // WHY: acceptance criterion — `arr[0] = 5` must produce `Stmt::IndexAssign`.
-    // If it becomes `Stmt::Assign` or `Stmt::Expr`, typeck cannot enforce
-    // the bracket-sugar `.set()` lowering.
-    let stmts = parse_fn_body(&wrap("arr[0] = 5"));
-    match &stmts[0] {
-        Stmt::IndexAssign {
-            index,
-            value: Expr::IntLit(5, _),
-            ..
-        } => {
-            assert!(matches!(**index, Expr::IntLit(0, _)));
-        }
-        other => panic!("expected IndexAssign, got {other:?}"),
-    }
-}
-
-#[test]
-fn m5_index_assign_string_key() {
-    // WHY: `scores[`alice`] = 90` is the map-write path. If string-keyed
-    // index assign doesn't work, maps are read-only via bracket syntax.
-    //
-    // test-ratchet: M7 P1 — backtick strings produce InterpolatedString, not StringLit.
-    let stmts = parse_fn_body(&wrap("scores[`alice`] = 90"));
-    match &stmts[0] {
-        Stmt::IndexAssign {
-            index,
-            value: Expr::IntLit(90, _),
-            ..
-        } => {
-            assert!(matches!(**index, Expr::InterpolatedString(_, _)));
-        }
-        other => panic!("expected IndexAssign with InterpolatedString key, got {other:?}"),
-    }
-}
-
-// ── M5 P2: Generic call sites (contextual `<` disambiguation) ────────────────
-
-#[test]
-fn m5_generic_call_one_type_arg() {
-    // WHY: acceptance criterion — `identity<int>(5)` must produce a Call with
-    // `type_args: Some([Int])`. Without this, explicit type arguments at call
-    // sites are silently dropped and typeck falls back to inference only.
-    let stmts = parse_fn_body(&wrap("let x = identity<Int>(5)"));
-    match &stmts[0] {
-        Stmt::Let {
-            value: Expr::Call(call),
-            ..
-        } => {
-            assert!(call.type_args.is_some(), "type_args must be Some");
-            let args = call.type_args.as_ref().unwrap();
-            assert_eq!(args.len(), 1);
-            assert!(matches!(args[0], Type::Int));
-        }
-        other => panic!("expected Call with type_args, got {other:?}"),
-    }
-}
-
-#[test]
-fn m5_generic_call_two_type_args() {
-    // WHY: `pair<int, string>(1, `a`)` tests multi-arg generic calls. If the
-    // second type arg is dropped, the `B` parameter can't be inferred.
-    //
-    // test-ratchet: M7 P1 — migrated to backtick syntax
-    let stmts = parse_fn_body(&wrap("let x = pair<Int, String>(1, `a`)"));
-    match &stmts[0] {
-        Stmt::Let {
-            value: Expr::Call(call),
-            ..
-        } => {
-            let args = call.type_args.as_ref().expect("type_args must be Some");
-            assert_eq!(args.len(), 2);
-            assert!(matches!(args[0], Type::Int));
-            assert!(matches!(args[1], Type::Named(ref n, _) if n == "String"));
-        }
-        other => panic!("expected Call with two type_args, got {other:?}"),
-    }
-}
-
-#[test]
-fn m5_generic_call_no_type_args_has_none() {
-    // WHY: a normal (non-generic) call `add(1, 2)` must have `type_args: None`,
-    // not `Some([])`. `None` = no explicit type args; `Some([])` = empty explicit
-    // list (semantically different for typeck to distinguish).
-    let stmts = parse_fn_body(&wrap("let x = add(1, 2)"));
-    match &stmts[0] {
-        Stmt::Let {
-            value: Expr::Call(call),
-            ..
-        } => {
-            assert!(
-                call.type_args.is_none(),
-                "non-generic call must have type_args: None"
-            );
-        }
-        other => panic!("expected Call, got {other:?}"),
-    }
-}
-
-// ── M5 P2: Contextual `<` disambiguation — comparison vs generic ──────────────
-
-#[test]
-fn m5_less_than_stays_comparison() {
-    // WHY: acceptance criterion — `a < b` must NOT be parsed as a generic call.
-    // If `<` is always treated as a type-arg opener, every comparison silently
-    // becomes a parse error.
-    let stmts = parse_fn_body(&wrap("let x = a < b"));
-    match &stmts[0] {
-        Stmt::Let {
-            value: Expr::BinOp {
-                op: BinOpKind::Lt, ..
-            },
-            ..
-        } => {}
-        other => panic!("expected Lt comparison, got {other:?}"),
-    }
-}
-
-#[test]
-fn m5_comparison_chain_not_generic() {
-    // WHY: acceptance criterion — `a < b > c` must parse as two comparisons,
-    // NOT as a generic call `a<b>(c)`. This is the canonical ambiguity case.
-    let stmts = parse_fn_body(&wrap("let x = a < b > c"));
-    // Should be (a < b) > c — two BinOps.
-    match &stmts[0] {
-        Stmt::Let {
-            value:
-                Expr::BinOp {
-                    op: BinOpKind::Gt,
-                    lhs,
-                    ..
-                },
-            ..
-        } => {
-            assert!(matches!(
-                **lhs,
-                Expr::BinOp {
-                    op: BinOpKind::Lt,
-                    ..
-                }
-            ));
-        }
-        other => panic!("expected comparison chain a<b>c, got {other:?}"),
-    }
-}
-
-#[test]
-fn m5_comparison_in_index_not_generic() {
-    // WHY: `arr[a < b]` must parse the index as a comparison, not a type-arg list.
-    // If `<` inside `[...]` is treated as a generic opener, the index expression
-    // is lost.
-    let stmts = parse_fn_body(&wrap("let x = arr[a < b]"));
-    match &stmts[0] {
-        Stmt::Let {
-            value: Expr::IndexAccess { index, .. },
-            ..
-        } => {
-            assert!(matches!(
-                **index,
-                Expr::BinOp {
-                    op: BinOpKind::Lt,
-                    ..
-                }
-            ));
-        }
-        other => panic!("expected IndexAccess with Lt index, got {other:?}"),
-    }
-}
-
-#[test]
-fn m5_generic_call_not_confused_by_comparison() {
-    // WHY: `foo<int>(x)` must be a generic call even when `foo < int` would also
-    // be a valid comparison. The `(` following the `>` disambiguates.
-    let stmts = parse_fn_body(&wrap("let x = foo<Int>(5)"));
-    match &stmts[0] {
-        Stmt::Let {
-            value: Expr::Call(call),
-            ..
-        } => {
-            assert!(call.type_args.is_some());
-        }
-        other => panic!("expected generic Call, got {other:?}"),
-    }
-}
-
-// ── M5 P2: M5 snapshot test ──────────────────────────────────────────────────
-
-#[test]
-fn m5_ast_snapshot() {
-    // WHY: snapshot guards all M5 parser surface in one pass. Any structural
-    // regression to generics, index access, maybe, or none-literal AST output
-    // will diff here and require explicit approval via `cargo insta review`.
-    let source = r#"
+    shape_program_snapshot: "m4_ast",
+        "shape Player {\n  name: String\n  health: Int\n  hidden cache: Int\n}\n\nfunction greet(share self: Player) -> String {\n  return self.name\n}\n\nfunction entrypoint() -> Nothing {\n  let p: Player = { name: `Patrick`, health: 100 }\n  p.health = 90\n  let h = p.health\n  let b = p.copy()\n}";
+    generics_index_and_maybe_program_snapshot: "m5_ast_snapshot",
+        r#"
 shape Pair<A, B> {
   first: A
   second: B
@@ -3037,826 +1022,40 @@ function entrypoint() -> Nothing {
   let cmp = a < 10
 }
 "#;
-    let output = parse(source);
-    assert_eq!(
-        output.diagnostics.len(),
-        0,
-        "M5 surface must parse clean: {:?}",
-        output.diagnostics
-    );
-    assert_debug_snapshot!(output.module);
 }
 
-// ── M5 P2: Error recovery tests ──────────────────────────────────────────────
-
+// bug: parser overflows the stack, or loses the function item, on deeply nested parentheses | tier: High
 #[test]
-fn m5_recovery_unclosed_generic_param_list() {
-    // WHY: `function foo<` with no closing `>` must produce exactly one diagnostic
-    // and still parse the remaining top-level items. A cascade of errors here
-    // would drown out the single real mistake.
-    let output = parse("function foo< { } function bar() -> Nothing { }");
-    assert!(
-        !output.diagnostics.is_empty(),
-        "Expected at least one diagnostic"
-    );
-    // bar() must still be parsed — recovery must continue past the broken decl.
-    let fn_names: Vec<_> = output
-        .module
-        .items
-        .iter()
-        .filter_map(|i| match i {
-            Item::Function(f) => Some(f.name.as_str()),
-            _ => None,
+fn expression_nesting_past_256_levels_is_refused_without_overflow() {
+    // ~50k nested open parens deterministically crashed the compiler with a stack overflow
+    // (SIGABRT). The 256-level cap must fire a diagnostic and return an Error node. The test
+    // runs on a 16 MB thread stack only so debug-mode parse frames can REACH the cap; the
+    // production cap (256) is what is under test.
+    let result = std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            let depth = 300usize;
+            let source = format!(
+                "function entrypoint() -> Nothing {{ let x = {}1{} }}",
+                "(".repeat(depth),
+                ")".repeat(depth)
+            );
+            parse(&source)
         })
-        .collect();
+        .expect("thread spawn failed")
+        .join()
+        .expect("thread panicked");
     assert!(
-        fn_names.contains(&"bar"),
-        "bar() must parse despite foo<'s error"
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.what.contains("256")),
+        "A diagnostic mentioning the 256 limit must be present, got: {:?}",
+        result.diagnostics
     );
-}
-
-#[test]
-fn m5_recovery_missing_type_arg_close_bracket() {
-    // WHY: `let x: array<int = 5` (missing `>`) must produce a diagnostic but
-    // still give the parser enough to continue with the next statement.
-    let output = parse(&wrap("let x: Array<Int = 5"));
-    assert!(
-        !output.diagnostics.is_empty(),
-        "Expected at least one diagnostic for missing `>`"
-    );
-}
-
-#[test]
-fn m5_recovery_generic_call_no_close_angle() {
-    // WHY: `foo<int(5)` — paren before `>` — must NOT parse as a generic call
-    // (falls back to comparison). The 32-token budget ensures we don't consume
-    // the arg list as part of speculative type-arg parsing.
-    let output = parse(&wrap("let x = foo < Int > 5"));
-    // This is a comparison, not a generic call: (foo < int) > 5
-    assert_eq!(output.diagnostics.len(), 0, "comparison must parse cleanly");
-    match &parse_fn_body(&wrap("let x = foo < Int > 5"))[0] {
-        Stmt::Let {
-            value: Expr::BinOp {
-                op: BinOpKind::Gt, ..
-            },
-            ..
-        } => {}
-        other => panic!("expected Gt comparison, got {other:?}"),
-    }
-}
-
-#[test]
-fn m5_recovery_index_missing_close_bracket() {
-    // WHY: `arr[0` without `]` must produce exactly one diagnostic and not crash.
-    let output = parse(&wrap("let x = arr[0"));
-    assert!(
-        !output.diagnostics.is_empty(),
-        "Expected diagnostic for unclosed `[`"
-    );
-}
-
-#[test]
-fn m5_maybe_missing_type_arg() {
-    // WHY: `maybe` without `<T>` must produce exactly one diagnostic. The error
-    // message must guide the user to write `maybe<T>` — not produce a cascade.
-    let output = parse(&wrap("let x: Maybe = none"));
-    assert!(
-        !output.diagnostics.is_empty(),
-        "Expected diagnostic for bare `Maybe`"
-    );
-    assert!(
-        output.diagnostics.iter().any(|d| d.what.contains("Maybe")),
-        "Diagnostic must mention `Maybe`"
-    );
-}
-
-// ── M7 P2: `-> T errors` return type parsing ────────────────────────────────
-
-#[test]
-fn m7_errors_capable_string_return_type() {
-    // WHY: `-> string errors` must set errors_capable = true and wrap the return
-    // type in Type::ErrorCapable. If errors_capable stays false, the type checker
-    // can never gate propagation checks on fallible functions.
-    let output = parse("function readFile() -> String errors { }");
     assert_eq!(
-        output.diagnostics.len(),
-        0,
-        "unexpected diagnostics: {:?}",
-        output.diagnostics
+        result.module.items.len(),
+        1,
+        "The function item must still appear in the AST"
     );
-    match &output.module.items[0] {
-        Item::Function(f) => {
-            assert!(
-                f.errors_capable,
-                "errors_capable must be true for `-> String errors`"
-            );
-            assert!(
-                matches!(f.return_type, Type::ErrorCapable { .. }),
-                "return_type must be Type::ErrorCapable, got {:?}",
-                f.return_type
-            );
-        }
-        other => panic!("expected Function, got {other:?}"),
-    }
-}
-
-#[test]
-fn m7_errors_capable_nothing_return_type() {
-    // WHY: `-> nothing errors` is valid — a function that performs a side-effectful
-    // operation and may fail but has no success value. errors_capable must be true.
-    let output = parse("function writeFile() -> Nothing errors { }");
-    assert_eq!(
-        output.diagnostics.len(),
-        0,
-        "unexpected diagnostics: {:?}",
-        output.diagnostics
-    );
-    match &output.module.items[0] {
-        Item::Function(f) => {
-            assert!(
-                f.errors_capable,
-                "errors_capable must be true for `-> Nothing errors`"
-            );
-            assert!(
-                matches!(f.return_type, Type::ErrorCapable { ref inner, .. } if matches!(**inner, Type::Nothing)),
-                "ErrorCapable must wrap Nothing, got {:?}",
-                f.return_type
-            );
-        }
-        other => panic!("expected Function, got {other:?}"),
-    }
-}
-
-#[test]
-fn m7_errors_capable_maybe_string_return_type() {
-    // WHY: `-> maybe<string> errors` must produce ErrorCapable wrapping a Maybe type.
-    // The two modifiers are orthogonal: maybe = absent value, errors = failure mode.
-    let output = parse("function findUser() -> Maybe<String> errors { }");
-    assert_eq!(
-        output.diagnostics.len(),
-        0,
-        "unexpected diagnostics: {:?}",
-        output.diagnostics
-    );
-    match &output.module.items[0] {
-        Item::Function(f) => {
-            assert!(f.errors_capable, "errors_capable must be true");
-            match &f.return_type {
-                Type::ErrorCapable { inner, .. } => {
-                    assert!(
-                        matches!(**inner, Type::Maybe { .. }),
-                        "inner type must be Maybe, got {:?}",
-                        inner
-                    );
-                }
-                other => panic!("expected ErrorCapable, got {other:?}"),
-            }
-        }
-        other => panic!("expected Function, got {other:?}"),
-    }
-}
-
-#[test]
-fn m7_plain_return_type_has_errors_capable_false() {
-    // WHY: A plain `-> string` (no `errors` keyword) must leave errors_capable = false.
-    // If this flag is accidentally set to true, every function becomes fallible and
-    // the typeck gates on error propagation trigger incorrectly everywhere.
-    let output = parse("function getGreeting() -> String { }");
-    assert_eq!(
-        output.diagnostics.len(),
-        0,
-        "unexpected diagnostics: {:?}",
-        output.diagnostics
-    );
-    match &output.module.items[0] {
-        Item::Function(f) => {
-            assert!(
-                !f.errors_capable,
-                "errors_capable must be false for plain `-> String`"
-            );
-            assert!(
-                matches!(f.return_type, Type::Named(_, _)),
-                "return_type must be Named(String), got {:?}",
-                f.return_type
-            );
-        }
-        other => panic!("expected Function, got {other:?}"),
-    }
-}
-
-#[test]
-fn m7_errors_capable_inner_type_is_preserved() {
-    // WHY: The inner type of ErrorCapable must be the exact type parsed from
-    // the return annotation — not wrapped again or replaced. Regression guard for
-    // accidental double-wrapping (ErrorCapable(ErrorCapable(T))).
-    let output = parse("function compute() -> Int errors { }");
-    assert_eq!(
-        output.diagnostics.len(),
-        0,
-        "unexpected diagnostics: {:?}",
-        output.diagnostics
-    );
-    match &output.module.items[0] {
-        Item::Function(f) => match &f.return_type {
-            Type::ErrorCapable { inner, .. } => {
-                assert!(
-                    matches!(**inner, Type::Int),
-                    "inner must be Int, got {:?}",
-                    inner
-                );
-            }
-            other => panic!("expected ErrorCapable, got {other:?}"),
-        },
-        other => panic!("expected Function, got {other:?}"),
-    }
-}
-
-// ── M7 P2: backtick string interpolation ─────────────────────────────────────
-
-#[test]
-fn m7_backtick_plain_literal_parses_as_interpolated_string() {
-    // WHY: A backtick string with no interpolations must produce a single Lit part.
-    // If the parser fails here, every backtick string fails — even the trivial case.
-    use ynz_ast::nodes::StringPart;
-    let stmts = parse_fn_body(&wrap("let s = `hello`"));
-    match &stmts[0] {
-        Stmt::Let {
-            value: Expr::InterpolatedString(parts, _),
-            ..
-        } => {
-            assert_eq!(parts.len(), 1, "plain backtick string must have 1 part");
-            assert!(
-                matches!(&parts[0], StringPart::Lit(b, _) if b == b"hello"),
-                "part must be Lit(hello)"
-            );
-        }
-        other => panic!("expected Let with InterpolatedString, got {other:?}"),
-    }
-}
-
-#[test]
-fn m7_backtick_single_interpolation_produces_three_parts() {
-    // WHY: `` `hello ${name}` `` must produce exactly three parts: Lit("hello "),
-    // Expr(name), Lit(""). The trailing empty Lit is always emitted by the lexer
-    // after the last interpolation close. Without it, the round-trip from source
-    // to parts loses the tail.
-    use ynz_ast::nodes::StringPart;
-    let stmts = parse_fn_body(&wrap("let s = `hello ${name}`"));
-    match &stmts[0] {
-        Stmt::Let {
-            value: Expr::InterpolatedString(parts, _),
-            ..
-        } => {
-            assert_eq!(
-                parts.len(),
-                3,
-                "expected Lit + Expr + Lit, got {}",
-                parts.len()
-            );
-            assert!(
-                matches!(&parts[0], StringPart::Lit(b, _) if b == b"hello "),
-                "first part must be Lit(hello )"
-            );
-            assert!(
-                matches!(&parts[1], StringPart::Expr(_, _)),
-                "second part must be Expr"
-            );
-            assert!(
-                matches!(&parts[2], StringPart::Lit(b, _) if b.is_empty()),
-                "third part must be Lit()"
-            );
-        }
-        other => panic!("expected Let with InterpolatedString, got {other:?}"),
-    }
-}
-
-#[test]
-fn m7_backtick_two_interpolations_produces_five_parts() {
-    // WHY: `` `${a} + ${b}` `` must produce five parts: Lit(""), Expr(a), Lit(" + "),
-    // Expr(b), Lit(""). Confirms the lexer and parser agree on the segment structure
-    // when interpolations appear at both ends of the string.
-    use ynz_ast::nodes::StringPart;
-    let stmts = parse_fn_body(&wrap("let s = `${a} + ${b}`"));
-    match &stmts[0] {
-        Stmt::Let {
-            value: Expr::InterpolatedString(parts, _),
-            ..
-        } => {
-            assert_eq!(
-                parts.len(),
-                5,
-                "expected 5 parts (Lit+Expr+Lit+Expr+Lit), got {}",
-                parts.len()
-            );
-            assert!(
-                matches!(&parts[0], StringPart::Lit(b, _) if b.is_empty()),
-                "parts[0] must be empty Lit"
-            );
-            assert!(
-                matches!(&parts[1], StringPart::Expr(_, _)),
-                "parts[1] must be Expr"
-            );
-            assert!(
-                matches!(&parts[2], StringPart::Lit(b, _) if b == b" + "),
-                "parts[2] must be Lit( + )"
-            );
-            assert!(
-                matches!(&parts[3], StringPart::Expr(_, _)),
-                "parts[3] must be Expr"
-            );
-            assert!(
-                matches!(&parts[4], StringPart::Lit(b, _) if b.is_empty()),
-                "parts[4] must be empty Lit"
-            );
-        }
-        other => panic!("expected Let with InterpolatedString, got {other:?}"),
-    }
-}
-
-#[test]
-fn m7_backtick_interpolated_expr_is_ident() {
-    // WHY: The expression inside `${...}` must be the full expression AST, not a
-    // string. Confirms the parser calls parse_expr(0) inside the interpolation, not
-    // some reduced form that only accepts identifiers.
-    use ynz_ast::nodes::StringPart;
-    let stmts = parse_fn_body(&wrap("let s = `value=${x}`"));
-    match &stmts[0] {
-        Stmt::Let {
-            value: Expr::InterpolatedString(parts, _),
-            ..
-        } => {
-            assert_eq!(parts.len(), 3, "expected Lit + Expr + Lit");
-            match &parts[1] {
-                StringPart::Expr(inner, _) => {
-                    assert!(
-                        matches!(**inner, Expr::Ident(ref n, _) if n == "x"),
-                        "expr must be Ident(x)"
-                    );
-                }
-                other => panic!("expected Expr part, got {other:?}"),
-            }
-        }
-        other => panic!("expected Let with InterpolatedString, got {other:?}"),
-    }
-}
-
-#[test]
-fn m7_backtick_empty_string_is_single_empty_lit() {
-    // WHY: A completely empty backtick string (`` `` ``) must produce one Lit part
-    // with empty bytes. An empty vec of parts would break any downstream stage
-    // that assumes at least one segment always exists.
-    use ynz_ast::nodes::StringPart;
-    let stmts = parse_fn_body(&wrap("let s = ``"));
-    match &stmts[0] {
-        Stmt::Let {
-            value: Expr::InterpolatedString(parts, _),
-            ..
-        } => {
-            assert_eq!(
-                parts.len(),
-                1,
-                "empty backtick string must have exactly 1 Lit part"
-            );
-            assert!(
-                matches!(&parts[0], StringPart::Lit(b, _) if b.is_empty()),
-                "the Lit must be empty bytes"
-            );
-        }
-        other => panic!("expected Let with InterpolatedString, got {other:?}"),
-    }
-}
-
-// ── M7 P2: for-loop tuple destructure ────────────────────────────────────────
-
-#[test]
-fn m7_for_destructure_produces_for_with_synthetic_entry() {
-    // WHY: `for ((k, v) in m)` must desugar to `for (__entry in m)` with `let k`
-    // and `let v` injected at the top of the body. If the For var is not `__entry`,
-    // the desugaring contract is broken and typeck can't resolve the FieldAccess.
-    let stmts = parse_fn_body(&wrap("for ((k, v) in myMap) { }"));
-    match &stmts[0] {
-        Stmt::For { var, body, .. } => {
-            assert_eq!(var, "__entry", "desugared for-loop var must be __entry");
-            assert!(
-                body.stmts.len() >= 2,
-                "body must have at least the 2 injected let bindings"
-            );
-            // First stmt is `let k = __entry.key`
-            match &body.stmts[0] {
-                Stmt::Let { name, .. } => {
-                    assert_eq!(name, "k", "first injected binding must be k");
-                }
-                other => panic!("expected Let for k, got {other:?}"),
-            }
-            // Second stmt is `let v = __entry.value`
-            match &body.stmts[1] {
-                Stmt::Let { name, .. } => {
-                    assert_eq!(name, "v", "second injected binding must be v");
-                }
-                other => panic!("expected Let for v, got {other:?}"),
-            }
-        }
-        other => panic!("expected For, got {other:?}"),
-    }
-}
-
-#[test]
-fn m7_for_destructure_preserves_user_body_stmts() {
-    // WHY: Statements in the user's `for ((k, v) in m) { body }` must appear AFTER
-    // the two injected let bindings, not discarded. If desugaring drops user stmts,
-    // the for-loop body silently becomes a no-op.
-    let stmts = parse_fn_body(&wrap("for ((k, v) in m) { print(k) }"));
-    match &stmts[0] {
-        Stmt::For { body, .. } => {
-            assert_eq!(
-                body.stmts.len(),
-                3,
-                "body must have 2 injected lets + 1 user stmt"
-            );
-            // Index 2 is the user's print(k)
-            assert!(
-                matches!(&body.stmts[2], Stmt::Expr(_)),
-                "third stmt must be user's expression"
-            );
-        }
-        other => panic!("expected For, got {other:?}"),
-    }
-}
-
-#[test]
-fn card399_for_destructure_synthetic_exprs_have_distinct_spans() {
-    // WHY (card #399, High tier — desugar feeds the span-keyed `expr_types` table): the
-    // `.key` access, the `.value` access, the `__entry` receivers and the iterated map
-    // are four expressions with four different types. If any two share a `(start, end)`
-    // span, typeck's last write wins and codegen sees `__entry` typed as the key or value
-    // type (`field_gep: receiver is not a Shape`).
-    let stmts = parse_fn_body(&wrap("for ((k, v) in m) { }"));
-    let Stmt::For { iter, body, .. } = &stmts[0] else {
-        panic!("expected For, got {:?}", stmts[0]);
-    };
-    let access_parts = |stmt: &Stmt| match stmt {
-        Stmt::Let {
-            value: Expr::FieldAccess { receiver, span, .. },
-            ..
-        } => (receiver.span().clone(), span.clone()),
-        other => panic!("expected `let` of a field access, got {other:?}"),
-    };
-    let (key_receiver, key_access) = access_parts(&body.stmts[0]);
-    let (value_receiver, value_access) = access_parts(&body.stmts[1]);
-    let key_of = |span: &SourceSpan| (span.start, span.end);
-    let spans = [
-        key_of(iter.span()),
-        key_of(&key_access),
-        key_of(&value_access),
-        key_of(&key_receiver),
-    ];
-    for (position, first) in spans.iter().enumerate() {
-        for second in &spans[position + 1..] {
-            assert_ne!(first, second, "synthetic span collision: {spans:?}");
-        }
-    }
-    assert_eq!(
-        key_of(&key_receiver),
-        key_of(&value_receiver),
-        "both receivers are the same MapEntry-typed `__entry`, so they may share one span"
-    );
-}
-
-#[test]
-fn m7_for_single_binding_still_works() {
-    // WHY: The existing `for (x in collection)` form must continue to work after
-    // adding destructure support. The LParen-check branch must only fire for `((`
-    // sequences, not for `(x`.
-    let stmts = parse_fn_body(&wrap("for (entry in myMap) { }"));
-    match &stmts[0] {
-        Stmt::For { var, .. } => {
-            assert_eq!(
-                var, "entry",
-                "single-binding for-loop var must be the user's name"
-            );
-        }
-        other => panic!("expected For, got {other:?}"),
-    }
-}
-
-#[test]
-fn m7_for_destructure_key_binding_uses_field_access() {
-    // WHY: The injected `let k = __entry.key` must use Expr::FieldAccess so typeck
-    // can resolve it against the MapEntry shape. If it's an Ident or Call, typeck
-    // can't determine the type of k.
-    let stmts = parse_fn_body(&wrap("for ((k, v) in m) { }"));
-    match &stmts[0] {
-        Stmt::For { body, .. } => match &body.stmts[0] {
-            Stmt::Let {
-                value: Expr::FieldAccess { field, .. },
-                ..
-            } => {
-                assert_eq!(field, "key", "injected key binding must access .key field");
-            }
-            other => panic!("expected Let with FieldAccess, got {other:?}"),
-        },
-        other => panic!("expected For, got {other:?}"),
-    }
-}
-
-// ── M7 P2: `errors` keyword rejection in non-return-type position ────────────
-
-#[test]
-fn m7_errors_keyword_in_expression_position_is_rejected() {
-    // WHY: `errors` is a return-type modifier, not an expression. Using it in a
-    // value position like `let x = errors` must produce a parse error diagnostic.
-    // If it silently parses, the keyword has no clear semantic and the error model
-    // is ambiguous.
-    let output = parse(&wrap("let x = errors"));
-    assert!(
-        !output.diagnostics.is_empty(),
-        "expected at least one diagnostic for `errors` in expression position, got 0"
-    );
-}
-
-#[test]
-fn m7_errors_keyword_not_after_type_is_ignored() {
-    // WHY: `errors` only applies after a return type annotation in a function decl.
-    // `let x: string errors` is not valid syntax — the parser doesn't consume `errors`
-    // in annotation position. This test guards that `errors` doesn't silently vanish
-    // from unexpected positions, producing an error diagnostic instead.
-    let output = parse(&wrap("let x: String errors = foo"));
-    // `string errors` in let-binding type position — `errors` is unexpected there.
-    // The parser produces a diagnostic about unexpected token.
-    assert!(
-        !output.diagnostics.is_empty(),
-        "expected a diagnostic for `errors` after a let-binding type annotation"
-    );
-}
-
-#[test]
-fn m7_errors_keyword_as_standalone_expression_is_rejected() {
-    // WHY: A bare `errors` statement (as if it were a no-op expression) must be
-    // rejected. It is not an identifier and not an expression-producing keyword.
-    let output = parse(&wrap("errors"));
-    assert!(
-        !output.diagnostics.is_empty(),
-        "expected at least one diagnostic for standalone `errors` statement"
-    );
-}
-
-// ── M7 P2: M7 variant-count lock ─────────────────────────────────────────────
-
-#[test]
-fn m7_expr_variant_count_locked() {
-    // WHY: InterpolatedString(20) is the only new Expr variant M7 P1 adds.
-    // Locking at 20 prevents M7 P2/P3 from accidentally adding more without a plan.
-    //
-    // test-ratchet: M7 P1 adds InterpolatedString(20) for `` `...${...}...` `` syntax.
-    use ynz_ast::nodes::{BinOpKind, Expr::*, PostfixOpKind, StringPart};
-    let err = || Box::new(Error(span(0, 0)));
-    let all_variants: &[ynz_ast::nodes::Expr] = &[
-        Ident("x".into(), span(0, 1)),
-        StringLit(vec![], span(0, 0)),
-        Call(Box::new(ynz_ast::nodes::CallExpr {
-            callee: Ident("f".into(), span(0, 1)),
-            type_args: None,
-            args: vec![],
-            span: span(0, 3),
-        })),
-        Error(span(0, 0)),
-        IntLit(0, span(0, 1)),
-        NumberLit("0".into(), span(0, 1)),
-        BoolLit(true, span(0, 4)),
-        BinOp {
-            op: BinOpKind::Add,
-            lhs: err(),
-            rhs: err(),
-            span: span(0, 0),
-        },
-        UnaryOp {
-            op: ynz_ast::nodes::UnaryOpKind::Neg,
-            operand: err(),
-            span: span(0, 0),
-        },
-        MethodCall {
-            receiver: err(),
-            method: "m".into(),
-            method_span: span(0, 1),
-            args: vec![],
-            span: span(0, 0),
-        },
-        FieldAccess {
-            receiver: err(),
-            field: "f".into(),
-            field_span: span(0, 1),
-            span: span(0, 0),
-        },
-        StructLit {
-            fields: vec![],
-            span: span(0, 0),
-        },
-        PostfixOp {
-            receiver: err(),
-            op: PostfixOpKind::Copy,
-            span: span(0, 0),
-        },
-        SelfValue { span: span(0, 0) },
-        NoneLit { span: span(0, 0) },
-        IndexAccess {
-            receiver: err(),
-            index: err(),
-            span: span(0, 0),
-        },
-        ArrayLit {
-            elements: vec![],
-            span: span(0, 0),
-        },
-        MapLit {
-            entries: vec![],
-            span: span(0, 0),
-        },
-        Is {
-            expr: err(),
-            ty: ynz_ast::nodes::TypePath {
-                name: "Foo".into(),
-                span: span(0, 3),
-            },
-            span: span(0, 0),
-        },
-        InterpolatedString(vec![StringPart::Lit(vec![], span(0, 0))], span(0, 0)),
-    ];
-    assert_eq!(
-        all_variants.len(),
-        20,
-        "Expr variant count changed from 20 — add a // test-ratchet: comment"
-    );
-}
-
-#[test]
-fn m7_type_variant_count_locked() {
-    // WHY: ErrorCapable(15) is the only new Type variant M7 P1 adds.
-    // Locking at 15 ensures M7 P3+ variants require a documented plan.
-    //
-    // test-ratchet: M7 P1 adds ErrorCapable(15) for `-> T errors` fallible return types.
-    use ynz_ast::nodes::Type::*;
-    let all_variants: &[Type] = &[
-        Nothing,
-        Named("foo".into(), span(0, 3)),
-        Error,
-        Int,
-        Float,
-        Number { precision: 34 },
-        Bool,
-        Range {
-            element: Box::new(Int),
-            end_inclusive: false,
-        },
-        Dynamic {
-            contract: "Foo".into(),
-            span: span(0, 3),
-        },
-        SelfType { span: span(0, 4) },
-        TypeParam {
-            name: "T".into(),
-            span: span(0, 1),
-        },
-        Generic {
-            name: "Array".into(),
-            name_span: span(0, 5),
-            args: vec![Int],
-            span: span(0, 10),
-        },
-        Maybe {
-            inner: Box::new(Int),
-            span: span(0, 9),
-        },
-        Union {
-            variants: vec![Int, Float],
-            span: span(0, 10),
-        },
-        ErrorCapable {
-            inner: Box::new(Int),
-            span: span(0, 15),
-        },
-    ];
-    assert_eq!(
-        all_variants.len(),
-        15,
-        "Type variant count changed from 15 — add a // test-ratchet: comment"
-    );
-}
-
-// ── M8 P3: doc-comment attachment ────────────────────────────────────────────
-
-#[test]
-fn m8_doc_comment_attaches_to_function() {
-    // WHY: `/// comment\nfunction foo() -> nothing {}` must parse with doc = Some("comment")
-    // on the FunctionDecl. If break_after detection breaks or the parser discards the
-    // doc buffer too early, doc becomes None and ynz doc (v1.1) loses the information.
-    let output = parse("/// fetches a user.\nfunction entrypoint() -> Nothing {}");
-    assert_eq!(
-        output.diagnostics.len(),
-        0,
-        "no diagnostics expected: {:?}",
-        output.diagnostics
-    );
-    match &output.module.items[0] {
-        Item::Function(f) => {
-            assert_eq!(
-                f.doc,
-                Some("fetches a user.".to_string()),
-                "doc must be Some with the stripped content"
-            );
-        }
-        Item::ShapeDecl(_)
-        | Item::OptionsDecl(_)
-        | Item::ImportDecl(_)
-        | Item::ConstDecl(_)
-        | Item::ReExport(_) => {
-            panic!("expected Function item")
-        }
-    }
-}
-
-#[test]
-fn m8_doc_comment_multiline_joins_with_newline() {
-    // WHY: `/// line1\n/// line2\nfunction ...` must produce doc = Some("line1\nline2").
-    // If the parser only attaches the LAST doc line, multi-line docs lose content.
-    let output = parse("/// line1\n/// line2\nfunction entrypoint() -> Nothing {}");
-    assert_eq!(output.diagnostics.len(), 0);
-    match &output.module.items[0] {
-        Item::Function(f) => {
-            assert_eq!(f.doc, Some("line1\nline2".to_string()));
-        }
-        _ => panic!("expected Function item"),
-    }
-}
-
-#[test]
-fn m8_doc_comment_blank_line_breaks_attachment() {
-    // WHY: `/// orphan\n\nfunction ...` (blank line between) must produce doc = None.
-    // The break_after flag from the lexer gates this. If the parser ignores break_after,
-    // orphaned docs silently attach to the wrong item.
-    let output = parse("/// orphan\n\nfunction entrypoint() -> Nothing {}");
-    assert_eq!(output.diagnostics.len(), 0);
-    match &output.module.items[0] {
-        Item::Function(f) => {
-            assert_eq!(
-                f.doc, None,
-                "orphaned doc (blank line break) must not attach"
-            );
-        }
-        _ => panic!("expected Function item"),
-    }
-}
-
-#[test]
-fn m8_doc_comment_on_private_item_silently_preserved() {
-    // WHY: Per spec, doc comments on private (non-exported) items are silently preserved
-    // in M8 (no warning until v0.4 lint tier). The parser must not drop them.
-    let output = parse("/// private note\nfunction entrypoint() -> Nothing {}");
-    assert_eq!(
-        output.diagnostics.len(),
-        0,
-        "no diagnostics for doc on private item in M8"
-    );
-    match &output.module.items[0] {
-        Item::Function(f) => {
-            assert_eq!(f.doc, Some("private note".to_string()));
-        }
-        _ => panic!("expected Function item"),
-    }
-}
-
-#[test]
-fn m10_doc_comment_attaches_to_export_const() {
-    // WHY: `/// comment\nexport const X = 5` must attach doc = Some("comment") to the
-    //      ConstDecl. Without this, hover over exported constants shows no doc text.
-    let output = parse("/// Maximum health.\nexport const MAX_HEALTH = 100");
-    assert_eq!(
-        output.diagnostics.len(),
-        0,
-        "no diagnostics expected: {:?}",
-        output.diagnostics
-    );
-    match &output.module.items[0] {
-        Item::ConstDecl(c) => {
-            assert_eq!(
-                c.doc,
-                Some("Maximum health.".to_string()),
-                "doc must be Some with the stripped content"
-            );
-        }
-        _ => panic!("expected ConstDecl item"),
-    }
-}
-
-#[test]
-fn m10_doc_comment_blank_line_does_not_attach_to_const() {
-    // WHY: blank line between doc comment and const must prevent attachment,
-    //      matching the behavior for functions and shapes.
-    let output = parse("/// orphan\n\nexport const MAX = 10");
-    assert_eq!(output.diagnostics.len(), 0);
-    match &output.module.items[0] {
-        Item::ConstDecl(c) => {
-            assert_eq!(c.doc, None, "orphaned doc must not attach to const");
-        }
-        _ => panic!("expected ConstDecl item"),
-    }
 }

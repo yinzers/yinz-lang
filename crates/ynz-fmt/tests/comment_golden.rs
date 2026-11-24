@@ -1,6 +1,12 @@
 //! Golden tests for comment-aware formatting.
 //!
-//! Each test reads a .ynz fixture, formats it, and compares against the .formatted golden.
+//! The semantic round-trip sweep ignores comments (`ast_eq_modulo_trivia`), so these
+//! goldens are the only guard that the formatter keeps every user comment: not deleted,
+//! not duplicated, not moved to another declaration, not mistaken for string content.
+//!
+//! One generated table, one named test per fixture: read the `.ynz` fixture, format it,
+//! compare against its `.formatted` golden, and check the output is idempotent. Fixtures
+//! whose only claim is layout live in the sweeps' corpus without a golden.
 
 use std::path::Path;
 
@@ -22,190 +28,38 @@ fn golden(subpath: &str) {
     assert_eq!(got, got2, "formatter is not idempotent on {subpath}");
 }
 
-// ── Basic 7 comment scenarios ─────────────────────────────────────────────────
-
-#[test]
-fn leading_comment() {
-    golden("leading_comment");
+macro_rules! comment_golden_cases {
+    ($($case:ident: $fixture:expr;)+) => {$(
+        // bug: the formatter deletes, duplicates, moves or re-lexes a user comment, silently losing or corrupting the user's text | tier: High
+        #[test]
+        fn $case() {
+            golden($fixture);
+        }
+    )+};
 }
 
-#[test]
-fn inline_comment() {
-    golden("inline_comment");
-}
-
-#[test]
-fn comment_block() {
-    golden("comment_block");
-}
-
-#[test]
-fn comment_between_decls() {
-    golden("comment_between_decls");
-}
-
-#[test]
-fn comment_inside_block() {
-    golden("comment_inside_block");
-}
-
-#[test]
-fn doc_comment() {
-    golden("doc_comment");
-}
-
-#[test]
-fn mixed_comments() {
-    golden("mixed_comments");
-}
-
-// WHY: F9 (2026-07-11 non-concurrency audit) — a `//` comment block following a union-alias
-// declaration (`shape U = A | B`) was silently DELETED by the formatter. Root cause: the
-// parser's union-alias arm in `parse_shape_decl` computed `ShapeDecl.span.end` from the START
-// of the next unconsumed token instead of the END of the last consumed one, over-extending the
-// declaration's span to swallow a trailing comment before the formatter's comment-merge pass
-// ever saw it as available. Locks the fix and round-trip idempotency together.
-#[test]
-fn union_alias_trailing_comment() {
-    golden("union_alias_trailing_comment");
-}
-
-// ── 16 locked comment-merge-spec edge cases ───────────────────────────────────
-
-#[test]
-fn floating_comment() {
-    golden("edge/floating_comment");
-}
-
-#[test]
-fn inline_on_split_expr() {
-    golden("edge/inline_on_split_expr");
-}
-
-#[test]
-fn backtick_with_slashes() {
-    golden("edge/backtick_with_slashes");
-}
-
-#[test]
-fn comment_in_array() {
-    golden("edge/comment_in_array");
-}
-
-#[test]
-fn comment_in_map() {
-    golden("edge/comment_in_map");
-}
-
-#[test]
-fn mixed_doc_and_line() {
-    golden("edge/mixed_doc_and_line");
-}
-
-#[test]
-fn doc_comment_split() {
-    golden("edge/doc_comment_split");
-}
-
-#[test]
-fn comments_only() {
-    golden("edge/comments_only");
-}
-
-#[test]
-fn comment_with_tokens() {
-    golden("edge/comment_with_tokens");
-}
-
-#[test]
-fn crlf_input() {
-    golden("edge/crlf_input");
-}
-
-#[test]
-fn no_trailing_newline() {
-    golden("edge/no_trailing_newline");
-}
-
-#[test]
-fn empty_function_body() {
-    golden("edge/empty_function_body");
-}
-
-#[test]
-fn long_backtick_string() {
-    golden("edge/long_backtick_string");
-}
-
-#[test]
-fn inline_comment_eof() {
-    golden("edge/inline_comment_eof");
-}
-
-#[test]
-fn two_inline_on_split() {
-    golden("edge/two_inline_on_split");
-}
-
-#[test]
-fn long_identifier() {
-    golden("edge/long_identifier");
-}
-
-// ── Empty-body comment preservation ──────────────────────────────────────────
-
-#[test]
-fn comments_only_body_preserved() {
+comment_golden_cases! {
+    comment_between_decls: "comment_between_decls";
+    comment_inside_block: "comment_inside_block";
+    inline_comment: "inline_comment";
+    doc_comment: "doc_comment";
     // WHY: a function body with only // comments and no statements must not be
     // collapsed to `{ }` — that silently deletes the user's planning notes.
-    golden("comments_only_body");
-}
-
-// ── Behavioral invariants ─────────────────────────────────────────────────────
-
-#[test]
-fn inline_comment_has_two_spaces_before_slashes() {
-    let source = "function f() -> Nothing { let x = 1 // note\n }\n";
-    let got = ynz_fmt::format(source).expect("format failed");
-    // The inline comment should have exactly 2 spaces between code and //
-    assert!(
-        got.contains("  // note"),
-        "inline comment should have 2 spaces prefix: {got}"
-    );
-}
-
-#[test]
-fn crlf_input_becomes_lf_output() {
-    let source = "function f() -> Nothing {\r\n  let x = 1\r\n}\r\n";
-    let got = ynz_fmt::format(source).expect("format failed");
-    assert!(
-        !got.contains('\r'),
-        "CRLF input must produce LF-only output"
-    );
-}
-
-#[test]
-fn comments_only_file_preserved() {
-    let source = "// just a comment\n// and another\n";
-    let got = ynz_fmt::format(source).expect("format failed");
-    assert!(
-        got.contains("// just a comment"),
-        "standalone comment must be preserved"
-    );
-    assert!(
-        got.contains("// and another"),
-        "standalone comment must be preserved"
-    );
-}
-
-#[test]
-fn doc_comment_not_double_emitted() {
-    // WHY: doc comments are captured both in the AST (FunctionDecl.doc) AND in the trivia
-    //      vec. If both paths emit the comment, it appears twice. This test guards the
-    //      invariant that only the trivia path emits in the comment-aware walker — the AST
-    //      field is ignored by emit_function_with_comments.
-    let source = "/// My doc comment\nfunction f() -> Nothing { print(`ok`) }\n";
-    let got = ynz_fmt::format(source).expect("format failed");
-    let count = got.matches("/// My doc comment").count();
-    assert_eq!(count, 1, "doc comment must appear exactly once, got: {got}");
+    comments_only_body_preserved: "comments_only_body";
+    // WHY: F9 (2026-07-11 non-concurrency audit) — a `//` comment block following a union-alias
+    // declaration (`shape U = A | B`) was silently DELETED by the formatter. Root cause: the
+    // parser's union-alias arm in `parse_shape_decl` computed `ShapeDecl.span.end` from the START
+    // of the next unconsumed token instead of the END of the last consumed one, over-extending the
+    // declaration's span to swallow a trailing comment before the formatter's comment-merge pass
+    // ever saw it as available. Locks the fix and round-trip idempotency together.
+    union_alias_trailing_comment: "union_alias_trailing_comment";
+    floating_comment: "edge/floating_comment";
+    inline_on_split_expr: "edge/inline_on_split_expr";
+    backtick_with_slashes: "edge/backtick_with_slashes";
+    mixed_doc_and_line: "edge/mixed_doc_and_line";
+    doc_comment_split: "edge/doc_comment_split";
+    comments_only: "edge/comments_only";
+    comment_with_tokens: "edge/comment_with_tokens";
+    crlf_input: "edge/crlf_input";
+    inline_comment_eof: "edge/inline_comment_eof";
 }

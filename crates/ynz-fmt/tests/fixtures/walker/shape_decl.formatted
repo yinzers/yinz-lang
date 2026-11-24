@@ -1,5 +1,0 @@
-shape Player {
-  name: String
-  health: Int
-  active: Boolean
-}

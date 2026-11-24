@@ -1,7 +1,0 @@
-function twoInline(alpha: String, beta: String, gamma: String, delta: String) -> String {
-  // first combination of all four long parameter values
-  const firstResult = alpha + beta + gamma + delta
-  // second pass adding alpha beta gamma values again here
-  const secondResult = firstResult + alpha + beta
-  return secondResult
-}

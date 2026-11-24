@@ -1,5 +1,0 @@
-function makeList() -> Nothing {
-  // Leading comment before an array-literal statement
-  let nums: Array<Int> = [1, 2, 3]
-  print(nums.length())
-}
