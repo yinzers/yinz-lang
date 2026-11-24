@@ -1456,7 +1456,9 @@ function fib(n: Int) -> Int {
 
     /// The functions `cpu_promotion_query` promotes, with the kill switch off.
     fn promoted_functions(source: &str) -> std::collections::HashSet<String> {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::remove_var("YNZ_NO_AUTO_PARALLEL");
         let mut db = CompilerDb::default();
         let source_file = source_file(&mut db, "test.ynz", source);
@@ -1639,7 +1641,9 @@ function tick() -> Int {
     // bug: cpu_promotion_query ignores the `--no-auto-parallel` kill switch (YNZ_NO_AUTO_PARALLEL), so the user's off switch does not turn promotion off | tier: Medium
     #[test]
     fn the_no_auto_parallel_switch_declines_every_promotion() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let source = [
             FIB,
             "function entrypoint() -> Nothing {\n    let a = fib(20)\n    let b = fib(21)\n    print(a)\n    print(b)\n}\n",
@@ -1672,7 +1676,9 @@ function tick() -> Int {
     // bug: an importer's call to an imported loop/recursion callee is not worth-it, because the callee's `does_real_work` flag does not ride the export table (cross-module propagation) | tier: Medium
     #[test]
     fn an_imported_real_work_callee_promotes_its_importer() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let dir = std::env::temp_dir().join(format!(
             "ynz_m3d_promo_{}",
             std::time::SystemTime::now()
@@ -1710,7 +1716,11 @@ function entrypoint() -> Nothing {
         std::fs::write(&main_path, main_source).expect("write main");
 
         let mut db = CompilerDb::default();
-        source_file(&mut db, &dependency_path.display().to_string(), dependency_source);
+        source_file(
+            &mut db,
+            &dependency_path.display().to_string(),
+            dependency_source,
+        );
         let main_file = source_file(&mut db, &main_path.display().to_string(), main_source);
 
         std::env::remove_var("YNZ_NO_AUTO_PARALLEL");
