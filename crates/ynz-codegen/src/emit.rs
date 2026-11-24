@@ -33490,6 +33490,7 @@ fn release_glue_free_kind<'ctx>(
 mod copy_parity_tests {
     use super::{release_step, ReleaseStep};
     use ynz_typeck::owned_copy::{owned_copy_plan, HeapCell, OwnedCopy};
+    use ynz_typeck::release_plan::ReleaseKind;
     use ynz_typeck::type_variant_sampler::all_type_variants;
     use ynz_typeck::types::Type;
 
@@ -33645,116 +33646,140 @@ mod copy_parity_tests {
         class: HeapClass::Heap(ReleaseKind::Channel)
     );
 
-    /// Bug: the release plan names a kind of binding to release and the helper has nothing for it
-    /// (a silent skip at C7), or a new kind is added to the plan with no answer here (High).
-    /// The match over `ReleaseKind` has no `_` arm, so a new kind fails to compile until this
-    /// test says what releases it.
-    // Survives as a private-function test (`release_step`) kept as one list: the exhaustive `match` with no `_` arm is what forces a decision for every new ReleaseKind, which per-kind tests would lose.
-    // bug: the release plan names a kind of binding to release and the helper has nothing for it (a silent skip at C7) | tier: High
-    #[test]
-    fn every_kind_the_release_plan_names_has_a_release() {
-        use ynz_typeck::release_plan::ReleaseKind;
-        let kinds = [
-            ReleaseKind::String,
-            ReleaseKind::Array,
-            ReleaseKind::Map,
-            ReleaseKind::Channel,
-            ReleaseKind::TaskHandle,
-            ReleaseKind::Shape,
-            ReleaseKind::NestedShape,
-            ReleaseKind::Maybe,
-            ReleaseKind::Union,
-            ReleaseKind::Dynamic,
-            ReleaseKind::Fixed,
-            ReleaseKind::MapEntry,
-            ReleaseKind::ErrorsCapable,
-            ReleaseKind::TypeParameter,
-        ];
-        for kind in kinds {
-            let (representative, expected): (Type, fn(&ReleaseStep) -> bool) = match kind {
-                ReleaseKind::String => (Type::String, |step| *step == ReleaseStep::String),
-                ReleaseKind::Array => (
-                    Type::BuiltinArray {
-                        elem: Box::new(Type::String),
-                    },
-                    |step| matches!(step, ReleaseStep::Array { .. }),
-                ),
-                ReleaseKind::Map => (
-                    Type::BuiltinMap {
-                        key: Box::new(Type::String),
-                        val: Box::new(Type::String),
-                    },
-                    |step| matches!(step, ReleaseStep::Map { .. }),
-                ),
-                ReleaseKind::Channel => (
-                    Type::BuiltinChannel {
-                        elem: Box::new(Type::Int),
-                    },
-                    |step| *step == ReleaseStep::Channel,
-                ),
-                ReleaseKind::TaskHandle => (
-                    Type::BackgroundHandle {
-                        result: Box::new(Type::Int),
-                        msg_elem: None,
-                    },
-                    |step| *step == ReleaseStep::Handle,
-                ),
-                ReleaseKind::Shape | ReleaseKind::NestedShape => (
-                    Type::Shape {
-                        name: "Player".to_string(),
-                    },
-                    |step| matches!(step, ReleaseStep::Shape { .. }),
-                ),
-                ReleaseKind::Maybe => (
-                    Type::Maybe {
-                        inner: Box::new(Type::String),
-                    },
-                    |step| matches!(step, ReleaseStep::Maybe { .. }),
-                ),
-                ReleaseKind::Union => (
-                    Type::Union {
-                        variants: vec![Type::Int, Type::String],
-                    },
-                    |step| matches!(step, ReleaseStep::Union { .. }),
-                ),
-                // Dynamic dispatch is not lowered, so no such value exists: loud, not a skip.
-                ReleaseKind::Dynamic => (
-                    Type::Dynamic {
-                        contract: "Damageable".to_string(),
-                    },
-                    |step| matches!(step, ReleaseStep::Unsupported(_)),
-                ),
-                ReleaseKind::Fixed => (
-                    Type::BuiltinFixed {
-                        elem: Box::new(Type::String),
-                        size: ynz_typeck::FixedLength::Known(2),
-                    },
-                    |step| matches!(step, ReleaseStep::Fixed { .. }),
-                ),
-                // A loop cell is never an owner.
-                ReleaseKind::MapEntry => (
-                    Type::MapEntry {
-                        key: Box::new(Type::String),
-                        val: Box::new(Type::String),
-                    },
-                    |step| *step == ReleaseStep::Nothing,
-                ),
-                ReleaseKind::ErrorsCapable => (
-                    Type::ErrorsCapable {
-                        inner: Box::new(Type::String),
-                    },
-                    |step| matches!(step, ReleaseStep::ErrorsCapable { .. }),
-                ),
-                // A type parameter releases by what its instance is: `T` = `string` here.
-                ReleaseKind::TypeParameter => (Type::String, |step| *step == ReleaseStep::String),
-            };
-            let step = release_step(&representative);
-            assert!(
-                expected(&step),
-                "{kind:?}: a `{representative:?}` releases as {step:?}"
-            );
+    /// The representative type of a `ReleaseKind` and what its release must be. The `match` has no
+    /// `_` arm, so a new kind fails to compile until this says what releases it.
+    fn release_expectation(kind: ReleaseKind) -> (Type, fn(&ReleaseStep) -> bool) {
+        match kind {
+            ReleaseKind::String => (Type::String, |step| *step == ReleaseStep::String),
+            ReleaseKind::Array => (
+                Type::BuiltinArray {
+                    elem: Box::new(Type::String),
+                },
+                |step| matches!(step, ReleaseStep::Array { .. }),
+            ),
+            ReleaseKind::Map => (
+                Type::BuiltinMap {
+                    key: Box::new(Type::String),
+                    val: Box::new(Type::String),
+                },
+                |step| matches!(step, ReleaseStep::Map { .. }),
+            ),
+            ReleaseKind::Channel => (
+                Type::BuiltinChannel {
+                    elem: Box::new(Type::Int),
+                },
+                |step| *step == ReleaseStep::Channel,
+            ),
+            ReleaseKind::TaskHandle => (
+                Type::BackgroundHandle {
+                    result: Box::new(Type::Int),
+                    msg_elem: None,
+                },
+                |step| *step == ReleaseStep::Handle,
+            ),
+            ReleaseKind::Shape | ReleaseKind::NestedShape => (
+                Type::Shape {
+                    name: "Player".to_string(),
+                },
+                |step| matches!(step, ReleaseStep::Shape { .. }),
+            ),
+            ReleaseKind::Maybe => (
+                Type::Maybe {
+                    inner: Box::new(Type::String),
+                },
+                |step| matches!(step, ReleaseStep::Maybe { .. }),
+            ),
+            ReleaseKind::Union => (
+                Type::Union {
+                    variants: vec![Type::Int, Type::String],
+                },
+                |step| matches!(step, ReleaseStep::Union { .. }),
+            ),
+            // Dynamic dispatch is not lowered, so no such value exists: loud, not a skip.
+            ReleaseKind::Dynamic => (
+                Type::Dynamic {
+                    contract: "Damageable".to_string(),
+                },
+                |step| matches!(step, ReleaseStep::Unsupported(_)),
+            ),
+            ReleaseKind::Fixed => (
+                Type::BuiltinFixed {
+                    elem: Box::new(Type::String),
+                    size: ynz_typeck::FixedLength::Known(2),
+                },
+                |step| matches!(step, ReleaseStep::Fixed { .. }),
+            ),
+            // A loop cell is never an owner.
+            ReleaseKind::MapEntry => (
+                Type::MapEntry {
+                    key: Box::new(Type::String),
+                    val: Box::new(Type::String),
+                },
+                |step| *step == ReleaseStep::Nothing,
+            ),
+            ReleaseKind::ErrorsCapable => (
+                Type::ErrorsCapable {
+                    inner: Box::new(Type::String),
+                },
+                |step| matches!(step, ReleaseStep::ErrorsCapable { .. }),
+            ),
+            // A type parameter releases by what its instance is: `T` = `string` here.
+            ReleaseKind::TypeParameter => (Type::String, |step| *step == ReleaseStep::String),
         }
     }
+
+    /// One named test per kind the release plan names, so the runner names the failing kind.
+    macro_rules! release_kind_case {
+        ($test_name:ident, $kind:expr) => {
+            // bug: the release plan names a kind of binding to release and the helper has nothing for it (a silent skip at C7) | tier: High
+            #[test]
+            fn $test_name() {
+                let kind: ReleaseKind = $kind;
+                let (representative, expected) = release_expectation(kind);
+                let step = release_step(&representative);
+                assert!(
+                    expected(&step),
+                    "{kind:?}: a `{representative:?}` releases as {step:?}"
+                );
+            }
+        };
+    }
+
+    // Survives as private-function tests (`release_step`): no source program reaches a release step
+    // for each kind alone, and the exhaustive `match` in `release_expectation` forces a decision
+    // for every new `ReleaseKind`, which a program-level test would not.
+    release_kind_case!(a_string_binding_releases_as_a_string, ReleaseKind::String);
+    release_kind_case!(an_array_binding_releases_as_an_array, ReleaseKind::Array);
+    release_kind_case!(a_map_binding_releases_as_a_map, ReleaseKind::Map);
+    release_kind_case!(
+        a_channel_binding_releases_as_a_channel,
+        ReleaseKind::Channel
+    );
+    release_kind_case!(
+        a_task_handle_binding_releases_as_a_handle,
+        ReleaseKind::TaskHandle
+    );
+    release_kind_case!(a_shape_binding_releases_as_a_shape, ReleaseKind::Shape);
+    release_kind_case!(
+        a_nested_shape_binding_releases_as_a_shape,
+        ReleaseKind::NestedShape
+    );
+    release_kind_case!(a_maybe_binding_releases_as_a_maybe, ReleaseKind::Maybe);
+    release_kind_case!(a_union_binding_releases_as_a_union, ReleaseKind::Union);
+    release_kind_case!(a_dynamic_binding_is_refused_loudly, ReleaseKind::Dynamic);
+    release_kind_case!(
+        a_fixed_binding_releases_as_a_fixed_array,
+        ReleaseKind::Fixed
+    );
+    release_kind_case!(a_map_entry_cell_is_never_an_owner, ReleaseKind::MapEntry);
+    release_kind_case!(
+        an_errors_capable_binding_releases_as_errors_capable,
+        ReleaseKind::ErrorsCapable
+    );
+    release_kind_case!(
+        a_type_parameter_binding_releases_as_its_instance,
+        ReleaseKind::TypeParameter
+    );
 
     // bug: `copy_is_independent` (typeck provenance: is `x.copy()` Fresh?) gets a body of its own again and drifts from the copy table, so a `.copy()` provenance admits or refuses a transfer the machine code does not honor | tier: High
     #[test]
@@ -33925,32 +33950,42 @@ mod copy_parity_tests {
 mod errors_field_parity_tests {
     use ynz_typeck::errors_fields::{ec_field_lowering, EcField, EcFieldLowering};
 
-    const ALL_EC_FIELDS: &[EcField] = &[
-        EcField::Message,
-        EcField::Suggestions,
-        EcField::Trace,
-        EcField::Source,
-    ];
-
-    // Protected parity: the typeck classification table against what codegen's `ErrorsCapable`
-    // field-access arm implements; the compiler cannot bind them. The old
-    // `message_is_the_only_field_lowered_today` (mirror of the typeck table) and
-    // `from_field_name_round_trips_every_variant` (trivial mapping) are deleted.
-    // bug: a field is reclassified `Lowered` in typeck without codegen for it, so a user reaches the defensive "classified Lowered but has no codegen arm" runtime error | tier: High
-    #[test]
-    fn every_ec_field_lowered_has_a_codegen_arm() {
-        for field in ALL_EC_FIELDS {
-            if ec_field_lowering(*field) == EcFieldLowering::Lowered {
-                assert_eq!(
-                    *field,
-                    EcField::Message,
-                    "{field:?}: classified Lowered, but `lower_field_access`'s ErrorsCapable \
-                     arm only has real codegen for EcField::Message — write the codegen before \
-                     reclassifying"
-                );
+    /// One named test per `EcField`, so the runner names the failing field. A field typeck still
+    /// classifies as not lowered passes: only a `Lowered` field needs real codegen.
+    macro_rules! ec_field_case {
+        ($test_name:ident, $field:expr) => {
+            // Protected parity: the typeck classification table against what codegen's `ErrorsCapable`
+            // field-access arm implements; the compiler cannot bind them.
+            // bug: a field is reclassified `Lowered` in typeck without codegen for it, so a user reaches the defensive "classified Lowered but has no codegen arm" runtime error | tier: High
+            #[test]
+            fn $test_name() {
+                let field: EcField = $field;
+                if ec_field_lowering(field) == EcFieldLowering::Lowered {
+                    assert_eq!(
+                        field,
+                        EcField::Message,
+                        "{field:?}: classified Lowered, but `lower_field_access`'s ErrorsCapable \
+                         arm only has real codegen for EcField::Message — write the codegen before \
+                         reclassifying"
+                    );
+                }
             }
-        }
+        };
     }
+
+    ec_field_case!(
+        the_message_field_has_a_codegen_arm_if_lowered,
+        EcField::Message
+    );
+    ec_field_case!(
+        the_suggestions_field_has_a_codegen_arm_if_lowered,
+        EcField::Suggestions
+    );
+    ec_field_case!(the_trace_field_has_a_codegen_arm_if_lowered, EcField::Trace);
+    ec_field_case!(
+        the_source_field_has_a_codegen_arm_if_lowered,
+        EcField::Source
+    );
 }
 
 /// Emit a type-attached constant such as `int.max` or `number.epsilon`.
