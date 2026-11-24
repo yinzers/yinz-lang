@@ -8536,7 +8536,7 @@ macro_rules! channel_handle_run_table_high_case {
 }
 
 channel_handle_run_table_high_case! {
-    // case: `channel<T>()` construction miscompiles or crashes (wrong output, leak, or not byte-identical across modes)
+    // case: `channel<T>()` construction miscompiles or crashes (wrong output)
     // WHY: proves `channel<T>()` (default capacity 64) and `channel<T>(N)` construction compiles and
     // runs end-to-end through the real compiler — the typeck → codegen (`ynz_channel_create`) chain.
     // If channel construction ever regresses to a codegen crash / miscompile (the all-or-nothing
