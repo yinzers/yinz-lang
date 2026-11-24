@@ -48,7 +48,7 @@ fn cli_error_count(ynz_binary: &std::path::Path, path: &std::path::Path) -> usiz
 
 // bug: the language server reports a different error count than `ynz build --json` for an error-gallery example | tier: Medium
 #[test]
-fn nightly_lsp_vs_cli_divergence() {
+fn regression_lsp_vs_cli_divergence() {
     let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|crates_dir| crates_dir.parent())
