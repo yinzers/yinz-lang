@@ -2433,20 +2433,19 @@ mod tests {
     );
 }
 
-
 #[cfg(test)]
 mod value_like_parity {
     use super::value_like;
     use crate::owned_copy::{owned_copy_plan, OwnedCopy};
     use crate::types::Type;
 
-    // bug: value_like and owned_copy_plan answer one question ("storing it hands nothing over") two ways and drift apart (the `range` store refusal was exactly that), so a program the copy table calls bits is refused or double-freed on store | tier: High
-    // Survives as a private-function parity (`value_like` is pub(crate)): the two tables are compared per `Type` value, which no program text reaches uniformly (rubric 4 parity keep).
     /// `value_like` is "storing it hands nothing over", the question `owned_copy_plan`
     /// answers with "the receiver's bits ARE the copy" (`ReceiverIsCopy`) or immutable contents
     /// with nothing to free (`FrameLocalImmutable`). Two answers to one question drift (the
     /// `range` store refusal was exactly that drift), so every type the copy table calls bits
     /// must be bits here too.
+    // Survives as a private-function parity (`value_like` is pub(crate)): the two tables are compared per `Type` value, which no program text reaches uniformly (rubric 4 parity keep).
+    // bug: value_like and owned_copy_plan answer one question ("storing it hands nothing over") two ways and drift apart (the `range` store refusal was exactly that), so a program the copy table calls bits is refused or double-freed on store | tier: High
     #[test]
     fn every_type_the_copy_table_calls_bits_is_value_like() {
         let string = Type::String;
@@ -2484,9 +2483,9 @@ mod value_like_parity {
         }
     }
 
-    // bug: a heap-owning type is called value-like, so storing it skips the hand-over and two owners free it | tier: High
-    // Survives with the parity above: same private `value_like`, other direction; no public query returns its verdict alone.
     /// The other direction: a type that owns heap storage is handed over when stored.
+    // Survives with the parity above: same private `value_like`, other direction; no public query returns its verdict alone.
+    // bug: a heap-owning type is called value-like, so storing it skips the hand-over and two owners free it | tier: High
     #[test]
     fn a_heap_type_is_not_value_like() {
         let array_of_ints = Type::BuiltinArray {
