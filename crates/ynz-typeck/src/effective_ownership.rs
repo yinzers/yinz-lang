@@ -2269,438 +2269,170 @@ mod tests {
         ynz_parser::parse_query(&db, sf).module.clone()
     }
 
-    fn eo(src: &str, fn_name: &str, index: usize) -> EffectiveOwnership {
-        let module = parse_module(src);
-        analyze_for_test(&module).ownership_of(fn_name, index)
+    /// One named test per case so the runner names the failing case. `expect` lists
+    /// `(function, parameter index, ownership)`; the source always ends with an empty `entrypoint`.
+    macro_rules! ownership_case {
+        ($test_name:ident, source: $source:expr, expect: [$(($function:expr, $index:expr, $expected:expr)),+ $(,)?]) => {
+            // bug: the effective-ownership fixpoint calls a parameter that is written (directly, through a callee, a `self`, or a collection mutator) `Reads`, so the independence pass parallelizes aliased writes (a data race), or over-escalates a read and loses the parallelism | tier: High
+            #[test]
+            fn $test_name() {
+                let module = parse_module(concat!($source, "\nfunction entrypoint() -> Nothing { }\n"));
+                let report = analyze_for_test(&module);
+                $(assert_eq!(report.ownership_of($function, $index), $expected, "{} parameter {}", $function, $index);)+
+            }
+        };
     }
 
-    #[test]
-    fn direct_field_write_is_writes() {
-        // WHY: a bare parameter whose body directly assigns a field IS a write — the
-        // compiler infers `lend` for it. This is the base case the fixpoint builds on.
-        let src = r#"
-shape Box { v: Int }
-function mutate(b: Box) -> Nothing { b.v = 5 }
-function entrypoint() -> Nothing { }
-"#;
-        assert_eq!(eo(src, "mutate", 0), EffectiveOwnership::Writes);
+    // Case bug: a body that assigns a field of its parameter is not Writes (the base the fixpoint builds on).
+    ownership_case!(
+        a_direct_field_write_is_writes,
+        source: "shape Box { v: Int }\nfunction mutate(b: Box) -> Nothing { b.v = 5 }",
+        expect: [("mutate", 0, EffectiveOwnership::Writes)]
+    );
+    // Case bug: a parameter that is only read becomes Writes (loses bare-read parallelism).
+    ownership_case!(
+        a_parameter_only_read_stays_reads,
+        source: "shape Box { v: Int }\nfunction look(b: Box) -> Int { return b.v }",
+        expect: [("look", 0, EffectiveOwnership::Reads)]
+    );
+    // Case bug: a parameter that is only passed to an intrinsic (`print`) is taken for a write.
+    ownership_case!(
+        a_parameter_passed_to_an_intrinsic_stays_reads,
+        source: "shape Box { v: Int }\nfunction show(b: Box) -> Nothing { print(`${b.v.toString()}`) }",
+        expect: [("show", 0, EffectiveOwnership::Reads)]
+    );
+    // Case bug: only the declared modifier is read, so a bare parameter flowing into a bare mutating callee stays Reads.
+    ownership_case!(
+        a_write_through_a_bare_callee_reaches_the_caller,
+        source: "shape Box { v: Int }\nfunction helper(b: Box) -> Nothing { b.v = 999 }\nfunction fa(x: Box) -> Nothing { helper(x) }",
+        expect: [("helper", 0, EffectiveOwnership::Writes), ("fa", 0, EffectiveOwnership::Writes)]
+    );
+    // Case bug: the fixpoint stops after one hop.
+    ownership_case!(
+        a_write_reaches_a_caller_two_hops_up,
+        source: "shape Box { v: Int }\nfunction inner(b: Box) -> Nothing { b.v = 1 }\nfunction mid(b: Box) -> Nothing { inner(b) }\nfunction outer(b: Box) -> Nothing { mid(b) }",
+        expect: [("mid", 0, EffectiveOwnership::Writes), ("outer", 0, EffectiveOwnership::Writes)]
+    );
+    // Case bug: a declared `lend` parameter is not seeded as a write.
+    ownership_case!(
+        a_declared_lend_parameter_is_writes,
+        source: "shape Box { v: Int }\nfunction bump(lend b: Box) -> Nothing { b.v = b.v + 1 }",
+        expect: [("bump", 0, EffectiveOwnership::Writes)]
+    );
+    // Case bug: passing a bare parameter to a `give` position is not a write (also seeds `give`).
+    ownership_case!(
+        passing_a_parameter_to_a_give_position_is_writes,
+        source: "shape Box { v: Int }\nfunction consume(give b: Box) -> Nothing { }\nfunction passOn(b: Box) -> Nothing { consume(b) }",
+        expect: [("consume", 0, EffectiveOwnership::Writes), ("passOn", 0, EffectiveOwnership::Writes)]
+    );
+    // Case bug: a receiver of method-call syntax (`b.bump()` is `bump(b)`) is not traced into `lend self`.
+    ownership_case!(
+        a_method_receiver_flowing_into_lend_self_is_writes,
+        source: "shape Box { v: Int }\nfunction bump(lend self: Box) -> Nothing { self.v = self.v + 1 }\nfunction caller(b: Box) -> Nothing { b.bump() }",
+        expect: [("caller", 0, EffectiveOwnership::Writes)]
+    );
+    // Case bug: the method path over-escalates a receiver that flows into `share self`.
+    ownership_case!(
+        a_method_receiver_flowing_into_share_self_stays_reads,
+        source: "shape Box { v: Int }\nfunction look(share self: Box) -> Int { return self.v }\nfunction caller(b: Box) -> Int { return b.look() }",
+        expect: [("caller", 0, EffectiveOwnership::Reads)]
+    );
+    // Case bug: a self-recursive writer never settles or settles on Reads.
+    ownership_case!(
+        a_self_recursive_writer_settles_on_writes,
+        source: "shape Box { v: Int }\nfunction recur(b: Box, n: Int) -> Nothing {\n  if (n) {\n    b.v = n\n    recur(b, 0)\n  }\n}",
+        expect: [("recur", 0, EffectiveOwnership::Writes)]
+    );
+    // Case bug: a mutual cycle in which one member writes leaves the other Reads.
+    ownership_case!(
+        a_mutually_recursive_writer_makes_both_writes,
+        source: "shape Box { v: Int }\nfunction ping(b: Box) -> Nothing { pong(b) }\nfunction pong(b: Box) -> Nothing { b.v = 7 ping(b) }",
+        expect: [("pong", 0, EffectiveOwnership::Writes), ("ping", 0, EffectiveOwnership::Writes)]
+    );
+    // Case bug: one verdict per function instead of per position.
+    ownership_case!(
+        each_parameter_position_is_classified_on_its_own,
+        source: "shape Box { v: Int }\nfunction mixed(reader: Box, writer: Box) -> Nothing {\n  let x: Int = reader.v\n  writer.v = x\n}",
+        expect: [("mixed", 0, EffectiveOwnership::Reads), ("mixed", 1, EffectiveOwnership::Writes)]
+    );
+    // Case bug: `self` (parsed as `SelfValue`, not an identifier) is skipped when it flows into a mutating callee.
+    ownership_case!(
+        self_flowing_into_a_mutating_callee_is_writes,
+        source: "shape Box { v: Int }\nfunction helper(b: Box) -> Nothing { b.v = 999 }\nfunction wrapper(self: Box) -> Nothing { helper(self) }",
+        expect: [("wrapper", 0, EffectiveOwnership::Writes)]
+    );
+    // Case bug: a direct field write through `self` is not rooted at `self`.
+    ownership_case!(
+        a_direct_field_write_through_self_is_writes,
+        source: "shape Box { v: Int }\nfunction bump(self: Box) -> Nothing { self.v = 1 }",
+        expect: [("bump", 0, EffectiveOwnership::Writes)]
+    );
+    // Case bug (silent miscompile): a built-in in-place mutator (`add`, `set`) is read as a read of its receiver, so two aliased calls auto-parallelize into concurrent in-place writes.
+    ownership_case!(
+        a_mutating_collection_method_on_a_parameter_is_writes,
+        source: "function grow(xs: Array<Int>) -> Nothing { xs.add(7) }\nfunction put(xs: Array<Int>) -> Nothing { xs.set(0, 9) }",
+        expect: [("grow", 0, EffectiveOwnership::Writes), ("put", 0, EffectiveOwnership::Writes)]
+    );
+    // Case bug: the mutator carve-out over-escalates the read methods `get` and `count`.
+    ownership_case!(
+        a_reading_collection_method_on_a_parameter_stays_reads,
+        source: "function peek(xs: Array<Int>) -> Maybe<Int> { return xs.get(0) }\nfunction size(xs: Array<Int>) -> Int { return xs.count() }",
+        expect: [("peek", 0, EffectiveOwnership::Reads), ("size", 0, EffectiveOwnership::Reads)]
+    );
+    // Case bug: a user function named like a mutator (`set`) gets the name-based Writes verdict instead of its real ownership, rejecting a legal read.
+    ownership_case!(
+        a_user_method_named_like_a_mutator_keeps_its_real_ownership,
+        source: "shape MyShape { v: Int }\nfunction set(share self: MyShape) -> Int { return self.v }\nfunction caller(s: MyShape) -> Int { return s.set() }",
+        expect: [("set", 0, EffectiveOwnership::Reads), ("caller", 0, EffectiveOwnership::Reads)]
+    );
+
+    /// Cross-module cases: `imported` names the imported functions (no body to analyze) and
+    /// `declared_write_positions` the ones whose declared modifier is a write.
+    macro_rules! imported_ownership_case {
+        ($test_name:ident, source: $source:expr, imported: [$($imported:expr),*], declared_write_positions: [$($declared:expr),*], expected: $expected:expr) => {
+            // bug: a parameter flowing into an imported function is classified wrongly at the module boundary: Reads for an unprovable sink (silent aliasing race), Unknown over a definite write, or Writes for a mere unknown | tier: High
+            #[test]
+            fn $test_name() {
+                let module = parse_module(concat!($source, "\nfunction entrypoint() -> Nothing { }\n"));
+                let imported: HashSet<String> = [$($imported),*].iter().map(|name: &&str| name.to_string()).collect();
+                #[allow(unused_mut)]
+                let mut declared = declared_write_positions(&module);
+                $(declared.insert($declared.to_string(), [0].into_iter().collect());)*
+                let shapes = crate::shapes::ShapeTable::default();
+                let report = analyze(&module, &declared, &imported, &|ast_type| {
+                    shapes.resolve_ast_type(ast_type)
+                });
+                assert_eq!(report.ownership_of("fa", 0), $expected);
+            }
+        };
     }
 
-    #[test]
-    fn only_read_is_reads() {
-        // WHY: a parameter that is only read (field access, passed to print) must stay
-        // Reads — this is what lets the independence side parallelize bare-read calls.
-        let src = r#"
-shape Box { v: Int }
-function look(b: Box) -> Int { return b.v }
-function entrypoint() -> Nothing { }
-"#;
-        assert_eq!(eo(src, "look", 0), EffectiveOwnership::Reads);
-    }
-
-    #[test]
-    fn transitive_through_bare_callee_is_writes() {
-        // WHY (the headline soundness case): `fa(x)` passes `x` to `helper`, a bare-param
-        // callee that mutates → helper's effective ownership is Writes → fa's `x` is Writes
-        // transitively. This is the residual hole the fixpoint closes. The DECLARED modifier
-        // of helper's param is None (bare) — only the effective fixpoint catches this.
-        let src = r#"
-shape Box { v: Int }
-function helper(b: Box) -> Nothing { b.v = 999 }
-function fa(x: Box) -> Nothing { helper(x) }
-function entrypoint() -> Nothing { }
-"#;
-        assert_eq!(eo(src, "helper", 0), EffectiveOwnership::Writes);
-        assert_eq!(
-            eo(src, "fa", 0),
-            EffectiveOwnership::Writes,
-            "fa's x flows into helper's mutating bare param — must be Writes transitively"
-        );
-    }
-
-    #[test]
-    fn two_hop_transitive_is_writes() {
-        // WHY: the fixpoint must propagate across MORE than one hop. `outer → mid → inner`
-        // where inner writes — every hop's param is Writes. A one-hop-only analysis would
-        // miss `outer`.
-        let src = r#"
-shape Box { v: Int }
-function inner(b: Box) -> Nothing { b.v = 1 }
-function mid(b: Box) -> Nothing { inner(b) }
-function outer(b: Box) -> Nothing { mid(b) }
-function entrypoint() -> Nothing { }
-"#;
-        assert_eq!(eo(src, "inner", 0), EffectiveOwnership::Writes);
-        assert_eq!(eo(src, "mid", 0), EffectiveOwnership::Writes);
-        assert_eq!(eo(src, "outer", 0), EffectiveOwnership::Writes);
-    }
-
-    #[test]
-    fn explicit_give_is_writes() {
-        // WHY: a parameter declared `give` is a definite write (ownership transfer). The
-        // declared-write seed must classify it Writes without needing a body escalation.
-        let src = r#"
-shape Box { v: Int }
-function consume(give b: Box) -> Nothing { }
-function entrypoint() -> Nothing { }
-"#;
-        assert_eq!(eo(src, "consume", 0), EffectiveOwnership::Writes);
-    }
-
-    #[test]
-    fn explicit_lend_is_writes() {
-        // WHY: a parameter declared `lend` is a declared write — seeded Writes.
-        let src = r#"
-shape Box { v: Int }
-function bump(lend b: Box) -> Nothing { b.v = b.v + 1 }
-function entrypoint() -> Nothing { }
-"#;
-        assert_eq!(eo(src, "bump", 0), EffectiveOwnership::Writes);
-    }
-
-    #[test]
-    fn give_postfix_is_writes() {
-        // WHY: `.give` consumes the value — even on a bare param, passing it via give to a
-        // give-position consume escalates to Writes.
-        let src = r#"
-shape Box { v: Int }
-function consume(give b: Box) -> Nothing { }
-function passOn(b: Box) -> Nothing { consume(b) }
-function entrypoint() -> Nothing { }
-"#;
-        assert_eq!(
-            eo(src, "passOn", 0),
-            EffectiveOwnership::Writes,
-            "passOn gives b to a give-position consume — Writes"
-        );
-    }
-
-    #[test]
-    fn method_receiver_to_lend_is_writes() {
-        // WHY: UFCS — `b.bump()` desugars to `bump(b)` where bump declares `lend b`. The
-        // receiver flows into a write-capable self position → Writes.
-        let src = r#"
-shape Box { v: Int }
-function bump(lend self: Box) -> Nothing { self.v = self.v + 1 }
-function caller(b: Box) -> Nothing { b.bump() }
-function entrypoint() -> Nothing { }
-"#;
-        assert_eq!(
-            eo(src, "caller", 0),
-            EffectiveOwnership::Writes,
-            "caller's b flows into bump's lend self via method-call syntax — Writes"
-        );
-    }
-
-    #[test]
-    fn read_only_method_receiver_is_reads() {
-        // WHY: a method whose self is share/read leaves the receiver Reads — proves the
-        // method path does NOT over-escalate.
-        let src = r#"
-shape Box { v: Int }
-function look(share self: Box) -> Int { return self.v }
-function caller(b: Box) -> Int { return b.look() }
-function entrypoint() -> Nothing { }
-"#;
-        assert_eq!(eo(src, "caller", 0), EffectiveOwnership::Reads);
-    }
-
-    #[test]
-    fn self_recursion_converges_and_classifies_writes() {
-        // WHY: a self-recursive function that mutates its param must (a) terminate the
-        // fixpoint and (b) classify Writes. Termination is proven by the test completing;
-        // classification by the assertion.
-        let src = r#"
-shape Box { v: Int }
-function recur(b: Box, n: Int) -> Nothing {
-  if (n) {
-    b.v = n
-    recur(b, 0)
-  }
+    // Case bug: a flow into an imported position that is not a declared write is trusted as Reads.
+    imported_ownership_case!(
+        a_flow_into_an_imported_undeclared_position_is_unknown,
+        source: "shape Box { v: Int }\nfunction fa(b: Box) -> Nothing { remoteOp(b) }",
+        imported: ["remoteOp"],
+        declared_write_positions: [],
+        expected: EffectiveOwnership::Unknown
+    );
+    // Case bug: an imported declared `lend`/`give` position is not a definite write.
+    imported_ownership_case!(
+        a_flow_into_an_imported_declared_write_is_writes,
+        source: "shape Box { v: Int }\nfunction fa(b: Box) -> Nothing { remoteWrite(b) }",
+        imported: ["remoteWrite"],
+        declared_write_positions: ["remoteWrite"],
+        expected: EffectiveOwnership::Writes
+    );
+    // Case bug: the join lets Unknown override a definite local write.
+    imported_ownership_case!(
+        writes_dominates_unknown_when_a_parameter_flows_into_both,
+        source: "shape Box { v: Int }\nfunction localWrite(b: Box) -> Nothing { b.v = 1 }\nfunction fa(b: Box) -> Nothing { remoteOp(b) localWrite(b) }",
+        imported: ["remoteOp"],
+        declared_write_positions: [],
+        expected: EffectiveOwnership::Writes
+    );
 }
-function entrypoint() -> Nothing { }
-"#;
-        assert_eq!(
-            eo(src, "recur", 0),
-            EffectiveOwnership::Writes,
-            "self-recursive mutating param converges to Writes"
-        );
-    }
 
-    #[test]
-    fn mutual_recursion_converges() {
-        // WHY: mutual recursion (ping → pong → ping) where one writes must converge. Both
-        // bare params flow through each other; the writing path makes both Writes.
-        let src = r#"
-shape Box { v: Int }
-function ping(b: Box) -> Nothing { pong(b) }
-function pong(b: Box) -> Nothing { b.v = 7 ping(b) }
-function entrypoint() -> Nothing { }
-"#;
-        assert_eq!(eo(src, "pong", 0), EffectiveOwnership::Writes);
-        assert_eq!(
-            eo(src, "ping", 0),
-            EffectiveOwnership::Writes,
-            "ping flows into pong which writes — Writes transitively"
-        );
-    }
-
-    #[test]
-    fn passed_to_intrinsic_is_reads() {
-        // WHY: a parameter passed only to an intrinsic (print) is read-only. Intrinsics
-        // take args by value/share — they cannot be a hidden write. Must stay Reads so the
-        // independence side can parallelize.
-        let src = r#"
-shape Box { v: Int }
-function show(b: Box) -> Nothing { print(`${b.v.toString()}`) }
-function entrypoint() -> Nothing { }
-"#;
-        assert_eq!(eo(src, "show", 0), EffectiveOwnership::Reads);
-    }
-
-    #[test]
-    fn flow_into_imported_nondeclared_is_unknown() {
-        // WHY (cross-module conservatism): a parameter that flows into an imported function
-        // at a position that is NOT a declared lend/give cannot be proven read-only — it
-        // must be Unknown, never Reads. This is the soundness fallback for the cross-module
-        // boundary: independence sequentializes Unknown, typeck does not error.
-        let module = parse_module(
-            r#"
-shape Box { v: Int }
-function fa(b: Box) -> Nothing { remoteOp(b) }
-function entrypoint() -> Nothing { }
-"#,
-        );
-        // remoteOp is imported (in this unit only by name); it declares no write positions.
-        let imported: HashSet<String> = ["remoteOp"].iter().map(|s| s.to_string()).collect();
-        let declared = declared_write_positions(&module);
-        let shapes = crate::shapes::ShapeTable::default();
-        let report = analyze(&module, &declared, &imported, &|t| {
-            shapes.resolve_ast_type(t)
-        });
-        assert_eq!(
-            report.ownership_of("fa", 0),
-            EffectiveOwnership::Unknown,
-            "flow into an imported non-declared position must be Unknown (conservative)"
-        );
-    }
-
-    #[test]
-    fn flow_into_imported_declared_lend_is_writes() {
-        // WHY: an imported function whose declared modifier at the flowed-into position IS
-        // lend/give is a definite write even without a body — must classify Writes.
-        let module = parse_module(
-            r#"
-shape Box { v: Int }
-function fa(b: Box) -> Nothing { remoteWrite(b) }
-function entrypoint() -> Nothing { }
-"#,
-        );
-        let imported: HashSet<String> = ["remoteWrite"].iter().map(|s| s.to_string()).collect();
-        let mut declared = declared_write_positions(&module);
-        declared.insert("remoteWrite".to_string(), [0].into_iter().collect());
-        let shapes = crate::shapes::ShapeTable::default();
-        let report = analyze(&module, &declared, &imported, &|t| {
-            shapes.resolve_ast_type(t)
-        });
-        assert_eq!(
-            report.ownership_of("fa", 0),
-            EffectiveOwnership::Writes,
-            "flow into an imported declared-lend position is a definite write"
-        );
-    }
-
-    #[test]
-    fn unknown_dominated_by_writes_on_join() {
-        // WHY: a parameter that flows into BOTH an unknown (imported) sink AND a definite
-        // local write must be Writes — `Writes` dominates `Unknown` in the join. Locks the
-        // lattice ordering at the consumer level.
-        let module = parse_module(
-            r#"
-shape Box { v: Int }
-function localWrite(b: Box) -> Nothing { b.v = 1 }
-function fa(b: Box) -> Nothing { remoteOp(b) localWrite(b) }
-function entrypoint() -> Nothing { }
-"#,
-        );
-        let imported: HashSet<String> = ["remoteOp"].iter().map(|s| s.to_string()).collect();
-        let declared = declared_write_positions(&module);
-        let shapes = crate::shapes::ShapeTable::default();
-        let report = analyze(&module, &declared, &imported, &|t| {
-            shapes.resolve_ast_type(t)
-        });
-        assert_eq!(
-            report.ownership_of("fa", 0),
-            EffectiveOwnership::Writes,
-            "Writes must dominate Unknown when a param flows into both"
-        );
-    }
-
-    #[test]
-    fn second_param_independent_classification() {
-        // WHY: per-position tracking — a function with one read param and one write param
-        // must classify each independently, not collapse to a single per-function verdict.
-        let src = r#"
-shape Box { v: Int }
-function mixed(reader: Box, writer: Box) -> Nothing {
-  let x: Int = reader.v
-  writer.v = x
-}
-function entrypoint() -> Nothing { }
-"#;
-        assert_eq!(
-            eo(src, "mixed", 0),
-            EffectiveOwnership::Reads,
-            "reader param"
-        );
-        assert_eq!(
-            eo(src, "mixed", 1),
-            EffectiveOwnership::Writes,
-            "writer param"
-        );
-    }
-
-    #[test]
-    fn self_param_transitive_write_is_writes() {
-        // WHY (HOLE 1 — the `self`-blindness soundness case): the parser emits the `self`
-        // keyword as `Expr::SelfValue`, not `Expr::Ident("self")`. A `share self` method that
-        // flows `self` into a mutating callee must classify `self` as Writes — the same as the
-        // IDENTICAL named-parameter form. Before the `arg_is_binding` fix, `self` slipped past
-        // the param-match and stayed Reads, reopening the transitive share-violation hole and
-        // letting the independence side parallelize an aliased write. Reverting the SelfValue
-        // arm makes `self` classify Reads here.
-        let src = r#"
-shape Box { v: Int }
-function helper(b: Box) -> Nothing { b.v = 999 }
-function wrapper(self: Box) -> Nothing { helper(self) }
-function entrypoint() -> Nothing { }
-"#;
-        assert_eq!(
-            eo(src, "wrapper", 0),
-            EffectiveOwnership::Writes,
-            "self flows into a mutating callee — must be Writes transitively, same as the named form"
-        );
-    }
-
-    #[test]
-    fn self_param_direct_field_write_is_writes() {
-        // WHY (HOLE 1 — direct case): `self.v = n` roots in `self` (an `Expr::SelfValue`). The
-        // `root_binding_name` SelfValue arm must root a direct field write through `self` to the
-        // name "self" so the fixpoint classifies it Writes, identical to a named `b.v = n`.
-        let src = r#"
-shape Box { v: Int }
-function bump(self: Box) -> Nothing { self.v = 1 }
-function entrypoint() -> Nothing { }
-"#;
-        assert_eq!(
-            eo(src, "bump", 0),
-            EffectiveOwnership::Writes,
-            "direct field write through self must classify Writes"
-        );
-    }
-
-    #[test]
-    fn mutating_collection_method_on_param_is_writes() {
-        // WHY (HOLE 2 — the silent-miscompile case): a builtin in-place collection mutator
-        // (`array.add`, `array.set`) called on a param receiver writes that param. The fixpoint
-        // MethodCall arm must classify the receiver Writes by NAME — `classify_call_position`
-        // returns Reads for a builtin method (step 4), which is the false premise this carve-out
-        // corrects. Without it, two aliased `.set()` calls would auto-parallelize into concurrent
-        // in-place writes.
-        let add_src = r#"
-function grow(xs: Array<Int>) -> Nothing { xs.add(7) }
-function entrypoint() -> Nothing { }
-"#;
-        assert_eq!(
-            eo(add_src, "grow", 0),
-            EffectiveOwnership::Writes,
-            "xs.add(7) writes xs in place — must be Writes"
-        );
-        let set_src = r#"
-function put(xs: Array<Int>) -> Nothing { xs.set(0, 9) }
-function entrypoint() -> Nothing { }
-"#;
-        assert_eq!(
-            eo(set_src, "put", 0),
-            EffectiveOwnership::Writes,
-            "xs.set(0, 9) writes xs in place — must be Writes"
-        );
-    }
-
-    #[test]
-    fn read_collection_method_on_param_is_reads() {
-        // WHY (HOLE 2 — the read-method guard): a pure-named builtin collection method
-        // (`array.get`, `array.count`) only reads its receiver (stdlib-design.md Rule 1). The
-        // carve-out must NOT over-escalate these — they stay Reads so the independence side can
-        // parallelize a pair of read-only collection accesses.
-        let get_src = r#"
-shape Box { v: Int }
-function peek(xs: Array<Int>) -> Maybe<Int> { return xs.get(0) }
-function entrypoint() -> Nothing { }
-"#;
-        assert_eq!(
-            eo(get_src, "peek", 0),
-            EffectiveOwnership::Reads,
-            "xs.get(0) only reads xs — must stay Reads"
-        );
-        let count_src = r#"
-function size(xs: Array<Int>) -> Int { return xs.count() }
-function entrypoint() -> Nothing { }
-"#;
-        assert_eq!(
-            eo(count_src, "size", 0),
-            EffectiveOwnership::Reads,
-            "xs.count() only reads xs — must stay Reads"
-        );
-    }
-
-    #[test]
-    fn user_method_named_like_mutator_uses_real_ownership() {
-        // WHY (HOLE 2 — the false-positive guard): a USER-defined function named like a builtin
-        // mutator (`function set(share self: MyShape)`) used via UFCS must use its REAL resolved
-        // ownership, never the name-based mutating verdict. The `is_user_fn` ordering check in the
-        // MethodCall arm makes the user function win: this read-only `set` keeps `caller`'s
-        // receiver at Reads. If the name-based check fired unconditionally, this would wrongly
-        // classify Writes and reject a legal read.
-        let src = r#"
-shape MyShape { v: Int }
-function set(share self: MyShape) -> Int { return self.v }
-function caller(s: MyShape) -> Int { return s.set() }
-function entrypoint() -> Nothing { }
-"#;
-        assert_eq!(
-            eo(src, "set", 0),
-            EffectiveOwnership::Reads,
-            "the user `set` only reads self — Reads"
-        );
-        assert_eq!(
-            eo(src, "caller", 0),
-            EffectiveOwnership::Reads,
-            "caller's receiver flows into a read-only user `set` — must stay Reads, not the name-based Writes"
-        );
-    }
-
-    #[test]
-    fn dynamic_dispatch_contract_lend_is_writes() {
-        // WHY (dynamic-dispatch boundary): a contract method declared `lend self` is a
-        // write at the receiver position. The helper that maps a ReceiverKind to effective
-        // ownership must report Writes for lend, Reads for share — this is how the
-        // dynamic-dispatch path stays analyzable (the contract's DECLARED self modifier is
-        // explicit per non-oop.md).
-        assert_eq!(
-            receiver_kind_ownership(&ReceiverKind::Lend),
-            EffectiveOwnership::Writes
-        );
-        assert_eq!(
-            receiver_kind_ownership(&ReceiverKind::Give),
-            EffectiveOwnership::Writes
-        );
-        assert_eq!(
-            receiver_kind_ownership(&ReceiverKind::Share),
-            EffectiveOwnership::Reads
-        );
-    }
-}
 
 #[cfg(test)]
 mod value_like_parity {
@@ -2708,7 +2440,9 @@ mod value_like_parity {
     use crate::owned_copy::{owned_copy_plan, OwnedCopy};
     use crate::types::Type;
 
-    /// (High) `value_like` is "storing it hands nothing over", the question `owned_copy_plan`
+    // bug: value_like and owned_copy_plan answer one question ("storing it hands nothing over") two ways and drift apart (the `range` store refusal was exactly that), so a program the copy table calls bits is refused or double-freed on store | tier: High
+    // Survives as a private-function parity (`value_like` is pub(crate)): the two tables are compared per `Type` value, which no program text reaches uniformly (rubric 4 parity keep).
+    /// `value_like` is "storing it hands nothing over", the question `owned_copy_plan`
     /// answers with "the receiver's bits ARE the copy" (`ReceiverIsCopy`) or immutable contents
     /// with nothing to free (`FrameLocalImmutable`). Two answers to one question drift (the
     /// `range` store refusal was exactly that drift), so every type the copy table calls bits
@@ -2750,7 +2484,9 @@ mod value_like_parity {
         }
     }
 
-    /// (High) The other direction: a type that owns heap storage is handed over when stored.
+    // bug: a heap-owning type is called value-like, so storing it skips the hand-over and two owners free it | tier: High
+    // Survives with the parity above: same private `value_like`, other direction; no public query returns its verdict alone.
+    /// The other direction: a type that owns heap storage is handed over when stored.
     #[test]
     fn a_heap_type_is_not_value_like() {
         let array_of_ints = Type::BuiltinArray {
