@@ -238,7 +238,7 @@ mod tests {
         apply_renames(source, &rewrite.renames)
     }
 
-    // Bug it catches: renaming a method, function or variable that shares a built-in's name.
+    // bug: the codemod renames a method, function or variable that shares a built-in type's name, changing the program's meaning | tier: High
     #[test]
     fn only_type_positions_are_renamed() {
         let source = "\
@@ -266,8 +266,8 @@ function entrypoint() -> Nothing {
         assert_eq!(rewritten(source), expected);
     }
 
-    // Bug it catches: a second run changing anything (the tool must be safe to re-run when main
-    // moves under a branch).
+    // The tool must be safe to re-run when main moves under a branch.
+    // bug: a second codemod run over already-renamed source renames something again | tier: High
     #[test]
     fn a_second_run_changes_nothing() {
         let once = rewritten("shape Row {\n  label: string\n  scores: map<string, int>\n}\n");
@@ -279,7 +279,7 @@ function entrypoint() -> Nothing {
         assert!(rewrite.renames.is_empty());
     }
 
-    // Bug it catches: `int.max` renamed although `int` is a variable in the file.
+    // bug: `int.max` is renamed although `int` is a variable in the file, changing the program's meaning | tier: High
     #[test]
     fn a_constant_read_on_a_variable_named_like_a_type_is_reported_not_renamed() {
         let source = "function f(int: Int) -> Int { return int.max }\n";
@@ -288,7 +288,7 @@ function entrypoint() -> Nothing {
         assert!(rewrite.renames.is_empty());
     }
 
-    // Bug it catches: guessing at a file the parser rejects; it must stay untouched.
+    // bug: the codemod guesses at a file the parser rejects instead of reporting it and leaving it untouched | tier: Medium
     #[test]
     fn a_file_with_a_parse_error_is_rejected_unless_lenient() {
         let source = "function f( -> int { }\n";

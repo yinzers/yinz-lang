@@ -40,6 +40,7 @@ use std::time::{Duration, Instant};
 
 use ynz_runtime::runtime::{ynz_rt_init, ynz_rt_shutdown, ynz_rt_spawn_blocking};
 
+// bug: ynz_rt_spawn_blocking admits a nested blocking task from inside the runtime after shutdown began, so the task body runs while the runtime is torn down | tier: High
 #[test]
 fn admission_attempt_from_inside_the_runtime_after_shutdown_began_is_rejected() {
     static OUTER_STARTED: AtomicBool = AtomicBool::new(false);

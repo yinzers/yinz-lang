@@ -30,12 +30,11 @@ fn heap_string(left: &str, right: &str) -> *const u8 {
     unsafe { ynz_string_concat(left.as_ptr().cast(), right.as_ptr().cast()) }
 }
 
-/// Bug caught: a clone that returns its argument, so a store of a borrowed string aliases the
-/// source and releasing both frees one string twice. A static source must come back as a heap
-/// string too (a release of static bytes is an invalid free), and a heap source must survive its
-/// own release. (High)
+/// A static source must come back as a heap string too: a release of static bytes is an invalid
+/// free.
+// bug: ynz_string_clone of a literal returns its argument, so a store of a borrowed string aliases the source and the two releases free static bytes or one string twice | tier: High
 #[test]
-fn a_clone_of_a_static_or_heap_string_has_bytes_of_its_own() {
+fn a_clone_of_a_static_string_has_bytes_of_its_own() {
     let literal = LITERAL.string_pointer();
     let from_literal = unsafe { ynz_string_clone(literal) };
     assert_ne!(
@@ -43,21 +42,24 @@ fn a_clone_of_a_static_or_heap_string_has_bytes_of_its_own() {
         "a clone of a literal is a new string"
     );
     assert_eq!(text(from_literal), "hello");
+    unsafe { ynz_string_release(from_literal) };
+}
 
+/// A heap source must survive its own release.
+// bug: ynz_string_clone of a heap string returns its argument, so releasing the source frees the clone's bytes (or the two releases free one string twice) | tier: High
+#[test]
+fn a_clone_of_a_heap_string_has_bytes_of_its_own() {
     let heap = heap_string("wor", "ld");
     let from_heap = unsafe { ynz_string_clone(heap) };
     assert_ne!(from_heap, heap, "a clone of a heap string is a new string");
     unsafe { ynz_string_release(heap) };
     assert_eq!(text(from_heap), "world", "the clone outlives its source");
-
-    unsafe {
-        ynz_string_release(from_literal);
-        ynz_string_release(from_heap);
-    }
+    unsafe { ynz_string_release(from_heap) };
 }
 
-/// Bug caught: a clone that dereferences null, or turns the `none` of a `T | nothing` union into
-/// an empty string. (High)
+/// A clone that dereferences null, or turns the `none` of a `T | nothing` union into an empty
+/// string.
+// bug: ynz_string_clone of null dereferences it or returns an empty string, so the none of a `T | nothing` union becomes a string | tier: High
 #[test]
 fn a_clone_of_null_stays_null() {
     assert!(unsafe { ynz_string_clone(std::ptr::null()) }.is_null());
@@ -83,9 +85,10 @@ fn string_entries(map: *const ynz_runtime::YnzMap) -> Vec<(*const u8, *const u8)
     entries
 }
 
-/// Bug caught: `ynz_map_clone` copies the cells, so without `ynz_map_clone_strings` (or with it
-/// rewriting only `keys`, not `insert_order`) the clone's keys or values point at the source's
-/// strings: releasing both maps' strings frees each twice, and an iteration reads a freed key. (High)
+/// `ynz_map_clone` copies the cells, so without `ynz_map_clone_strings` (or with it rewriting
+/// only `keys`, not `insert_order`) the clone's keys or values point at the source's strings:
+/// releasing both maps' strings frees each twice, and an iteration reads a freed key.
+// bug: ynz_map_clone_strings leaves a cloned map<string, string> sharing the source's key or value strings, so releasing both maps frees each twice or an iteration reads a freed key | tier: High
 #[test]
 fn a_cloned_string_map_owns_every_key_and_value() {
     unsafe {
@@ -159,13 +162,11 @@ fn a_cloned_string_map_owns_every_key_and_value() {
     }
 }
 
-/// Bug caught: the flags are ignored, so a `map<string, int>` has its `int` values read as string
-/// pointers (a crash) or a `map<int, string>` has its `int` keys read as string pointers. The
-/// untouched side must keep the source's bits. (High)
+/// The flags choose the side: the untouched side must keep the source's bits.
+// bug: ynz_map_clone_strings ignores its flags, so the int values of a map<string, int> are read as string pointers (a crash) | tier: High
 #[test]
-fn only_the_string_side_of_a_map_is_copied() {
+fn only_the_string_keys_of_a_string_to_int_map_are_copied() {
     unsafe {
-        // map<string, int>: keys only.
         let counts = ynz_map_new(8);
         let key = heap_string("tal", "ly");
         let count: i64 = 7;
@@ -198,8 +199,13 @@ fn only_the_string_side_of_a_map_is_copied() {
         ynz_string_release(key);
         ynz_map_drop(counts_clone);
         ynz_map_drop(counts);
+    }
+}
 
-        // map<int, string>: values only.
+// bug: ynz_map_clone_strings ignores its flags, so the int keys of a map<int, string> are read as string pointers (a crash) | tier: High
+#[test]
+fn only_the_string_values_of_an_int_to_string_map_are_copied() {
+    unsafe {
         let names = ynz_map_new(8);
         let value = heap_string("nam", "e");
         ynz_map_set(names, 42, &value as *const *const u8 as *const u8, None, 0);

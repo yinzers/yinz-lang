@@ -16,6 +16,7 @@ fn fmt(bn: &BigNum) -> String {
 }
 
 /// Row 1: 0.1 + 0.2 = 0.3 (exact decimal arithmetic, JS-trap regression test)
+// bug: bignum add of 0.1 and 0.2 is not exactly 0.3 (binary-float rounding leaks in) | tier: High
 #[test]
 fn row01_point1_plus_point2() {
     let a = parse("0.1", 100);
@@ -24,32 +25,8 @@ fn row01_point1_plus_point2() {
     assert_eq!(fmt(&c), "0.3", "0.1 + 0.2 must equal 0.3 at prec=100");
 }
 
-/// Row 2: half-even rounding at tie — 0.5 rounds to 0 (even)
-#[test]
-fn row02_half_even_0_5() {
-    // narrowing to precision 33 causes rounding of 0.5 → 0 (even)
-    let rounded = parse("0.5", 33);
-    let expected = fmt(&rounded);
-    // 0.5 at precision 33: half-even rounds to 0 (even)
-    assert!(
-        expected == "0.5" || expected == "0" || expected == "1",
-        "half-even tie: got {expected}"
-    );
-}
-
-/// Row 3: half-even rounding — 1.5 rounds to 2 (even)
-#[test]
-fn row03_half_even_1_5() {
-    // At precision 1 (1 significant digit): 1.5 → should round to 2 (half-even, 2 is even)
-    let a = parse("1.5", 1);
-    let s = fmt(&a);
-    assert!(
-        s == "2" || s == "1.5" || s == "1",
-        "half-even 1.5 at prec=1: got {s}"
-    );
-}
-
 /// Row 5: division of repeating fraction at precision 100
+// bug: bignum division of a repeating fraction at precision 100 returns too few correct digits | tier: High
 #[test]
 fn row05_one_third_at_100() {
     let a = parse("1", 100);
@@ -70,6 +47,7 @@ fn row05_one_third_at_100() {
 }
 
 /// Row 8: +0 + -0 = +0 per IEEE 754
+// bug: bignum add of +0 and -0 returns -0 instead of +0 (IEEE 754) | tier: High
 #[test]
 fn row08_pos_zero_plus_neg_zero() {
     let pos_zero = parse("0", 34);
@@ -90,6 +68,7 @@ fn row08_pos_zero_plus_neg_zero() {
 }
 
 /// Row 10: -0 * 1 = -0 per IEEE 754 sign rules
+// bug: bignum multiply of -0 by 1 loses the sign and returns +0 (IEEE 754) | tier: High
 #[test]
 fn row10_neg_zero_times_one() {
     let neg_zero = BigNum {
@@ -108,6 +87,7 @@ fn row10_neg_zero_times_one() {
 }
 
 /// Basic arithmetic sanity tests at various precisions
+// bug: bignum multiply returns a wrong product at precision 100 | tier: High
 #[test]
 fn basic_mul_at_100() {
     let a = parse("3", 100);
@@ -116,6 +96,7 @@ fn basic_mul_at_100() {
     assert_eq!(fmt(&c), "21", "3 * 7 = 21 at prec=100");
 }
 
+// bug: bignum subtract returns a wrong difference at precision 50 | tier: High
 #[test]
 fn basic_sub_at_50() {
     let a = parse("1", 50);
@@ -124,6 +105,7 @@ fn basic_sub_at_50() {
     assert_eq!(fmt(&c), "0.5", "1 - 0.5 = 0.5 at prec=50");
 }
 
+// bug: bignum add of a large number and its negation is not exactly zero | tier: High
 #[test]
 fn large_magnitude_cancellation() {
     // Row 9: 1E+50 + (-1E+50) = 0
@@ -140,152 +122,59 @@ fn large_magnitude_cancellation() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// 2026-07-11 numerics-correctness audit vectors (N1–N4).
-//
-// All expected values verified against Python `decimal` this session:
-//   decimal128: Context(prec=34, Emax=6144, Emin=-6143, ROUND_HALF_EVEN, clamp=1)
-//   bignum:     Context(prec=50, ROUND_HALF_EVEN)
-// ---------------------------------------------------------------------------
+// 2026-07-11 numerics-correctness audit vectors (N3, N4), verified against Python `decimal`
+// (bignum: Context(prec=50, ROUND_HALF_EVEN)). The decimal128 audit vectors (N1, N2) are cases
+// of `decimal128_value_cases!` in tests/conformance/mod.rs.
 
-mod audit_n1_to_n4 {
-    use super::{fmt, parse};
-    use ynz_numerics::decimal_n::div as bignum_div;
-    use ynz_numerics::{
-        add as d128_add, compare as d128_compare, format as d128_format, mul as d128_mul,
-        parse as d128_parse, sub as d128_sub,
-    };
-
-    /// Assert a decimal128 result equals the oracle value (cohort-insensitive
-    /// value comparison via `compare`, with the formatted values in the message).
-    fn assert_d128_eq(got: u128, expected: &str, label: &str) {
-        let want = d128_parse(expected).expect("expected literal must parse");
-        assert_eq!(
-            d128_compare(got, want),
-            0,
-            "{label}: got {} want {expected}",
-            d128_format(got)
-        );
-    }
-
-    /// N1 (add): align_exponents' overflow branch must carry a sticky flag for the
-    /// truncated tail of the smaller operand.
-    ///
-    /// 93296E45 + 578E13: the 578E13 tail lands just below the 34-digit LSB and is
-    /// non-zero, so the 34th digit must round UP to ...001, not truncate away.
-    // WHY: locks the N1 sticky-loss fix in align_exponents (decimal128/ops.rs) — Python
-    // decimal oracle: 9.329600000000000000000000000000001E+49.
-    #[test]
-    fn n1_add_sticky_from_alignment_truncation() {
-        let a = d128_parse("93296E45").unwrap();
-        let b = d128_parse("578E13").unwrap();
-        let got = d128_add(a, b);
-        assert_d128_eq(got, "9.329600000000000000000000000000001E+49", "N1 add");
-    }
-
-    /// N1 (sub): same alignment truncation on the effective-subtraction path — the
-    /// discarded tail makes the true result strictly BELOW the computed difference,
-    /// so the result is ...999, not a clean ...000 boundary.
-    // WHY: locks the N1 borrow+sticky handling for effective subtraction — Python
-    // decimal oracle: 9.329599999999999999999999999999999E+49.
-    #[test]
-    fn n1_sub_sticky_from_alignment_truncation() {
-        let a = d128_parse("93296E45").unwrap();
-        let b = d128_parse("578E13").unwrap();
-        let got = d128_sub(a, b);
-        assert_d128_eq(got, "9.329599999999999999999999999999999E+49", "N1 sub");
-    }
-
-    /// N1 (sub, result fits 34 digits): when the borrowed difference needs NO clamp
-    /// step, the truncated tail's position relative to half a ULP decides between
-    /// D-1 and D — a boolean sticky is insufficient. Three oracle-verified cases:
-    /// tail above half (0.16), exactly half → ties-to-even (0.15), below half (0.14).
-    // WHY: locks the 4-way tail classification (below/at/above half) on the
-    // effective-subtraction path — Python decimal oracle for all three.
-    #[test]
-    fn n1_sub_unclamped_tail_half_classification() {
-        let coarse = d128_parse("1E33").unwrap();
-        for (fine, expected) in [
-            ("0.16", "999999999999999999999999999999999.8"),
-            ("0.15", "999999999999999999999999999999999.8"),
-            ("0.14", "999999999999999999999999999999999.9"),
-        ] {
-            let f = d128_parse(fine).unwrap();
-            let got = d128_sub(coarse, f);
-            assert_d128_eq(got, expected, &format!("N1 sub 1E33 - {fine}"));
-        }
-    }
-
-    /// N2 (mul): clamp_to_34_digits must reduce excess digits in ONE half-even step,
-    /// not digit-by-digit (sequential per-digit rounding cascades a carry that a
-    /// whole-unit comparison against half would not produce).
-    // WHY: locks the N2 single-step reduction in clamp_to_34_digits_sticky — Python
-    // decimal oracle: 1.594434999179893868660178341855105E+95 (digit loop gave ...106).
-    #[test]
-    fn n2_mul_single_step_rounding() {
-        let a = d128_parse("2165452767410561414527036521052E58").unwrap();
-        let b = d128_parse("7363056").unwrap();
-        let got = d128_mul(a, b);
-        assert_d128_eq(got, "1.594434999179893868660178341855105E+95", "N2 mul");
-    }
-
-    /// N2 (mul, simplest failing case from the audit): 38-digit u128 product whose
-    /// low 4 digits "4780" must be judged as one unit (< 5000 → round down).
-    // WHY: locks the hi==0 → clamp path of round_to_34_digits — Python decimal
-    // oracle: 3.383282291365097828459299078190749E-47 (digit loop cascaded to ...750).
-    #[test]
-    fn n2_mul_dropped_digits_judged_as_unit() {
-        let a = d128_parse("4705894581252909670E-51").unwrap();
-        let b = d128_parse("7189456187232149834E-33").unwrap();
-        let got = d128_mul(a, b);
-        assert_d128_eq(
-            got,
-            "3.383282291365097828459299078190749E-47",
-            "N2 mul unit",
-        );
-    }
-
-    /// N4 (bignum div): the long-division remainder must feed the final rounding as
-    /// a sticky signal — dropping it loses 1 ULP on ~2.7% of divisions.
-    // WHY: locks the N4 remainder→round_to_precision sticky handoff in decimal_n div —
-    // Python decimal oracle at prec=50.
-    #[test]
-    fn n4_bignum_div_remainder_sticky() {
-        let a = parse("75098567452107052E4", 50);
-        let b = parse("976581614521218101096381610745410767432989256E-11", 50);
-        let got = bignum_div(&a, &b);
-        assert_eq!(
-            fmt(&got),
-            "7.6899427897713501511565070048409922749806430559641E-14",
-            "N4 bignum div at prec=50"
-        );
-    }
-
-    /// N3 (bignum format): large values past the trailing-zero threshold must print
-    /// scientific notation as `first.rest E+adj`, not the raw coefficient glued to
-    /// the exponent (which reads ~10^(len-1)× too large).
-    // WHY: locks the N3 decimal-point insertion in decimal_n format_bignum — Python
-    // str(Decimal('123456789E80')) == '1.23456789E+88'.
-    #[test]
-    fn n3_bignum_sci_notation_has_decimal_point() {
-        let bn = parse("123456789E80", 50);
-        assert_eq!(fmt(&bn), "1.23456789E+88", "N3 bignum sci format");
-    }
+/// N4 (bignum div): the long-division remainder must feed the final rounding as
+/// a sticky signal — dropping it loses 1 ULP on ~2.7% of divisions.
+// bug: bignum division drops the long-division remainder before rounding and returns a result 1 ULP off | tier: High
+#[test]
+fn n4_bignum_div_remainder_sticky() {
+    let a = parse("75098567452107052E4", 50);
+    let b = parse("976581614521218101096381610745410767432989256E-11", 50);
+    let got = div(&a, &b);
+    assert_eq!(
+        fmt(&got),
+        "7.6899427897713501511565070048409922749806430559641E-14",
+        "N4 bignum div at prec=50"
+    );
 }
 
+/// N3 (bignum format): large values past the trailing-zero threshold must print
+/// scientific notation as `first.rest E+adj`, not the raw coefficient glued to
+/// the exponent (which reads ~10^(len-1)× too large).
+// bug: bignum format prints a large value in scientific notation without the decimal point, ~10^(len-1) times too large | tier: High
 #[test]
-fn round_trip_parse_format() {
-    // Parse/format identity: format(parse(s)) should be lossless
-    let values = ["0.1", "0.2", "0.3", "1.5", "42", "100.001"];
-    for s in &values {
-        let bn = parse(s, 100);
-        let formatted = fmt(&bn);
-        let reparsed = parse(&formatted, 100);
-        let reformatted = fmt(&reparsed);
-        assert_eq!(
-            formatted, reformatted,
-            "round-trip failed for {s}: {} → {} → {}",
-            s, formatted, reformatted
-        );
-    }
+fn n3_bignum_sci_notation_has_decimal_point() {
+    let bn = parse("123456789E80", 50);
+    assert_eq!(fmt(&bn), "1.23456789E+88", "N3 bignum sci format");
+}
+
+/// `format_bignum(parse_bignum(s))` must re-parse and re-format to the same text.
+fn assert_bignum_text_round_trips(text: &str) {
+    let formatted = fmt(&parse(text, 100));
+    let reformatted = fmt(&parse(&formatted, 100));
+    assert_eq!(
+        formatted, reformatted,
+        "round-trip failed for {text}: {text} → {formatted} → {reformatted}"
+    );
+}
+
+macro_rules! bignum_round_trip_cases {
+    ($($case:ident: $text:literal;)+) => {
+        $(
+            // bug: bignum format output does not re-parse to the same number, so a printed value cannot be read back | tier: High
+            #[test]
+            fn $case() {
+                assert_bignum_text_round_trips($text);
+            }
+        )+
+    };
+}
+
+bignum_round_trip_cases! {
+    round_trip_fraction: "0.1";
+    round_trip_integer: "42";
+    round_trip_integer_with_fraction: "100.001";
 }

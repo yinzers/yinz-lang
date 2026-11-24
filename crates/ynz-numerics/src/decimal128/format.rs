@@ -66,41 +66,25 @@ mod tests {
     use super::super::bits::encode_finite;
     use super::*;
 
-    #[test]
-    fn format_integer() {
-        // WHY: the smoke fixture prints an int-typed value via print();
-        // the number codec must round-trip.
-        let bits = encode_finite(false, 0, 42);
-        assert_eq!(format(bits), "42");
+    /// `format(encode_finite(sign, exponent, coefficient))` is the text the program prints.
+    macro_rules! format_finite_cases {
+        ($($case:ident: $sign:literal, $exponent:literal, $coefficient:literal => $text:literal;)+) => {
+            $(
+                // bug: decimal128 format prints a finite number with the wrong digits, sign, decimal point or exponent padding | tier: High
+                #[test]
+                fn $case() {
+                    assert_eq!(format(encode_finite($sign, $exponent, $coefficient)), $text);
+                }
+            )+
+        };
     }
 
-    #[test]
-    fn format_zero() {
-        let bits = encode_finite(false, 0, 0);
-        assert_eq!(format(bits), "0");
-    }
-
-    #[test]
-    fn format_negative() {
-        let bits = encode_finite(true, 0, 15); // -15
-        assert_eq!(format(bits), "-15");
-    }
-
-    #[test]
-    fn format_decimal() {
-        let bits = encode_finite(false, -2, 314); // 3.14
-        assert_eq!(format(bits), "3.14");
-    }
-
-    #[test]
-    fn format_small_decimal() {
-        let bits = encode_finite(false, -4, 1); // 0.0001
-        assert_eq!(format(bits), "0.0001");
-    }
-
-    #[test]
-    fn format_with_trailing_exponent_zeros() {
-        let bits = encode_finite(false, 2, 1); // 100
-        assert_eq!(format(bits), "100");
+    format_finite_cases! {
+        integer_prints_its_digits: false, 0, 42 => "42";
+        zero_prints_as_zero: false, 0, 0 => "0";
+        negative_prints_a_leading_minus: true, 0, 15 => "-15";
+        fraction_prints_a_decimal_point: false, -2, 314 => "3.14";
+        leading_fraction_zeros_are_padded: false, -4, 1 => "0.0001";
+        positive_exponent_pads_trailing_zeros: false, 2, 1 => "100";
     }
 }

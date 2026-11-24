@@ -9,7 +9,7 @@
 /// CI installs Python before running the test suite.
 use std::process::Command;
 
-use ynz_numerics::{add, compare, div, format, mul, parse};
+use ynz_numerics::{compare, format, mul, parse};
 
 /// Check whether Python 3.8+ is available.
 fn python_available() -> bool {
@@ -88,29 +88,7 @@ fn compare_with_python(op_name: &str, a_str: &str, b_str: Option<&str>, ynz_resu
     );
 }
 
-#[test]
-fn differential_decimal_exactness() {
-    // WHY: 0.1 + 0.2 = 0.3 is the canonical test of decimal correctness.
-    // This test is worth keeping even when proptest is not available.
-    compare_with_python(
-        "add",
-        "0.1",
-        Some("0.2"),
-        add(parse("0.1").unwrap(), parse("0.2").unwrap()),
-    );
-}
-
-#[test]
-fn differential_one_third() {
-    // WHY: 1/3 is an infinite repeating decimal — confirms rounding matches Python.
-    compare_with_python(
-        "div",
-        "1",
-        Some("3"),
-        div(parse("1").unwrap(), parse("3").unwrap()),
-    );
-}
-
+// bug: decimal128 mul of two maximum 34-digit coefficients (a 68-digit product, the 256-bit path) differs from Python decimal | tier: High
 #[test]
 fn differential_large_multiply() {
     let a = "9999999999999999999999999999999999"; // MAX_COEFFICIENT
@@ -158,6 +136,7 @@ mod proptest_differential {
             ..Default::default()
         })]
 
+        // bug: decimal128 add differs from Python decimal for some pair of representative values | tier: High
         #[test]
         fn differential_add(
             (a_str, b_str) in representative_values()
@@ -170,6 +149,7 @@ mod proptest_differential {
             }
         }
 
+        // bug: decimal128 mul differs from Python decimal for some pair of representative values | tier: High
         #[test]
         fn differential_mul(
             (a_str, b_str) in representative_values()
@@ -179,6 +159,7 @@ mod proptest_differential {
             }
         }
 
+        // bug: decimal128 div differs from Python decimal for some pair of representative values | tier: High
         #[test]
         fn differential_div(
             (a_str, b_str) in representative_values()

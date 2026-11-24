@@ -69,6 +69,7 @@ fn check_allocator(
     );
 }
 
+// bug: a string allocator bypasses the heap-string counter, or is counted at the wrong byte cost, so a leak assertion built on string_alloc == string_free passes vacuously | tier: Medium
 #[test]
 fn every_string_allocator_is_counted_and_balanced_by_ynz_string_release() {
     // Latched once by `ynz_rt_init`, exactly as a compiled program does (`YNZ_ALLOC_COUNTER`).
