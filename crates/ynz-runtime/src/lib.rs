@@ -4129,7 +4129,7 @@ mod m3d_join_shims {
         }
     }
 
-    // bug: ynz_rt_spawn_blocking_joinable leaks its ctx copy, or frees it twice | tier: High
+    // bug: ynz_rt_spawn_blocking_joinable leaks its ctx copy, frees it twice, or hands the child a ctx whose bytes differ from the parent's | tier: High
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     // Time: O(n) where n = number of Pending polls before the blocking task completes  Space: O(1) — single result slot.
     async fn joinable_spawn_frees_ctx_copy_exactly_once() {
@@ -4145,24 +4145,32 @@ mod m3d_join_shims {
         use crate::runtime::arm_ctx_free_probe;
         use std::sync::atomic::AtomicUsize;
 
-        // The child reads its ctx copy to prove the bytes survived the copy, then returns them.
-        extern "C-unwind" fn echo_ctx_first_word(ctx: *mut u8) -> YnzCpuResult {
+        // The child reads both words of its 16-byte ctx copy to prove every byte survived the
+        // copy, then returns them.
+        extern "C-unwind" fn echo_ctx_words(ctx: *mut u8) -> YnzCpuResult {
             assert!(!ctx.is_null(), "ctx copy must be non-null in the child");
-            // SAFETY: ynz_rt_spawn_blocking_joinable copied ctx_size (8) bytes into this buffer.
-            let word = unsafe { (ctx as *const i64).read_unaligned() };
-            YnzCpuResult([word, 0])
+            // SAFETY: ynz_rt_spawn_blocking_joinable copied ctx_size (16) bytes into this buffer.
+            let first_word = unsafe { (ctx as *const i64).read_unaligned() };
+            let second_word = unsafe { (ctx as *const i64).add(1).read_unaligned() };
+            YnzCpuResult([first_word, second_word])
         }
 
         let ctx_free_count = Arc::new(AtomicUsize::new(0));
 
-        let mut ctx_bytes: [u8; 8] = 0xABCD_i64.to_ne_bytes();
-        let ctx_ptr = ctx_bytes.as_mut_ptr();
+        let mut ctx_words: [i64; 2] = [0x1234_5678, 0xDEAD_BEEF_i64];
+        let ctx_ptr = ctx_words.as_mut_ptr() as *mut u8;
 
         // Arm the probe on THIS thread, then call the real FFI fn on THIS thread — the probe is
         // read at guard construction (caller's thread) and baked into the guard before it moves
         // into the blocking-pool closure.
         arm_ctx_free_probe(Arc::clone(&ctx_free_count));
-        let handle_ptr = unsafe { ynz_rt_spawn_blocking_joinable(echo_ctx_first_word, ctx_ptr, 8) };
+        let handle_ptr = unsafe {
+            ynz_rt_spawn_blocking_joinable(
+                echo_ctx_words,
+                ctx_ptr,
+                std::mem::size_of_val(&ctx_words) as i64,
+            )
+        };
         assert!(!handle_ptr.is_null(), "spawn must return a non-null handle");
 
         // Poll to Ready so the child closure runs to completion and its ctx FrameDropGuard drops.
@@ -4180,7 +4188,11 @@ mod m3d_join_shims {
             tokio::task::yield_now().await;
         }
 
-        assert_eq!(slot[0], 0xABCD, "child must observe the copied ctx bytes");
+        assert_eq!(
+            slot,
+            [0x1234_5678, 0xDEAD_BEEF_i64],
+            "child must observe every copied ctx byte, and both result words must reach the joiner"
+        );
         assert_eq!(
             ctx_free_count.load(Ordering::SeqCst),
             1,
