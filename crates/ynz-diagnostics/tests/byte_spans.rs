@@ -46,6 +46,7 @@ fn line_of(needle: &str) -> usize {
     SOURCE[..start].matches('\n').count() + 1
 }
 
+// bug: a multi-byte character before a span shifts the rendered caret to a later line (spans are byte offsets, the renderer read char offsets) | tier: Medium
 #[test]
 fn rendered_line_is_the_trigger_line_when_multi_byte_text_precedes_the_span() {
     let trigger = "rows.count()";
@@ -81,6 +82,7 @@ fn rendered_line_is_the_trigger_line_when_multi_byte_text_precedes_the_span() {
     );
 }
 
+// bug: a span past the end of the file is dropped together with its what-instead and why text | tier: Medium
 #[test]
 fn a_span_past_the_end_of_the_file_still_renders_its_teaching_block() {
     let len = SOURCE.len();
@@ -110,6 +112,7 @@ fn a_span_past_the_end_of_the_file_still_renders_its_teaching_block() {
     assert!(!output.contains("?:?"), "got:\n{output}");
 }
 
+// bug: a span that starts inside the file but runs past its end is dropped instead of trimmed | tier: Medium
 #[test]
 fn a_span_that_runs_past_the_end_is_trimmed_not_dropped() {
     let len = SOURCE.len();
