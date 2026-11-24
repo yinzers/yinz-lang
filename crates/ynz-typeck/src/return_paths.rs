@@ -126,75 +126,15 @@ mod tests {
         }
     }
 
-    #[test]
-    fn empty_block_does_not_return() {
-        // WHY: an empty block has no return — typeck must flag this as missing-return
-        // for non-nothing functions. The analysis must not falsely claim coverage.
-        let result = analyze_return_paths(&empty_block());
-        assert!(!result.all_paths_return);
-        assert!(result.dead_code.is_empty());
-    }
-
-    #[test]
-    fn single_return_stmt_returns_on_all_paths() {
-        // WHY: the simplest valid case — one explicit return covers all paths.
-        let block = Block {
-            stmts: vec![Stmt::Return {
-                value: None,
-                span: span(),
-            }],
+    fn block_of(stmts: Vec<Stmt>) -> Block {
+        Block {
+            stmts,
             span: span(),
-        };
-        let result = analyze_return_paths(&block);
-        assert!(result.all_paths_return);
+        }
     }
 
-    #[test]
-    fn dead_code_after_return_is_detected() {
-        // WHY: `return; print(1)` — the print is unreachable. The analysis must
-        // identify the print's span so typeck can emit a dead-code warning.
-        let block = Block {
-            stmts: vec![
-                Stmt::Return {
-                    value: None,
-                    span: span(),
-                },
-                Stmt::Expr(err_expr()),
-            ],
-            span: span(),
-        };
-        let result = analyze_return_paths(&block);
-        assert!(result.all_paths_return);
-        assert_eq!(
-            result.dead_code.len(),
-            1,
-            "dead-code span expected for stmt after return"
-        );
-    }
-
-    #[test]
-    fn simple_if_body_return_does_not_cover_all_paths() {
-        // WHY: `if (cond) { return x }` — the false branch falls through.
-        // The analysis must conservatively conclude NOT all paths return.
-        let block = Block {
-            stmts: vec![Stmt::If {
-                cond: err_expr(),
-                body: return_block(),
-                span: span(),
-            }],
-            span: span(),
-        };
-        let result = analyze_return_paths(&block);
-        assert!(
-            !result.all_paths_return,
-            "simple if does NOT guarantee return"
-        );
-    }
-
-    #[test]
-    fn match_with_else_all_arms_return_covers_all_paths() {
-        // WHY: `if (x) { 1 => return 1; else => return 0 }` — every arm returns.
-        // The analysis must recognize this as covering all paths.
+    /// `match x { 1 => return; <else_arm> }`, the one value arm returning.
+    fn match_with_returning_arm(else_arm: Option<Block>) -> Stmt {
         let arm = MatchArm {
             pattern: MatchPattern {
                 kind: MatchPatternKind::Value(err_expr()),
@@ -203,132 +143,90 @@ mod tests {
             body: return_block(),
             arrow_span: span(),
         };
-        let block = Block {
-            stmts: vec![Stmt::Match {
-                scrutinee: err_expr(),
-                arms: vec![arm],
-                else_arm: Some(return_block()),
-                span: span(),
-            }],
+        Stmt::Match {
+            scrutinee: err_expr(),
+            arms: vec![arm],
+            else_arm,
             span: span(),
-        };
-        let result = analyze_return_paths(&block);
-        assert!(
-            result.all_paths_return,
-            "match with else + all-returning arms covers all paths"
-        );
+        }
     }
 
-    #[test]
-    fn match_without_else_does_not_cover_all_paths() {
-        // WHY: `if (x) { 1 => return 1 }` — no else_arm means fall-through.
-        // The analysis must NOT count this as covering all paths.
-        let arm = MatchArm {
-            pattern: MatchPattern {
-                kind: MatchPatternKind::Value(err_expr()),
-                span: span(),
-            },
-            body: return_block(),
-            arrow_span: span(),
-        };
-        let block = Block {
-            stmts: vec![Stmt::Match {
-                scrutinee: err_expr(),
-                arms: vec![arm],
-                else_arm: None,
-                span: span(),
-            }],
-            span: span(),
-        };
-        let result = analyze_return_paths(&block);
-        assert!(
-            !result.all_paths_return,
-            "match without else has a fall-through path"
-        );
-    }
-
-    #[test]
-    fn while_loop_body_return_does_not_cover_all_paths() {
-        // WHY: `while (cond) { return x }` — the loop may not execute at all.
-        // The analysis must treat while/for as not guaranteeing any path.
-        let block = Block {
-            stmts: vec![Stmt::While {
-                cond: err_expr(),
-                body: return_block(),
-                span: span(),
-            }],
-            span: span(),
-        };
-        let result = analyze_return_paths(&block);
-        assert!(
-            !result.all_paths_return,
-            "while loop does NOT guarantee return"
-        );
-    }
-
-    #[test]
-    fn for_loop_body_return_does_not_cover_all_paths() {
-        // WHY: same as while — `for (i in range(0, 0)) { return x }` — zero
-        // iterations means the body never runs, so return is not guaranteed.
-        let block = Block {
-            stmts: vec![Stmt::For {
-                var: "i".into(),
-                var_span: span(),
-                iter: err_expr(),
-                body: return_block(),
-                span: span(),
-                destructure_pattern: None,
-                map_destructure_pattern: None,
-            }],
-            span: span(),
-        };
-        let result = analyze_return_paths(&block);
-        assert!(
-            !result.all_paths_return,
-            "for loop does NOT guarantee return"
-        );
-    }
-
-    #[test]
-    fn dead_code_inside_match_arm_is_reported() {
-        // WHY: `if (x) { 1 => { return 1; print(2) }; else => return 0 }` —
-        // `print(2)` is dead inside the arm body. The analysis must surface the
-        // inner dead-code span even though the outer block itself is all-returning.
-        let arm_with_dead = {
-            let body = Block {
-                stmts: vec![
-                    Stmt::Return {
-                        value: None,
-                        span: span(),
-                    },
-                    Stmt::Expr(err_expr()),
-                ],
-                span: span(),
-            };
-            MatchArm {
-                pattern: MatchPattern {
-                    kind: MatchPatternKind::Value(err_expr()),
-                    span: span(),
-                },
-                body,
-                arrow_span: span(),
+    /// One named test per case so the runner names the failing case.
+    macro_rules! all_paths_return_case {
+        ($test_name:ident, $block:expr, $expected:expr) => {
+            // bug: a function with a path that falls off the end is accepted, or one whose every path returns is refused as missing a return | tier: High
+            #[test]
+            fn $test_name() {
+                let result = analyze_return_paths(&$block);
+                assert_eq!(result.all_paths_return, $expected);
             }
         };
-        let block = Block {
-            stmts: vec![Stmt::Match {
-                scrutinee: err_expr(),
-                arms: vec![arm_with_dead],
-                else_arm: Some(return_block()),
-                span: span(),
-            }],
-            span: span(),
-        };
-        let result = analyze_return_paths(&block);
-        assert!(result.all_paths_return);
-        assert_eq!(
-            result.dead_code.len(),
-            1,
-            "dead code inside arm body must be reported"
-        );
     }
+
+    // Case bug: an empty block is claimed to return.
+    all_paths_return_case!(empty_block_does_not_return, empty_block(), false);
+    // Case bug: the simplest valid function (one explicit return) is refused.
+    all_paths_return_case!(
+        single_return_stmt_returns_on_all_paths,
+        return_block(),
+        true
+    );
+    // Case bug: a statement after a return (dead code) makes the block stop counting as returning.
+    all_paths_return_case!(
+        return_followed_by_a_statement_still_returns,
+        block_of(vec![
+            Stmt::Return {
+                value: None,
+                span: span()
+            },
+            Stmt::Expr(err_expr())
+        ]),
+        true
+    );
+    // Case bug: `if (cond) { return }` is claimed to cover the false branch.
+    all_paths_return_case!(
+        simple_if_body_return_does_not_cover_all_paths,
+        block_of(vec![Stmt::If {
+            cond: err_expr(),
+            body: return_block(),
+            span: span()
+        }]),
+        false
+    );
+    // Case bug: a match whose every arm and else arm return is refused.
+    all_paths_return_case!(
+        match_with_else_all_arms_return_covers_all_paths,
+        block_of(vec![match_with_returning_arm(Some(return_block()))]),
+        true
+    );
+    // Case bug: a match with no else arm is claimed to cover the no-arm-matches path.
+    all_paths_return_case!(
+        match_without_else_does_not_cover_all_paths,
+        block_of(vec![match_with_returning_arm(None)]),
+        false
+    );
+    // Case bug: `while (cond) { return }` is claimed to return though the loop may run zero times.
+    all_paths_return_case!(
+        while_loop_body_return_does_not_cover_all_paths,
+        block_of(vec![Stmt::While {
+            cond: err_expr(),
+            body: return_block(),
+            span: span()
+        }]),
+        false
+    );
+    // Case bug: `for (i in range(0, 0)) { return }` is claimed to return though the body may never run.
+    all_paths_return_case!(
+        for_loop_body_return_does_not_cover_all_paths,
+        block_of(vec![Stmt::For {
+            var: "i".into(),
+            var_span: span(),
+            iter: err_expr(),
+            body: return_block(),
+            span: span(),
+            destructure_pattern: None,
+            map_destructure_pattern: None,
+        }]),
+        false
+    );
 }

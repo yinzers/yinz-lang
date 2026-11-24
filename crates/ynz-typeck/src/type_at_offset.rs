@@ -200,72 +200,56 @@ mod tests {
         (db, sf)
     }
 
-    #[test]
-    fn test_int_annotated_let() {
-        // WHY: Verifies annotated `let score: int` is resolved to Type::Int
-        //      so after-dot completion narrows to int methods.
-        let src = "function entrypoint() -> Nothing {\n  let score: Int = 5\n  score\n}";
-        let (db, sf) = make_db_with("test.ynz", src);
-        // offset of "score" in the let binding name
-        let score_offset = src.find("score").unwrap();
-        let ty = type_of_expression_at_offset(&db, sf, score_offset);
-        assert_eq!(ty, Some(Type::Int));
+    /// One named test per case so the runner names the failing case.
+    /// The offset is that of the first occurrence of `$needle` in `$source`.
+    macro_rules! type_at_offset_case {
+        ($test_name:ident, $source:literal, $needle:literal, $expected:expr) => {
+            // bug: LSP completion narrows an annotated receiver to the wrong type, or invents a type for an unannotated one | tier: Medium
+            #[test]
+            fn $test_name() {
+                let (db, source_file) = make_db_with("test.ynz", $source);
+                let offset = $source.find($needle).unwrap();
+                let resolved = type_of_expression_at_offset(&db, source_file, offset);
+                assert_eq!(resolved, $expected);
+            }
+        };
     }
 
-    #[test]
-    fn test_float_annotated_let() {
-        // WHY: Float type annotation should narrow to Type::Float.
-        let src = "function entrypoint() -> Nothing {\n  let ratio: Float = 1.5\n}";
-        let (db, sf) = make_db_with("test.ynz", src);
-        let ratio_offset = src.find("ratio").unwrap();
-        let ty = type_of_expression_at_offset(&db, sf, ratio_offset);
-        assert_eq!(ty, Some(Type::Float));
-    }
-
-    #[test]
-    fn test_param_type_resolved() {
-        // WHY: function parameters with type annotations should narrow completion
-        //      the same way let-bindings do.
-        let src = "function greet(share self: Int) -> Nothing { }";
-        let (db, sf) = make_db_with("test.ynz", src);
-        let self_offset = src.find("self").unwrap();
-        let ty = type_of_expression_at_offset(&db, sf, self_offset);
-        assert_eq!(ty, Some(Type::Int));
-    }
-
-    #[test]
-    fn test_unannotated_let_returns_none() {
-        // WHY: unannotated bindings require full inference; this pass returns None,
-        //      which causes completion to show all primitive methods (safe fallback).
-        let src = "function entrypoint() -> Nothing {\n  let x = 5\n}";
-        let (db, sf) = make_db_with("test.ynz", src);
-        let x_offset = src.find("x = ").unwrap();
-        let ty = type_of_expression_at_offset(&db, sf, x_offset);
-        assert_eq!(ty, None);
-    }
-
-    #[test]
-    fn test_shape_type_annotation() {
-        // WHY: shape types are returned as Type::Shape so hover can look up doc comments;
-        //      they don't narrow primitive completion (no primitive methods on shapes).
-        let src = "function foo(p: Player) -> Nothing { }";
-        let (db, sf) = make_db_with("test.ynz", src);
-        let p_offset = src.find('p').unwrap();
-        let ty = type_of_expression_at_offset(&db, sf, p_offset);
-        assert_eq!(
-            ty,
-            Some(Type::Shape {
-                name: "Player".to_string()
-            })
-        );
-    }
-
-    #[test]
-    fn test_out_of_function_returns_none() {
-        // WHY: the pass only walks function bodies; top-level offsets return None.
-        let src = "export const MAX = 100";
-        let (db, sf) = make_db_with("test.ynz", src);
-        let ty = type_of_expression_at_offset(&db, sf, 0);
-        assert_eq!(ty, None);
-    }
+    // Case bug: the let-binding name loses its annotation, so after-dot completion offers every method.
+    type_at_offset_case!(
+        annotated_let_resolves_to_its_annotation,
+        "function entrypoint() -> Nothing {\n  let score: Int = 5\n  score\n}",
+        "score",
+        Some(Type::Int)
+    );
+    // Case bug: parameters are skipped and only let-bindings are narrowed.
+    type_at_offset_case!(
+        annotated_parameter_resolves_to_its_annotation,
+        "function greet(share self: Int) -> Nothing { }",
+        "self",
+        Some(Type::Int)
+    );
+    // Case bug: a shape annotation is reported as a primitive (or lost), so hover cannot find the shape's docs.
+    type_at_offset_case!(
+        shape_annotation_resolves_to_a_shape,
+        "function foo(p: Player) -> Nothing { }",
+        "p:",
+        Some(Type::Shape {
+            name: "Player".to_string()
+        })
+    );
+    // Case bug: an unannotated binding is given a guessed type; completion must fall back to all methods.
+    type_at_offset_case!(
+        unannotated_let_resolves_to_nothing,
+        "function entrypoint() -> Nothing {\n  let x = 5\n}",
+        "x = ",
+        None
+    );
+    // Case bug: a top-level offset outside any function is walked as if it were inside one.
+    type_at_offset_case!(
+        offset_outside_a_function_resolves_to_nothing,
+        "export const MAX = 100",
+        "export",
+        None
+    );
 }

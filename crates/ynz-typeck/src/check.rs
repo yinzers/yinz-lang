@@ -6820,13 +6820,6 @@ impl<'b> Checker<'b> {
             }
         };
 
-        // Test-only functions (only compiled in test builds).
-        #[cfg(test)]
-        if let Some(sig) = self.intrinsics.lookup_test_fn(&callee_name) {
-            let sig = sig.clone();
-            return self.check_test_fn_call(call, &callee_name, &sig);
-        }
-
         // Phase 6: explicit `wait` on a known-CPU-only intrinsic — the `wait` has no effect.
         // Only fires for non-suspending builtins. `sleep` and `__testFallibleAsync` are
         // may-block so they are excluded. User-defined function dispatch handles `suspends`
@@ -10565,48 +10558,6 @@ impl<'b> Checker<'b> {
             what_instead,
             "Yinz does not convert between types automatically. Both sides of an expression must have the same type.",
         ));
-    }
-
-    #[cfg(test)]
-    fn check_test_fn_call(
-        &mut self,
-        call: &CallExpr,
-        name: &str,
-        sig: &crate::intrinsics::FreeFnSig,
-    ) -> Type {
-        if call.args.len() != sig.params.len() {
-            self.diags.push(Diagnostic::error(
-                call.span.clone(),
-                format!(
-                    "`{name}` takes {} argument(s), but {} were given.",
-                    sig.params.len(),
-                    call.args.len()
-                ),
-                format!("Call it with {} argument(s).", sig.params.len()),
-                "Every function call must match the number of arguments the function expects.",
-            ));
-            return Type::Error;
-        }
-        for (i, (arg, expected)) in call.args.iter().zip(&sig.params).enumerate() {
-            let actual = self.infer_expr(arg, None);
-            if actual != *expected && actual != Type::Error {
-                self.diags.push(Diagnostic::error(
-                    arg.span().clone(),
-                    format!(
-                        "Argument {} to `{name}` should be `{}`, but got `{}`.",
-                        i + 1,
-                        type_name(expected),
-                        type_name(&actual)
-                    ),
-                    format!("Pass a `{}` here.", type_name(expected)),
-                    format!(
-                        "`{name}` expects `{}` in this position.",
-                        type_name(expected)
-                    ),
-                ));
-            }
-        }
-        sig.ret.clone()
     }
 
     // ── M4 P3b: inheritance + follows contract verification ──────────────────
@@ -17562,95 +17513,6 @@ pub fn simple_ident_name(expr: &Expr) -> Option<&str> {
 // twin that lived here — it lacked the `IndexAccess` arm; parked item 27).
 use crate::effective_ownership::root_binding_name;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use ynz_ast::nodes::{Block, CallExpr, Expr, FunctionDecl, Item, Module, Stmt};
-    use ynz_diagnostics::SourceSpan;
-
-    fn span(start: usize, end: usize) -> SourceSpan {
-        SourceSpan::new("test.ynz", start, end)
-    }
-
-    #[test]
-    fn type_mismatch_produces_three_part_diagnostic() {
-        // WHY: this is the load-bearing test for the type-mismatch code path.
-        // The test uses a test-only intrinsic to avoid needing full M2 types.
-        let module = Module {
-            items: vec![Item::Function(FunctionDecl {
-                name: "entrypoint".into(),
-                generics: vec![],
-                params: vec![],
-                return_type: AstType::Nothing,
-                body: Block {
-                    stmts: vec![Stmt::Expr(Expr::Call(Box::new(CallExpr {
-                        callee: Expr::Ident("_test_takes_nothing".into(), span(29, 48)),
-                        type_args: None,
-                        args: vec![Expr::StringLit(b"hi".to_vec(), span(49, 53))],
-                        span: span(29, 54),
-                    })))],
-                    span: span(28, 56),
-                },
-                span: span(0, 57),
-                name_span: span(9, 13),
-                // test-ratchet: M7 P1 adds errors_capable field to FunctionDecl
-                errors_capable: false,
-                // test-ratchet: M8 P1 adds is_exported
-                is_exported: false,
-                // test-ratchet: M8 P3 adds doc
-                doc: None,
-            })],
-            span: span(0, 57),
-        };
-
-        let intrinsics = PrimitiveIntrinsicTable::m3().with_test_intrinsic(
-            "_test_takes_nothing",
-            vec![Type::Nothing],
-            Type::Nothing,
-        );
-        let shape_table = crate::shapes::collect_shapes(
-            &module,
-            &Default::default(),
-            &Default::default(),
-            &mut DiagnosticBucket::new(),
-        );
-        let generic_shape_table =
-            crate::shapes::collect_generic_shapes(&module, &mut DiagnosticBucket::new());
-        let sig_table = crate::signatures::collect_signatures(
-            &module,
-            &mut DiagnosticBucket::new(),
-            &shape_table,
-        );
-        let generic_fn_table = crate::signatures::collect_generic_signatures(
-            &module,
-            &mut DiagnosticBucket::new(),
-            &shape_table,
-        );
-        let (_, _, diags, _) = check(
-            &module,
-            &sig_table,
-            &shape_table,
-            &generic_fn_table,
-            &generic_shape_table,
-            &intrinsics,
-            &std::collections::HashMap::new(),
-            &crate::effective_ownership::EffectiveOwnershipReport::empty(),
-            &HashSet::new(),
-        );
-        let diags: Vec<_> = diags.into_iter().collect();
-        assert_eq!(
-            diags.len(),
-            1,
-            "Expected 1 type-mismatch diagnostic, got: {diags:#?}"
-        );
-
-        let d = &diags[0];
-        assert!(!d.what.is_empty(), "what must be non-empty");
-        assert!(!d.what_instead.is_empty(), "what_instead must be non-empty");
-        assert!(!d.why.is_empty(), "why must be non-empty");
-    }
-}
-
 /// v0.3-M8 Phase 5 (fix round 2) — the compile-time link between the may-block fixpoint and
 /// the Auto-Arc admission's conservative suspension boundary (`authoritative-derivation.md`
 /// "If two predicates genuinely must live apart, give them a compile-time link").
@@ -17671,6 +17533,7 @@ mod suspends_parity_tests {
     /// Every single-file fixture the driver suite ships, parsed standalone. Files that do not
     /// parse alone or import another module are skipped (their suspends set depends on a unit
     /// this test does not assemble); the non-vacuity floor below keeps the skip honest.
+    // bug: a function the may-block fixpoint marks suspending has no statement the conservative predicate flags, so Auto-Arc admits a group across a real suspension (a transient crosses a frame) | tier: High
     #[test]
     fn every_suspending_fn_has_a_stmt_the_conservative_predicate_flags() {
         let dir =

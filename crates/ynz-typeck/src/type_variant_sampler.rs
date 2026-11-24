@@ -131,6 +131,7 @@ pub const TYPE_VARIANT_COUNT: usize = 23;
 mod tests {
     use super::*;
 
+    // bug: a Type variant is added without a sample, so the parity sweeps over all variants silently skip it | tier: Medium
     #[test]
     fn every_declared_variant_is_represented() {
         let samples = all_type_variants();

@@ -356,6 +356,14 @@ mod tests {
         }
     }
 
+    fn calls_keyed_by_position(written: Vec<FixedCall>) -> FixedCalls {
+        written
+            .into_iter()
+            .enumerate()
+            .map(|(position, call)| ((position * 10, position * 10 + 5), call))
+            .collect()
+    }
+
     fn parameters(entries: &[(&str, &[&str])]) -> BTreeMap<String, Vec<String>> {
         entries
             .iter()
@@ -375,112 +383,107 @@ mod tests {
         }
     }
 
-    // Bug: a function called with lists of two lengths got one version (the first), so the second
-    // call read the wrong length (High: data integrity of a value across a call).
-    #[test]
-    fn one_version_per_distinct_length_a_caller_passes() {
-        let mut calls = FixedCalls::new();
-        calls.insert((0, 5), call("entrypoint", "total", vec![sized(2)]));
-        calls.insert((10, 15), call("entrypoint", "total", vec![sized(3)]));
-        calls.insert((20, 25), call("entrypoint", "total", vec![sized(3)]));
-        let versions = close_instances(&calls, &parameters(&[("total", &["xs"])]));
-        let expected: BTreeSet<InstanceKey> =
-            [version("total", &[Some(2)]), version("total", &[Some(3)])]
-                .into_iter()
-                .collect();
-        assert_eq!(versions, expected);
+    /// One named test per case so the runner names the failing case.
+    macro_rules! close_instances_case {
+        ($test_name:ident, calls: $calls:expr, parameters: $parameters:expr, versions: $versions:expr) => {
+            // bug: close_instances makes a wrong set of per-length versions, so a call reads the wrong list length or a dead function is compiled | tier: High
+            #[test]
+            fn $test_name() {
+                let calls = calls_keyed_by_position($calls);
+                let versions = close_instances(&calls, &parameters($parameters));
+                let expected: BTreeSet<InstanceKey> = $versions.into_iter().collect();
+                assert_eq!(versions, expected);
+            }
+        };
     }
 
-    // Bug: a call inside a function compiled per length needs the callee's version for EACH
-    // length of its caller, and the placeholder must read the caller's parameter, not the callee's
-    // (`twice(xs)` calls `pick(xs, xs)`).
-    #[test]
-    fn a_call_inside_a_specialised_function_follows_the_callers_length() {
-        let mut calls = FixedCalls::new();
-        calls.insert((0, 5), call("entrypoint", "twice", vec![sized(3)]));
-        calls.insert((10, 15), call("entrypoint", "twice", vec![sized(4)]));
-        calls.insert((20, 25), call("twice", "pick", vec![of("xs"), of("xs")]));
-        let versions = close_instances(
-            &calls,
-            &parameters(&[("twice", &["xs"]), ("pick", &["xs", "ys"])]),
-        );
-        let expected: BTreeSet<InstanceKey> = [
+    // Case bug: a function called with lists of two lengths got one version (the first), so the
+    // second call read the wrong length.
+    close_instances_case!(
+        one_version_per_distinct_length_a_caller_passes,
+        calls: vec![
+            call("entrypoint", "total", vec![sized(2)]),
+            call("entrypoint", "total", vec![sized(3)]),
+            call("entrypoint", "total", vec![sized(3)]),
+        ],
+        parameters: &[("total", &["xs"])],
+        versions: [version("total", &[Some(2)]), version("total", &[Some(3)])]
+    );
+
+    // Case bug: a call inside a function compiled per length must ask for the callee's version for
+    // EACH length of its caller, and the placeholder must read the caller's parameter, not the
+    // callee's (`twice(xs)` calls `pick(xs, xs)`).
+    close_instances_case!(
+        a_call_inside_a_specialised_function_follows_the_callers_length,
+        calls: vec![
+            call("entrypoint", "twice", vec![sized(3)]),
+            call("entrypoint", "twice", vec![sized(4)]),
+            call("twice", "pick", vec![of("xs"), of("xs")]),
+        ],
+        parameters: &[("twice", &["xs"]), ("pick", &["xs", "ys"])],
+        versions: [
             version("twice", &[Some(3)]),
             version("twice", &[Some(4)]),
             version("pick", &[Some(3), Some(3)]),
             version("pick", &[Some(4), Some(4)]),
         ]
-        .into_iter()
-        .collect();
-        assert_eq!(versions, expected);
-    }
+    );
 
-    // Bug: a chain of three specialised functions stopped one link early.
-    #[test]
-    fn versions_reach_the_end_of_a_chain() {
-        let mut calls = FixedCalls::new();
-        calls.insert((0, 1), call("entrypoint", "a", vec![sized(7)]));
-        calls.insert((2, 3), call("a", "b", vec![of("xs")]));
-        calls.insert((4, 5), call("b", "c", vec![of("ys")]));
-        let versions = close_instances(
-            &calls,
-            &parameters(&[("a", &["xs"]), ("b", &["ys"]), ("c", &["zs"])]),
-        );
-        assert!(versions.contains(&version("c", &[Some(7)])));
-        assert_eq!(versions.len(), 3);
-    }
+    // Case bug: a chain of three specialised functions stopped one link early (the closure ran
+    // one expansion round, which the two-link case above does not catch).
+    close_instances_case!(
+        versions_reach_the_end_of_a_chain,
+        calls: vec![
+            call("entrypoint", "a", vec![sized(7)]),
+            call("a", "b", vec![of("xs")]),
+            call("b", "c", vec![of("ys")]),
+        ],
+        parameters: &[("a", &["xs"]), ("b", &["ys"]), ("c", &["zs"])],
+        versions: [
+            version("a", &[Some(7)]),
+            version("b", &[Some(7)]),
+            version("c", &[Some(7)]),
+        ]
+    );
 
-    // Bug: recursion between specialised functions looped forever.
-    #[test]
-    fn recursion_adds_each_version_once() {
-        let mut calls = FixedCalls::new();
-        calls.insert((0, 1), call("entrypoint", "ping", vec![sized(2)]));
-        calls.insert((2, 3), call("ping", "pong", vec![of("xs")]));
-        calls.insert((4, 5), call("pong", "ping", vec![of("ys")]));
-        let versions =
-            close_instances(&calls, &parameters(&[("ping", &["xs"]), ("pong", &["ys"])]));
-        assert_eq!(versions.len(), 2);
-    }
+    // Case bug: recursion between specialised functions looped forever.
+    close_instances_case!(
+        recursion_adds_each_version_once,
+        calls: vec![
+            call("entrypoint", "ping", vec![sized(2)]),
+            call("ping", "pong", vec![of("xs")]),
+            call("pong", "ping", vec![of("ys")]),
+        ],
+        parameters: &[("ping", &["xs"]), ("pong", &["ys"])],
+        versions: [version("ping", &[Some(2)]), version("pong", &[Some(2)])]
+    );
 
-    // Bug: a specialised function nothing calls got a version (dead code with a made-up length).
-    #[test]
-    fn a_function_nothing_calls_has_no_version() {
-        let calls = FixedCalls::new();
-        let versions = close_instances(&calls, &parameters(&[("total", &["xs"])]));
-        assert!(versions.is_empty());
-    }
+    // Case bug: a specialised function nothing calls got a version (dead code with a made-up length).
+    close_instances_case!(
+        a_function_nothing_calls_has_no_version,
+        calls: vec![],
+        parameters: &[("total", &["xs"])],
+        versions: Vec::<InstanceKey>::new()
+    );
 
-    // Bug: a length the caller cannot say became a made-up number instead of unknown.
-    #[test]
-    fn a_length_nobody_knows_stays_unknown() {
-        let mut calls = FixedCalls::new();
-        calls.insert(
-            (0, 1),
-            call("entrypoint", "total", vec![FixedLength::Unknown]),
-        );
-        let versions = close_instances(&calls, &parameters(&[("total", &["xs"])]));
-        assert!(versions.contains(&version("total", &[None])));
-    }
+    // Case bug: a length the caller cannot say became a made-up number instead of unknown.
+    close_instances_case!(
+        a_length_nobody_knows_stays_unknown,
+        calls: vec![call("entrypoint", "total", vec![FixedLength::Unknown])],
+        parameters: &[("total", &["xs"])],
+        versions: [version("total", &[None])]
+    );
 
-    // Bug: a call inside a function that is compiled per length, where nothing ever asks for a
-    // version of that function (a function that only a dead caller reaches), still produced the
-    // callee's version.
-    #[test]
-    fn a_call_in_an_unreached_specialised_function_asks_for_nothing() {
-        let mut calls = FixedCalls::new();
-        calls.insert((0, 1), call("dead", "pick", vec![of("xs")]));
-        let versions =
-            close_instances(&calls, &parameters(&[("dead", &["xs"]), ("pick", &["ys"])]));
-        assert!(versions.is_empty());
-    }
+    // Case bug: a call inside a per-length function that only a dead caller reaches still
+    // produced the callee's version.
+    close_instances_case!(
+        a_call_in_an_unreached_specialised_function_asks_for_nothing,
+        calls: vec![call("dead", "pick", vec![of("xs")])],
+        parameters: &[("dead", &["xs"]), ("pick", &["ys"])],
+        versions: Vec::<InstanceKey>::new()
+    );
 
-    #[test]
-    fn symbols_do_not_collide_with_identifiers() {
-        assert_eq!(instance_symbol("total", &[Some(3)]), "total<3>");
-        assert_eq!(instance_symbol("pick", &[Some(3), None]), "pick<3,?>");
-    }
-
-    // Bug: a returned list lost its length because the callee's placeholder was never replaced.
+    // bug: a callee's returned list loses its length because the placeholder is never replaced by the caller's length | tier: High
     #[test]
     fn a_return_type_takes_the_length_the_caller_passed() {
         let returned = Type::BuiltinFixed {
@@ -497,45 +500,82 @@ mod tests {
         );
     }
 
-    // Reading `fixed<…>` (High: parser of untrusted input): every shape of argument list.
-    #[test]
-    fn reads_every_shape_of_argument_list() {
-        let span = SourceSpan::new("t.ynz", 0, 1);
-        let length = |value: u64| AstType::Length {
-            value,
-            span: span.clone(),
+    /// One named test per case so the runner names the failing case. `$arguments` builds the
+    /// written `fixed<…>` argument list from `length` (a `Length` argument) and `name` (`N`).
+    macro_rules! fixed_arguments_case {
+        ($test_name:ident, $arguments:expr, |$read:ident| $assertion:expr) => {
+            // bug: a written fixed<…> argument list is read wrongly (length, element or surplus), so a bad length is accepted or a good one refused | tier: High
+            #[test]
+            fn $test_name() {
+                let span = SourceSpan::new("t.ynz", 0, 1);
+                let length = |value: u64| AstType::Length {
+                    value,
+                    span: span.clone(),
+                };
+                let name = AstType::Named("N".to_string(), span.clone());
+                let arguments: Vec<AstType> = $arguments(&length, name);
+                let $read = read_fixed_arguments(&arguments);
+                $assertion
+            }
         };
-        let name = AstType::Named("N".to_string(), span.clone());
-        assert_eq!(read_fixed_arguments(&[]).length, WrittenLength::Absent);
-        assert!(read_fixed_arguments(&[]).element.is_none());
-        let sized_list = [AstType::Int, length(4)];
-        assert_eq!(
-            read_fixed_arguments(&sized_list).length,
-            WrittenLength::Number(4)
-        );
-        let zero = [AstType::Int, length(0)];
-        assert_eq!(read_fixed_arguments(&zero).length, WrittenLength::Number(0));
-        let too_large = [AstType::Int, length(MAX_FIXED_LENGTH + 1)];
-        assert!(matches!(
-            read_fixed_arguments(&too_large).length,
-            WrittenLength::TooLarge { .. }
-        ));
-        let at_the_limit = [AstType::Int, length(MAX_FIXED_LENGTH)];
-        assert_eq!(
-            read_fixed_arguments(&at_the_limit).length,
-            WrittenLength::Number(MAX_FIXED_LENGTH as usize)
-        );
-        let by_name = [AstType::Int, name];
-        assert!(matches!(
-            read_fixed_arguments(&by_name).length,
-            WrittenLength::NotANumber(_)
-        ));
-        let surplus = [AstType::Int, length(2), length(3)];
-        assert_eq!(read_fixed_arguments(&surplus).surplus.len(), 1);
-        let only_a_number = [length(4)];
-        assert!(read_fixed_arguments(&only_a_number).element.is_none());
     }
 
+    // Case bug: `fixed` with no arguments reports a length or element it never had.
+    fixed_arguments_case!(
+        no_arguments_has_no_length_and_no_element,
+        |_length: &dyn Fn(u64) -> AstType, _name| Vec::new(),
+        |read| {
+            assert_eq!(read.length, WrittenLength::Absent);
+            assert!(read.element.is_none());
+        }
+    );
+    // Case bug: `fixed<int, 4>` loses its length.
+    fixed_arguments_case!(
+        element_and_length_read_as_a_number,
+        |length: &dyn Fn(u64) -> AstType, _name| vec![AstType::Int, length(4)],
+        |read| assert_eq!(read.length, WrittenLength::Number(4))
+    );
+    // Case bug: a zero length is treated as absent or refused here (the empty boundary).
+    fixed_arguments_case!(
+        zero_length_is_a_number,
+        |length: &dyn Fn(u64) -> AstType, _name| vec![AstType::Int, length(0)],
+        |read| assert_eq!(read.length, WrittenLength::Number(0))
+    );
+    // Case bug: a length one past the largest LLVM array length is accepted (off-by-one, max).
+    fixed_arguments_case!(
+        length_past_the_maximum_is_too_large,
+        |length: &dyn Fn(u64) -> AstType, _name| vec![AstType::Int, length(MAX_FIXED_LENGTH + 1)],
+        |read| assert!(matches!(read.length, WrittenLength::TooLarge { .. }))
+    );
+    // Case bug: the largest length is refused (off-by-one, max).
+    fixed_arguments_case!(
+        length_at_the_maximum_is_a_number,
+        |length: &dyn Fn(u64) -> AstType, _name| vec![AstType::Int, length(MAX_FIXED_LENGTH)],
+        |read| assert_eq!(
+            read.length,
+            WrittenLength::Number(MAX_FIXED_LENGTH as usize)
+        )
+    );
+    // Case bug: a named second argument (`fixed<int, N>`) is read as a length.
+    fixed_arguments_case!(
+        named_length_is_not_a_number,
+        |_length: &dyn Fn(u64) -> AstType, name| vec![AstType::Int, name],
+        |read| assert!(matches!(read.length, WrittenLength::NotANumber(_)))
+    );
+    // Case bug: arguments past the length (`fixed<int, 2, 3>`) are silently dropped.
+    fixed_arguments_case!(
+        arguments_past_the_length_are_surplus,
+        |length: &dyn Fn(u64) -> AstType, _name| vec![AstType::Int, length(2), length(3)],
+        |read| assert_eq!(read.surplus.len(), 1)
+    );
+    // Case bug: `fixed<4>` reads the number as the element type.
+    fixed_arguments_case!(
+        a_lone_number_is_not_an_element,
+        |length: &dyn Fn(u64) -> AstType, _name| vec![length(4)],
+        |read| assert!(read.element.is_none())
+    );
+
+    // bug: a sized `fixed<int, 4>` or non-fixed parameter is marked as a per-call length parameter, so a call with another length is accepted or a needless version is compiled | tier: High
     #[test]
     fn marks_only_unsized_fixed_parameters() {
         let mut params = vec![

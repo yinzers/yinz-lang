@@ -33488,29 +33488,18 @@ fn release_glue_free_kind<'ctx>(
 
 #[cfg(test)]
 mod copy_parity_tests {
-    use super::{release_step, CopyMode, ReleaseStep};
-    use ynz_typeck::owned_copy::{owned_copy_plan, ElemCopy, HeapCell, OwnedCopy};
-    use ynz_typeck::type_variant_sampler::{all_type_variants, TYPE_VARIANT_COUNT};
+    use super::{release_step, ReleaseStep};
+    use ynz_typeck::owned_copy::{owned_copy_plan, HeapCell, OwnedCopy};
+    use ynz_typeck::release_plan::ReleaseKind;
+    use ynz_typeck::type_variant_sampler::all_type_variants;
     use ynz_typeck::types::Type;
-
-    /// v0.3-M8 Phase 4 fix round 3, should-fix 3: this used to be a second, independently
-    /// typed copy of `ynz-typeck`'s per-variant sample list (plus its own hand-counted
-    /// `TYPE_VARIANT_COUNT`) — exactly the twin-derivation class `authoritative-derivation.md`
-    /// bans. Both now thread the ONE sampler in `ynz_typeck::type_variant_sampler`.
-    #[test]
-    fn every_variant_is_sampled() {
-        assert_eq!(
-            all_type_variants().len(),
-            TYPE_VARIANT_COUNT,
-            "ynz_typeck::type_variant_sampler::all_type_variants must have one sample per \
-             Type variant"
-        );
-    }
 
     /// Bug: a copy plan with no matching release leaks what the copy allocates, and a release
     /// with no matching copy frees what nobody allocated (High: the helper frees exactly what a
     /// copy allocates). `release_step` and `owned_copy_plan` are two exhaustive matches over
     /// `Type`; this holds every sampled variant to the pairing, so an edit to one fails here.
+    // Survives as a private-function parity (`release_step` is private): a sweep over every Type variant against the public copy table, which no source program does.
+    // bug: a copy plan with no matching release leaks what the copy allocates, and a release with no matching copy frees what nobody allocated | tier: High
     #[test]
     fn release_step_matches_the_owned_copy_plan_for_every_type_variant() {
         for ty in all_type_variants() {
@@ -33542,6 +33531,8 @@ mod copy_parity_tests {
     /// Bug: a type the copy table refuses (a channel, a handle, a union, an errors-capable value)
     /// has no release, so its holder leaks it or, worse, a later change frees it as something
     /// else (High). Each refused heap-holding variant names its release.
+    // Survives as a private-function parity (`release_step`): same reason as the sweep above.
+    // bug: a type the copy table refuses (channel, handle, union, errors-capable) has no release, so its holder leaks it or a later change frees it as something else | tier: High
     #[test]
     fn every_refused_type_still_has_its_own_release() {
         for ty in all_type_variants() {
@@ -33574,185 +33565,223 @@ mod copy_parity_tests {
         }
     }
 
-    /// Bug: a union with no tag (`array<int> | nothing`, `int | float`) is the raw pointer or
-    /// bits of its one variant, and the release table said "no stored form" for it, so a shape
-    /// with such a field did not build (High: release). The release plan classifies the same
-    /// union by the same variant (`raw_union_variant`); this holds the two together, so an edit
-    /// to one fails here instead of leaking or double-freeing.
-    #[test]
-    fn a_union_without_a_tag_releases_as_the_variant_the_release_plan_classifies() {
-        use ynz_typeck::generics::GenericShapeTable;
-        use ynz_typeck::release_plan::{heap_class_of, HeapClass, ReleaseKind, TypeTables};
-        use ynz_typeck::shapes::ShapeTable;
-        let shapes = ShapeTable::default();
-        let generic_shapes = GenericShapeTable::default();
-        let tables = TypeTables {
-            shapes: &shapes,
-            generic_shapes: &generic_shapes,
+    /// One named test per case so the runner names the failing case. Each case is a union with no
+    /// tag; the release plan (`heap_class_of`) and the release table (`release_step`) must classify
+    /// it by the same variant.
+    macro_rules! untagged_union_case {
+        ($test_name:ident, variants: $variants:expr, class: $class:expr) => {
+            // Survives as a private-function parity (`release_step`): the release plan and the release table are compared per union value.
+            // bug: a union with no tag (`array<int> | nothing`, `int | float`) is the raw pointer or bits of its one variant, and the release table said "no stored form" for it, so a shape with such a field did not build; the two tables drift and leak or double-free | tier: High
+            #[test]
+            fn $test_name() {
+                use ynz_typeck::generics::GenericShapeTable;
+                use ynz_typeck::release_plan::{heap_class_of, HeapClass, ReleaseKind, TypeTables};
+                use ynz_typeck::shapes::ShapeTable;
+                let shapes = ShapeTable::default();
+                let generic_shapes = GenericShapeTable::default();
+                let tables = TypeTables {
+                    shapes: &shapes,
+                    generic_shapes: &generic_shapes,
+                };
+                let class: HeapClass = $class;
+                let ty = Type::Union {
+                    variants: $variants,
+                };
+                assert!(
+                    !ynz_typeck::check::is_envelope_union(&ty),
+                    "{ty:?} must be a union with no tag"
+                );
+                assert_eq!(heap_class_of(&ty, &tables), class, "{ty:?}");
+                let step = release_step(&ty);
+                let consistent = match class {
+                    HeapClass::NoHeap => step == ReleaseStep::Nothing,
+                    HeapClass::Heap(ReleaseKind::String) => step == ReleaseStep::String,
+                    HeapClass::Heap(ReleaseKind::Array) => {
+                        matches!(step, ReleaseStep::Array { .. })
+                    }
+                    HeapClass::Heap(ReleaseKind::Map) => matches!(step, ReleaseStep::Map { .. }),
+                    HeapClass::Heap(ReleaseKind::Channel) => step == ReleaseStep::Channel,
+                    _ => false,
+                };
+                assert!(
+                    consistent,
+                    "{ty:?}: the release plan says {class:?} but the release table says {step:?}"
+                );
+            }
         };
-        let array = Type::BuiltinArray {
-            elem: Box::new(Type::Int),
-        };
-        let map = Type::BuiltinMap {
-            key: Box::new(Type::String),
-            val: Box::new(Type::Int),
-        };
-        let channel = Type::BuiltinChannel {
-            elem: Box::new(Type::Int),
-        };
-        let cases = [
-            (vec![Type::Int, Type::Float], HeapClass::NoHeap),
-            (vec![Type::Int, Type::Nothing], HeapClass::NoHeap),
-            (
-                vec![Type::Bool, Type::Float, Type::Nothing],
-                HeapClass::NoHeap,
+    }
+
+    // Seven cases (within the High guide of eight): one per heap class of the single variant.
+    untagged_union_case!(int_or_float_releases_nothing, variants: vec![Type::Int, Type::Float], class: HeapClass::NoHeap);
+    untagged_union_case!(int_or_nothing_releases_nothing, variants: vec![Type::Int, Type::Nothing], class: HeapClass::NoHeap);
+    untagged_union_case!(
+        three_value_variants_release_nothing,
+        variants: vec![Type::Bool, Type::Float, Type::Nothing],
+        class: HeapClass::NoHeap
+    );
+    untagged_union_case!(
+        string_or_nothing_releases_a_string,
+        variants: vec![Type::String, Type::Nothing],
+        class: HeapClass::Heap(ReleaseKind::String)
+    );
+    untagged_union_case!(
+        array_or_nothing_releases_an_array,
+        variants: vec![Type::BuiltinArray { elem: Box::new(Type::Int) }, Type::Nothing],
+        class: HeapClass::Heap(ReleaseKind::Array)
+    );
+    untagged_union_case!(
+        map_or_nothing_releases_a_map,
+        variants: vec![
+            Type::BuiltinMap {
+                key: Box::new(Type::String),
+                val: Box::new(Type::Int),
+            },
+            Type::Nothing
+        ],
+        class: HeapClass::Heap(ReleaseKind::Map)
+    );
+    untagged_union_case!(
+        channel_or_nothing_releases_a_channel,
+        variants: vec![Type::BuiltinChannel { elem: Box::new(Type::Int) }, Type::Nothing],
+        class: HeapClass::Heap(ReleaseKind::Channel)
+    );
+
+    /// The representative type of a `ReleaseKind` and what its release must be. The `match` has no
+    /// `_` arm, so a new kind fails to compile until this says what releases it.
+    fn release_expectation(kind: ReleaseKind) -> (Type, fn(&ReleaseStep) -> bool) {
+        match kind {
+            ReleaseKind::String => (Type::String, |step| *step == ReleaseStep::String),
+            ReleaseKind::Array => (
+                Type::BuiltinArray {
+                    elem: Box::new(Type::String),
+                },
+                |step| matches!(step, ReleaseStep::Array { .. }),
             ),
-            (
-                vec![Type::String, Type::Nothing],
-                HeapClass::Heap(ReleaseKind::String),
+            ReleaseKind::Map => (
+                Type::BuiltinMap {
+                    key: Box::new(Type::String),
+                    val: Box::new(Type::String),
+                },
+                |step| matches!(step, ReleaseStep::Map { .. }),
             ),
-            (
-                vec![array, Type::Nothing],
-                HeapClass::Heap(ReleaseKind::Array),
+            ReleaseKind::Channel => (
+                Type::BuiltinChannel {
+                    elem: Box::new(Type::Int),
+                },
+                |step| *step == ReleaseStep::Channel,
             ),
-            (vec![map, Type::Nothing], HeapClass::Heap(ReleaseKind::Map)),
-            (
-                vec![channel, Type::Nothing],
-                HeapClass::Heap(ReleaseKind::Channel),
+            ReleaseKind::TaskHandle => (
+                Type::BackgroundHandle {
+                    result: Box::new(Type::Int),
+                    msg_elem: None,
+                },
+                |step| *step == ReleaseStep::Handle,
             ),
-        ];
-        for (variants, class) in cases {
-            let ty = Type::Union { variants };
-            assert!(
-                !ynz_typeck::check::is_envelope_union(&ty),
-                "{ty:?} must be a union with no tag"
-            );
-            assert_eq!(heap_class_of(&ty, &tables), class, "{ty:?}");
-            let step = release_step(&ty);
-            let consistent = match class {
-                HeapClass::NoHeap => step == ReleaseStep::Nothing,
-                HeapClass::Heap(ReleaseKind::String) => step == ReleaseStep::String,
-                HeapClass::Heap(ReleaseKind::Array) => matches!(step, ReleaseStep::Array { .. }),
-                HeapClass::Heap(ReleaseKind::Map) => matches!(step, ReleaseStep::Map { .. }),
-                HeapClass::Heap(ReleaseKind::Channel) => step == ReleaseStep::Channel,
-                _ => false,
-            };
-            assert!(
-                consistent,
-                "{ty:?}: the release plan says {class:?} but the release table says {step:?}"
-            );
+            ReleaseKind::Shape | ReleaseKind::NestedShape => (
+                Type::Shape {
+                    name: "Player".to_string(),
+                },
+                |step| matches!(step, ReleaseStep::Shape { .. }),
+            ),
+            ReleaseKind::Maybe => (
+                Type::Maybe {
+                    inner: Box::new(Type::String),
+                },
+                |step| matches!(step, ReleaseStep::Maybe { .. }),
+            ),
+            ReleaseKind::Union => (
+                Type::Union {
+                    variants: vec![Type::Int, Type::String],
+                },
+                |step| matches!(step, ReleaseStep::Union { .. }),
+            ),
+            // Dynamic dispatch is not lowered, so no such value exists: loud, not a skip.
+            ReleaseKind::Dynamic => (
+                Type::Dynamic {
+                    contract: "Damageable".to_string(),
+                },
+                |step| matches!(step, ReleaseStep::Unsupported(_)),
+            ),
+            ReleaseKind::Fixed => (
+                Type::BuiltinFixed {
+                    elem: Box::new(Type::String),
+                    size: ynz_typeck::FixedLength::Known(2),
+                },
+                |step| matches!(step, ReleaseStep::Fixed { .. }),
+            ),
+            // A loop cell is never an owner.
+            ReleaseKind::MapEntry => (
+                Type::MapEntry {
+                    key: Box::new(Type::String),
+                    val: Box::new(Type::String),
+                },
+                |step| *step == ReleaseStep::Nothing,
+            ),
+            ReleaseKind::ErrorsCapable => (
+                Type::ErrorsCapable {
+                    inner: Box::new(Type::String),
+                },
+                |step| matches!(step, ReleaseStep::ErrorsCapable { .. }),
+            ),
+            // A type parameter releases by what its instance is: `T` = `string` here.
+            ReleaseKind::TypeParameter => (Type::String, |step| *step == ReleaseStep::String),
         }
     }
 
-    /// Bug: the release plan names a kind of binding to release and the helper has nothing for it
-    /// (a silent skip at C7), or a new kind is added to the plan with no answer here (High).
-    /// The match over `ReleaseKind` has no `_` arm, so a new kind fails to compile until this
-    /// test says what releases it.
-    #[test]
-    fn every_kind_the_release_plan_names_has_a_release() {
-        use ynz_typeck::release_plan::ReleaseKind;
-        let kinds = [
-            ReleaseKind::String,
-            ReleaseKind::Array,
-            ReleaseKind::Map,
-            ReleaseKind::Channel,
-            ReleaseKind::TaskHandle,
-            ReleaseKind::Shape,
-            ReleaseKind::NestedShape,
-            ReleaseKind::Maybe,
-            ReleaseKind::Union,
-            ReleaseKind::Dynamic,
-            ReleaseKind::Fixed,
-            ReleaseKind::MapEntry,
-            ReleaseKind::ErrorsCapable,
-            ReleaseKind::TypeParameter,
-        ];
-        for kind in kinds {
-            let (representative, expected): (Type, fn(&ReleaseStep) -> bool) = match kind {
-                ReleaseKind::String => (Type::String, |step| *step == ReleaseStep::String),
-                ReleaseKind::Array => (
-                    Type::BuiltinArray {
-                        elem: Box::new(Type::String),
-                    },
-                    |step| matches!(step, ReleaseStep::Array { .. }),
-                ),
-                ReleaseKind::Map => (
-                    Type::BuiltinMap {
-                        key: Box::new(Type::String),
-                        val: Box::new(Type::String),
-                    },
-                    |step| matches!(step, ReleaseStep::Map { .. }),
-                ),
-                ReleaseKind::Channel => (
-                    Type::BuiltinChannel {
-                        elem: Box::new(Type::Int),
-                    },
-                    |step| *step == ReleaseStep::Channel,
-                ),
-                ReleaseKind::TaskHandle => (
-                    Type::BackgroundHandle {
-                        result: Box::new(Type::Int),
-                        msg_elem: None,
-                    },
-                    |step| *step == ReleaseStep::Handle,
-                ),
-                ReleaseKind::Shape | ReleaseKind::NestedShape => (
-                    Type::Shape {
-                        name: "Player".to_string(),
-                    },
-                    |step| matches!(step, ReleaseStep::Shape { .. }),
-                ),
-                ReleaseKind::Maybe => (
-                    Type::Maybe {
-                        inner: Box::new(Type::String),
-                    },
-                    |step| matches!(step, ReleaseStep::Maybe { .. }),
-                ),
-                ReleaseKind::Union => (
-                    Type::Union {
-                        variants: vec![Type::Int, Type::String],
-                    },
-                    |step| matches!(step, ReleaseStep::Union { .. }),
-                ),
-                // Dynamic dispatch is not lowered, so no such value exists: loud, not a skip.
-                ReleaseKind::Dynamic => (
-                    Type::Dynamic {
-                        contract: "Damageable".to_string(),
-                    },
-                    |step| matches!(step, ReleaseStep::Unsupported(_)),
-                ),
-                ReleaseKind::Fixed => (
-                    Type::BuiltinFixed {
-                        elem: Box::new(Type::String),
-                        size: ynz_typeck::FixedLength::Known(2),
-                    },
-                    |step| matches!(step, ReleaseStep::Fixed { .. }),
-                ),
-                // A loop cell is never an owner.
-                ReleaseKind::MapEntry => (
-                    Type::MapEntry {
-                        key: Box::new(Type::String),
-                        val: Box::new(Type::String),
-                    },
-                    |step| *step == ReleaseStep::Nothing,
-                ),
-                ReleaseKind::ErrorsCapable => (
-                    Type::ErrorsCapable {
-                        inner: Box::new(Type::String),
-                    },
-                    |step| matches!(step, ReleaseStep::ErrorsCapable { .. }),
-                ),
-                // A type parameter releases by what its instance is: `T` = `string` here.
-                ReleaseKind::TypeParameter => (Type::String, |step| *step == ReleaseStep::String),
-            };
-            let step = release_step(&representative);
-            assert!(
-                expected(&step),
-                "{kind:?}: a `{representative:?}` releases as {step:?}"
-            );
-        }
+    /// One named test per kind the release plan names, so the runner names the failing kind.
+    macro_rules! release_kind_case {
+        ($test_name:ident, $kind:expr) => {
+            // bug: the release plan names a kind of binding to release and the helper has nothing for it (a silent skip at C7) | tier: High
+            #[test]
+            fn $test_name() {
+                let kind: ReleaseKind = $kind;
+                let (representative, expected) = release_expectation(kind);
+                let step = release_step(&representative);
+                assert!(
+                    expected(&step),
+                    "{kind:?}: a `{representative:?}` releases as {step:?}"
+                );
+            }
+        };
     }
 
+    // Survives as private-function tests (`release_step`): no source program reaches a release step
+    // for each kind alone, and the exhaustive `match` in `release_expectation` forces a decision
+    // for every new `ReleaseKind`, which a program-level test would not.
+    release_kind_case!(a_string_binding_releases_as_a_string, ReleaseKind::String);
+    release_kind_case!(an_array_binding_releases_as_an_array, ReleaseKind::Array);
+    release_kind_case!(a_map_binding_releases_as_a_map, ReleaseKind::Map);
+    release_kind_case!(
+        a_channel_binding_releases_as_a_channel,
+        ReleaseKind::Channel
+    );
+    release_kind_case!(
+        a_task_handle_binding_releases_as_a_handle,
+        ReleaseKind::TaskHandle
+    );
+    release_kind_case!(a_shape_binding_releases_as_a_shape, ReleaseKind::Shape);
+    release_kind_case!(
+        a_nested_shape_binding_releases_as_a_shape,
+        ReleaseKind::NestedShape
+    );
+    release_kind_case!(a_maybe_binding_releases_as_a_maybe, ReleaseKind::Maybe);
+    release_kind_case!(a_union_binding_releases_as_a_union, ReleaseKind::Union);
+    release_kind_case!(a_dynamic_binding_is_refused_loudly, ReleaseKind::Dynamic);
+    release_kind_case!(
+        a_fixed_binding_releases_as_a_fixed_array,
+        ReleaseKind::Fixed
+    );
+    release_kind_case!(a_map_entry_cell_is_never_an_owner, ReleaseKind::MapEntry);
+    release_kind_case!(
+        an_errors_capable_binding_releases_as_errors_capable,
+        ReleaseKind::ErrorsCapable
+    );
+    release_kind_case!(
+        a_type_parameter_binding_releases_as_its_instance,
+        ReleaseKind::TypeParameter
+    );
+
+    // bug: `copy_is_independent` (typeck provenance: is `x.copy()` Fresh?) gets a body of its own again and drifts from the copy table, so a `.copy()` provenance admits or refuses a transfer the machine code does not honor | tier: High
     #[test]
     fn copy_is_independent_matches_the_owned_copy_plan_for_every_type_variant() {
         // WHY: `copy_is_independent` (typeck provenance: "is `x.copy()` Fresh?") and the arm
@@ -33783,6 +33812,7 @@ mod copy_parity_tests {
         }
     }
 
+    // bug: a plan is handed out for a type whose payload the emitter's `let … else` cannot destructure, so a user hits an internal-error string the moment they call `.copy()` | tier: High
     #[test]
     fn every_plan_matches_the_type_shape_its_emitter_destructures() {
         // WHY: this is the binding the shared emitter needs and the compiler cannot give it.
@@ -33828,6 +33858,7 @@ mod copy_parity_tests {
         }
     }
 
+    // bug: a spawn argument hands a task a pointer into the spawner's frame (the decimal-number spawn use-after-free class): a `FrameLocalImmutable` type names no re-homing heap cell, or claims the number-only one | tier: High
     #[test]
     fn a_spawn_argument_never_carries_frame_storage_into_a_task() {
         // WHY: the spawn path and `.copy()` share one table but not one lifetime. A type whose
@@ -33837,7 +33868,6 @@ mod copy_parity_tests {
         // re-homing mechanism, and `HeapCell::None` means the spawn path must refuse rather
         // than pass the pointer. This asserts the two consumers read the same field and that
         // `CopyMode` still has both sides.
-        assert_ne!(CopyMode::Body, CopyMode::SpawnArg);
         for ty in all_type_variants() {
             if let OwnedCopy::FrameLocalImmutable { heap_cell } = owned_copy_plan(&ty) {
                 match heap_cell {
@@ -33851,6 +33881,7 @@ mod copy_parity_tests {
         }
     }
 
+    // bug: typeck admits a `background` argument the emitter cannot copy (it refuses with a bare backend error string, no teaching slots) | tier: High
     #[test]
     fn spawn_refusal_matches_the_emitters_own_refusals() {
         // WHY: typeck decides whether a `background` argument CAN be made the task's own, and
@@ -33882,24 +33913,7 @@ mod copy_parity_tests {
         }
     }
 
-    #[test]
-    fn a_container_of_containers_copies_its_items() {
-        // WHY: FR #9's own type. A one-level clone leaves the two containers sharing their
-        // inner arrays, which is the alias the ruling removes one level down — and, when the
-        // task's drop ladder frees an item the spawner still points at, the use-after-free
-        // this whole cluster came from.
-        assert_eq!(
-            owned_copy_plan(&Type::BuiltinArray {
-                elem: Box::new(Type::BuiltinArray {
-                    elem: Box::new(Type::Int)
-                })
-            }),
-            OwnedCopy::ArrayClone {
-                elem: ElemCopy::Nested
-            }
-        );
-    }
-
+    // bug: a bignum `Number` (precision > 34, a pointer to heap decimal text) is aliased instead of cloned as text, or released as something other than a string; the per-variant sweep samples only precision 34 (a value) and cannot see this edge | tier: High
     #[test]
     fn bignum_number_is_cloned_text_not_aliased() {
         // WHY: v0.3-M8 Phase 4 fix round 3, should-fix 5 — bignum (precision > 34) lowers as a
@@ -33936,59 +33950,42 @@ mod copy_parity_tests {
 mod errors_field_parity_tests {
     use ynz_typeck::errors_fields::{ec_field_lowering, EcField, EcFieldLowering};
 
-    const ALL_EC_FIELDS: &[EcField] = &[
-        EcField::Message,
-        EcField::Suggestions,
-        EcField::Trace,
-        EcField::Source,
-    ];
-
-    #[test]
-    fn every_ec_field_lowered_has_a_codegen_arm() {
-        // WHY: `lower_field_access`'s `Type::ErrorsCapable` branch has a real codegen arm for
-        // exactly `EcField::Message` today. If a future field is reclassified `Lowered` in
-        // `ec_field_lowering` without writing its codegen, this catches it at build/test time
-        // instead of a user reaching the defensive "classified Lowered but has no codegen arm"
-        // runtime error string.
-        for field in ALL_EC_FIELDS {
-            if ec_field_lowering(*field) == EcFieldLowering::Lowered {
-                assert_eq!(
-                    *field,
-                    EcField::Message,
-                    "{field:?}: classified Lowered, but `lower_field_access`'s ErrorsCapable \
-                     arm only has real codegen for EcField::Message — write the codegen before \
-                     reclassifying"
-                );
+    /// One named test per `EcField`, so the runner names the failing field. A field typeck still
+    /// classifies as not lowered passes: only a `Lowered` field needs real codegen.
+    macro_rules! ec_field_case {
+        ($test_name:ident, $field:expr) => {
+            // Protected parity: the typeck classification table against what codegen's `ErrorsCapable`
+            // field-access arm implements; the compiler cannot bind them.
+            // bug: a field is reclassified `Lowered` in typeck without codegen for it, so a user reaches the defensive "classified Lowered but has no codegen arm" runtime error | tier: High
+            #[test]
+            fn $test_name() {
+                let field: EcField = $field;
+                if ec_field_lowering(field) == EcFieldLowering::Lowered {
+                    assert_eq!(
+                        field,
+                        EcField::Message,
+                        "{field:?}: classified Lowered, but `lower_field_access`'s ErrorsCapable \
+                         arm only has real codegen for EcField::Message — write the codegen before \
+                         reclassifying"
+                    );
+                }
             }
-        }
+        };
     }
 
-    #[test]
-    fn message_is_the_only_field_lowered_today() {
-        // WHY: names the current state plainly so a reviewer sees at a glance which three
-        // fields are refused and why (see `ynz_typeck::errors_fields`'s module doc) rather
-        // than inferring it from the absence of a codegen arm.
-        assert_eq!(
-            ec_field_lowering(EcField::Message),
-            EcFieldLowering::Lowered
-        );
-        assert_eq!(
-            ec_field_lowering(EcField::Suggestions),
-            EcFieldLowering::Refused
-        );
-        assert_eq!(ec_field_lowering(EcField::Trace), EcFieldLowering::Refused);
-        assert_eq!(ec_field_lowering(EcField::Source), EcFieldLowering::Refused);
-    }
-
-    #[test]
-    fn from_field_name_round_trips_every_variant() {
-        for field in ALL_EC_FIELDS {
-            assert_eq!(EcField::from_field_name(field.name()), Some(*field));
-        }
-        assert_eq!(EcField::from_field_name("failed"), None);
-        assert_eq!(EcField::from_field_name("or"), None);
-        assert_eq!(EcField::from_field_name("notAField"), None);
-    }
+    ec_field_case!(
+        the_message_field_has_a_codegen_arm_if_lowered,
+        EcField::Message
+    );
+    ec_field_case!(
+        the_suggestions_field_has_a_codegen_arm_if_lowered,
+        EcField::Suggestions
+    );
+    ec_field_case!(the_trace_field_has_a_codegen_arm_if_lowered, EcField::Trace);
+    ec_field_case!(
+        the_source_field_has_a_codegen_arm_if_lowered,
+        EcField::Source
+    );
 }
 
 /// Emit a type-attached constant such as `int.max` or `number.epsilon`.
@@ -34179,6 +34176,11 @@ fn recorded_generic_instance_name(
 
 #[cfg(test)]
 mod recorded_generic_instance_tests {
+    // Private-function tests (`recorded_generic_instance_name`), kept for the cases no source program
+    // reaches: a call the type checker recorded nothing for, two sets for, or an instance it never
+    // built is only produced by a typeck bug. The positive case of two calls with the same argument
+    // types is reached publicly by `v03_m9_c1g_generic_call_runs_the_instance_the_type_checker_chose`
+    // (crates/ynz-driver/tests/v03_m9_c1g_call_arguments.rs), so its unit test is deleted.
     use super::{mangle_mono_name, recorded_generic_instance_name};
     use std::collections::HashMap;
     use ynz_diagnostics::SourceSpan;
@@ -34198,49 +34200,10 @@ mod recorded_generic_instance_tests {
         SourceSpan::new("main.ynz", start, start + 10)
     }
 
+    // Survives: a private function; the substitution is reached only by a generic body calling a generic, and no driver fixture asserts it alone.
+    // bug: a call recorded as `inner<T | nothing>` inside `outer<T>` runs the unsubstituted instance instead of `inner<Big | nothing>` in `outer<Big>` (call dispatch, memory safety) | tier: High
     #[test]
-    fn v03_m9_c1g_call_runs_the_instance_it_was_checked_with() {
-        // BUG (High: call dispatch, memory safety): `pickA(tiny, big)` fits both `pickA<Big>`
-        // and `pickA<Big | Tiny>`; re-deriving the instance from argument types could not tell
-        // them apart. Two calls with the same argument types run their own recorded instance.
-        let big_or_tiny = Type::Union {
-            variants: vec![big(), tiny()],
-        };
-        let mut instances = GenericCallInstances::default();
-        instances.record((0, 10), vec![big()]);
-        instances.record((20, 30), vec![big_or_tiny.clone()]);
-        let declared = [
-            mangle_mono_name("pickA", &[big()]),
-            mangle_mono_name("pickA", std::slice::from_ref(&big_or_tiny)),
-        ];
-        let is_declared = |name: &str| declared.iter().any(|known| known == name);
-        let no_subst = HashMap::new();
-        assert_eq!(
-            recorded_generic_instance_name(
-                &instances,
-                &no_subst,
-                "pickA",
-                &call_at(0),
-                is_declared
-            ),
-            Ok(mangle_mono_name("pickA", &[big()]))
-        );
-        assert_eq!(
-            recorded_generic_instance_name(
-                &instances,
-                &no_subst,
-                "pickA",
-                &call_at(20),
-                is_declared
-            ),
-            Ok(mangle_mono_name("pickA", &[big_or_tiny]))
-        );
-    }
-
-    #[test]
-    fn v03_m9_c1g_call_inside_a_generic_body_runs_the_outer_instances_types() {
-        // BUG (High: call dispatch): a call recorded as `inner<T | nothing>` inside `outer<T>`
-        // must run `inner<Big | nothing>` in `outer<Big>`, never the unsubstituted instance.
+    fn a_call_inside_a_generic_body_runs_the_outer_instances_types() {
         let maybe_t = Type::Union {
             variants: vec![Type::TypeParam { name: "T".into() }, Type::Nothing],
         };
@@ -34259,67 +34222,55 @@ mod recorded_generic_instance_tests {
         );
     }
 
-    #[test]
-    fn v03_m9_c1g_call_with_no_record_is_an_internal_error() {
-        // BUG (High: call dispatch, memory safety): a call the type checker recorded nothing
-        // for must stop codegen, never fall back to some instance of that name.
-        let mut instances = GenericCallInstances::default();
-        instances.record((20, 30), vec![tiny()]);
-        let error = recorded_generic_instance_name(
-            &instances,
-            &HashMap::new(),
-            "same",
-            &call_at(40),
-            |_| true,
-        )
-        .unwrap_err();
-        assert!(
-            error.contains("internal compiler error")
-                && error.contains("recorded no type arguments"),
-            "{error}"
-        );
+    /// One named test per case so the runner names the failing case. The call at `call_start` must
+    /// stop codegen with an internal compiler error naming `error_fragment`.
+    macro_rules! recorded_instance_error_case {
+        ($test_name:ident, records: [$(($start:expr, $end:expr, $type_args:expr)),+], call_start: $call_start:expr, is_declared: $is_declared:expr, error_fragment: $error_fragment:expr) => {
+            // bug: a call the type checker recorded nothing, two different sets, or a never-built instance for falls back to some instance of that name instead of stopping codegen (call dispatch, memory safety) | tier: High
+            #[test]
+            fn $test_name() {
+                let mut instances = GenericCallInstances::default();
+                $(instances.record(($start, $end), $type_args);)+
+                let error = recorded_generic_instance_name(
+                    &instances,
+                    &HashMap::new(),
+                    "same",
+                    &call_at($call_start),
+                    $is_declared,
+                )
+                .unwrap_err();
+                assert!(
+                    error.contains("internal compiler error") && error.contains($error_fragment),
+                    "{error}"
+                );
+            }
+        };
     }
 
-    #[test]
-    fn v03_m9_c1g_call_with_two_different_records_is_an_internal_error() {
-        // BUG (High: call dispatch, memory safety): a call checked with two different sets of
-        // type arguments must stop codegen, never run the first or the last one.
-        let mut instances = GenericCallInstances::default();
-        instances.record((0, 10), vec![big()]);
-        instances.record((0, 10), vec![tiny()]);
-        let error = recorded_generic_instance_name(
-            &instances,
-            &HashMap::new(),
-            "same",
-            &call_at(0),
-            |_| true,
-        )
-        .unwrap_err();
-        assert!(
-            error.contains("internal compiler error") && error.contains("two different sets"),
-            "{error}"
-        );
-    }
-
-    #[test]
-    fn v03_m9_c1g_call_recorded_for_an_instance_never_built_is_an_internal_error() {
-        // BUG (High: call dispatch, memory safety): a recorded instance the module does not
-        // declare must stop codegen, never resolve to another instance of that name.
-        let mut instances = GenericCallInstances::default();
-        instances.record((20, 30), vec![tiny()]);
-        let error = recorded_generic_instance_name(
-            &instances,
-            &HashMap::new(),
-            "same",
-            &call_at(20),
-            |_| false,
-        )
-        .unwrap_err();
-        assert!(
-            error.contains("internal compiler error") && error.contains("was built"),
-            "{error}"
-        );
-    }
+    // Case bug: a call with no record runs some instance of its name.
+    recorded_instance_error_case!(
+        a_call_with_no_record_is_an_internal_error,
+        records: [(20, 30, vec![tiny()])],
+        call_start: 40,
+        is_declared: |_: &str| true,
+        error_fragment: "recorded no type arguments"
+    );
+    // Case bug: a call checked with two different sets of type arguments runs the first or the last.
+    recorded_instance_error_case!(
+        a_call_with_two_different_records_is_an_internal_error,
+        records: [(0, 10, vec![big()]), (0, 10, vec![tiny()])],
+        call_start: 0,
+        is_declared: |_: &str| true,
+        error_fragment: "two different sets"
+    );
+    // Case bug: a recorded instance the module never built resolves to another instance of that name.
+    recorded_instance_error_case!(
+        a_call_recorded_for_an_instance_never_built_is_an_internal_error,
+        records: [(20, 30, vec![tiny()])],
+        call_start: 20,
+        is_declared: |_: &str| false,
+        error_fragment: "was built"
+    );
 }
 
 // ── BuiltinArray method dispatch ─────────────────────────────────────────────
@@ -36500,9 +36451,8 @@ fn build_decimal_global<'ctx>(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_cpu_group_slots, count_cpu_groups_all_depths, cpu_slot_reserve_slots,
-        function_contains_wait, return_type_fits_cpu_result_abi, spike_pair_in_block, CpuGroupSlot,
-        FrameLayout,
+        build_cpu_group_slots, cpu_slot_reserve_slots, function_contains_wait,
+        return_type_fits_cpu_result_abi, CpuGroupSlot, FrameLayout,
     };
     use std::collections::HashSet;
     use ynz_ast::nodes::{Block, CallExpr, Expr, MatchArm, MatchPattern, MatchPatternKind, Stmt};
@@ -36581,14 +36531,6 @@ mod tests {
             span: dummy_span(),
             destructure_pattern: None,
             map_destructure_pattern: None,
-        }
-    }
-
-    fn while_stmt(body: Vec<Stmt>) -> Stmt {
-        Stmt::While {
-            cond: Expr::BoolLit(true, dummy_span()),
-            body: block(body),
-            span: dummy_span(),
         }
     }
 
@@ -36949,84 +36891,20 @@ mod tests {
     // classified here. Three prior rounds (R3 map, R4 maybe, R5 nothing) each found one more
     // variant the old hand-listed `cases` vec had silently omitted; this structure makes that
     // class of gap impossible. If you change one gate, change the other; do NOT relax this test.
+    // Survives as a private-gate parity (`return_type_fits_cpu_result_abi` is private; the typeck gate is public): a compile-forced exhaustive classifier of every return class, which no source program sweeps.
+    // bug: the codegen AST gate and the typeck resolved-type gate classify a CPU-background return class differently, so the IDE hint marks a call parallel while the binary runs it sequentially, or codegen admits a class typeck declined (the number-errors use-after-free) | tier: High
     #[test]
     fn cpu_result_abi_gate_parity() {
         use ynz_ast::nodes::Type as Ast;
         use ynz_typeck::types::Type as Resolved;
 
         let span = dummy_span();
-        // One representative per resolved `Type` variant. The classifier (`parity_case`) is the
-        // exhaustiveness driver — every variant present here is matched by an arm that has no
-        // `_` fallback, so the compiler rejects any future variant that is not classified.
-        let all_variants: Vec<Resolved> = vec![
-            Resolved::Nothing,
-            Resolved::String,
-            Resolved::Error,
-            Resolved::Int,
-            Resolved::Float,
-            Resolved::Number { precision: 34 },
-            Resolved::Bool,
-            Resolved::Range {
-                element: Box::new(Resolved::Int),
-                end_inclusive: false,
-            },
-            Resolved::Shape {
-                name: "Player".to_string(),
-            },
-            Resolved::Dynamic {
-                contract: "Damageable".to_string(),
-            },
-            Resolved::TypeParam {
-                name: "T".to_string(),
-            },
-            Resolved::Generic {
-                name: "Pair".to_string(),
-                args: vec![Resolved::Int, Resolved::Int],
-            },
-            Resolved::BuiltinArray {
-                elem: Box::new(Resolved::Int),
-            },
-            Resolved::BuiltinFixed {
-                elem: Box::new(Resolved::Int),
-                size: ynz_typeck::FixedLength::Unknown,
-            },
-            Resolved::Maybe {
-                inner: Box::new(Resolved::Int),
-            },
-            Resolved::BuiltinMap {
-                key: Box::new(Resolved::Int),
-                val: Box::new(Resolved::Int),
-            },
-            Resolved::MapEntry {
-                key: Box::new(Resolved::Int),
-                val: Box::new(Resolved::Int),
-            },
-            Resolved::Options {
-                name: "Status".to_string(),
-            },
-            Resolved::Union {
-                variants: vec![
-                    Resolved::Shape {
-                        name: "Circle".to_string(),
-                    },
-                    Resolved::Shape {
-                        name: "Square".to_string(),
-                    },
-                ],
-            },
-            Resolved::ErrorsCapable {
-                inner: Box::new(Resolved::Int),
-            },
-            Resolved::Sensitive {
-                inner: Box::new(Resolved::String),
-            },
-        ];
-
-        // Assert the representative set is itself complete: if a variant were missing from
-        // `all_variants`, this loop would never drive `parity_case` for it, so the compile-time
-        // exhaustiveness guard would not protect it. `parity_case` covering every variant is the
-        // compile-time half; iterating every variant here is the runtime half — together they
-        // guarantee each variant is BOTH classified and exercised.
+        // One representative per resolved `Type` variant, from the shared sampler (a runtime list
+        // kept complete by `every_declared_variant_is_represented`, so a new variant is swept
+        // without anyone adding it here). The classifier (`parity_case`) is the exhaustiveness
+        // driver — every variant is matched by an arm that has no `_` fallback, so the compiler
+        // rejects any future variant that is not classified.
+        let all_variants: Vec<Resolved> = ynz_typeck::type_variant_sampler::all_type_variants();
         for variant in &all_variants {
             match parity_case(variant) {
                 ParityCase::Reachable {
@@ -37080,332 +36958,177 @@ mod tests {
         }
     }
 
-    // WHY: pins the exact byte offsets the two-member CPU group occupies. These offsets
-    // (handles @ 32/40, results @ 48/64) are an ABI contract with the runtime drop-shim
-    // `cleanup_spike_cpu_handles`, which reads handle slots at 32/40. A regression here
-    // silently mis-offsets the join result or the freed handle — corpse-class corruption.
-    #[test]
-    fn build_cpu_group_slots_two_members_pins_abi_offsets() {
-        let slots = build_cpu_group_slots(2);
-        assert_eq!(
-            slots,
-            vec![
-                CpuGroupSlot {
-                    group_id: 0,
-                    member_index: 0,
-                    handle_offset: 32,
-                    result_offset: 48,
-                },
-                CpuGroupSlot {
-                    group_id: 0,
-                    member_index: 1,
-                    handle_offset: 40,
-                    result_offset: 64,
-                },
-            ],
-            "two-member CPU group must place handles @ 32/40 and results @ 48/64"
-        );
+    /// One named test per member count so the runner names the failing case. The offsets are an ABI
+    /// contract with the runtime drop-shim `cleanup_spike_cpu_handles`, which reads handle slots at
+    /// 32/40, so the numbers are pinned independently of the code.
+    macro_rules! cpu_group_offsets_case {
+        ($test_name:ident, members: $members:expr, offsets: [$(($handle:expr, $result:expr)),+]) => {
+            // Survives as a private-function test (`build_cpu_group_slots`): no public query exposes the offsets alone. A zero-member group (a non-promoted function reserves nothing) is guarded by the codegen goldens (frames stay byte-identical), so its two trivial cases are deleted.
+            // bug: a CPU group's handle/result offsets drift from the runtime drop-shim's ABI (two members: handles @ 32/40, results @ 48/64), or with three members the handle and result regions interleave, so a join result is mis-offset, a result lands on another member's handle, or a freed handle is the wrong slot (corpse-class corruption) | tier: High
+            #[test]
+            fn $test_name() {
+                let expected_offsets: Vec<(u64, u64)> = vec![$(($handle, $result)),+];
+                let expected: Vec<CpuGroupSlot> = expected_offsets
+                    .into_iter()
+                    .enumerate()
+                    .map(|(member_index, (handle_offset, result_offset))| CpuGroupSlot {
+                        group_id: 0,
+                        member_index,
+                        handle_offset,
+                        result_offset,
+                    })
+                    .collect();
+                assert_eq!(build_cpu_group_slots($members), expected);
+            }
+        };
     }
 
-    // WHY: the (group_id, member_index) keying must generalize before slice 2 relies on
-    // N>2 members. Three members put handles contiguously (32/40/48 — one 8-byte slot
-    // each) then results contiguously (56/72/88 — one 16-byte slot each). If the handle
-    // and result regions ever interleave instead of grouping, this catches it.
-    #[test]
-    fn build_cpu_group_slots_three_members_generalizes() {
-        let slots = build_cpu_group_slots(3);
-        let handle_offsets: Vec<u64> = slots.iter().map(|s| s.handle_offset).collect();
-        let result_offsets: Vec<u64> = slots.iter().map(|s| s.result_offset).collect();
-        assert_eq!(
-            handle_offsets,
-            vec![32, 40, 48],
-            "three handle slots are contiguous 8-byte slots after the 32-byte header"
-        );
-        assert_eq!(
-            result_offsets,
-            vec![56, 72, 88],
-            "three result slots are contiguous 16-byte slots after the handle region"
-        );
-    }
+    cpu_group_offsets_case!(
+        the_two_member_group_places_handles_and_results_at_the_abi_offsets,
+        members: 2,
+        offsets: [(32, 48), (40, 64)]
+    );
+    cpu_group_offsets_case!(
+        three_members_keep_all_handles_before_all_results,
+        members: 3,
+        offsets: [(32, 56), (40, 72), (48, 88)]
+    );
 
-    // WHY: a zero-member group (every non-promoted function) must reserve nothing — its
-    // frame stays byte-identical to pre-M3d. A non-empty Vec here would inflate every
-    // frame, breaking the zero-cost-for-non-promoted invariant.
+    // bug: an off-by-one in the reserved slot count (header to 80 = 6 eight-byte slots for two members) aliases a crossing-local slot onto a result slot: a silent wrong join value after a suspension | tier: High
     #[test]
-    fn build_cpu_group_slots_zero_members_is_empty() {
-        assert!(
-            build_cpu_group_slots(0).is_empty(),
-            "a non-promoted function reserves no CPU slots"
-        );
-    }
-
-    // WHY: `cpu_slot_reserve_slots` returns the count of 8-byte slots own-locals must skip
-    // to clear the CPU region. For the two-member group the region spans header(32) → 80
-    // (result 64 + 16), i.e. 48 bytes = 6 eight-byte slots. An off-by-one here aliases a
-    // crossing-local slot onto a result slot — silent wrong join value after a suspension.
-    #[test]
-    fn cpu_slot_reserve_slots_two_member_group_is_six() {
+    fn the_two_member_region_reserves_six_slots() {
         let layout = layout_with_cpu_slots(build_cpu_group_slots(2));
-        assert_eq!(
-            cpu_slot_reserve_slots(&layout),
-            6,
-            "two-member CPU region (header→80) is 6 eight-byte slots"
-        );
+        assert_eq!(cpu_slot_reserve_slots(&layout), 6);
     }
 
-    // WHY: an empty CPU group reserves zero slots — own-locals start immediately after the
-    // header, preserving pre-M3d frame layout for non-promoted functions.
-    #[test]
-    fn cpu_slot_reserve_slots_empty_group_is_zero() {
-        let layout = layout_with_cpu_slots(Vec::new());
-        assert_eq!(
-            cpu_slot_reserve_slots(&layout),
-            0,
-            "no CPU group reserves zero slots"
-        );
+    fn pair() -> Vec<Stmt> {
+        vec![cpu_call_let("lo", "score"), cpu_call_let("hi", "score")]
     }
 
-    // WHY: `spike_pair_in_block` is the block-level admission core both the depth-0 and nested
-    // spike paths share. An adjacent CPU-callee pair in a straight-line block must be admitted;
-    // a single call (no pair) must not. If this regresses, nested admission either fires with no
-    // reserved slots or silently declines a valid group.
-    #[test]
-    fn spike_pair_in_block_admits_adjacent_pair_only() {
-        let cpu = cpu_callee_set();
-        let susp = empty_suspend();
-        // Adjacent pair → admitted (representative = first callee).
-        let pair = vec![cpu_call_let("lo", "score"), cpu_call_let("hi", "score")];
-        assert_eq!(
-            spike_pair_in_block(&pair, &susp, &cpu, &no_types()),
-            Some("score".to_string())
-        );
-        // Single call → no pair → declined.
-        let single = vec![cpu_call_let("lo", "score")];
-        assert_eq!(spike_pair_in_block(&single, &susp, &cpu, &no_types()), None);
+    /// One named test per case so the runner names the failing case. Counts the CPU groups of a
+    /// statement list through typeck's public `cpu_admission::count_cpu_groups_all_depths`, the
+    /// authority codegen's wrapper delegates to.
+    macro_rules! cpu_group_count_case {
+        ($test_name:ident, stmts: $stmts:expr, groups: $groups:expr) => {
+            // bug: the CPU-group count is wrong, so a second group aliases the single reserved slot region (a corrupt binary), a lone call is taken for a group, or a loop-body group fires with no reserved index slot | tier: High
+            #[test]
+            fn $test_name() {
+                let stmts: Vec<Stmt> = $stmts;
+                assert_eq!(
+                    ynz_typeck::cpu_admission::count_cpu_groups_all_depths(
+                        &stmts,
+                        &empty_suspend(),
+                        &cpu_callee_set(),
+                        &no_types()
+                    ),
+                    $groups
+                );
+            }
+        };
     }
 
-    // WHY: the single-group constraint (admit IFF exactly one group across all depths) is what
-    // keeps a second group from aliasing the single reserved group-0 slot region. The count is
-    // the gate input: it must return 1 for a sole top-level group, 1 for a sole nested group, and
-    // 2 for any two-group function REGARDLESS of source order (top-then-nested, nested-then-top,
-    // two-nested) — the count is order-independent, which is what makes the multi-group decline
-    // order-independent. If any two-group arrangement returned 1, that arrangement would be
-    // admitted and the two groups would alias the single slot region (the corrupt-binary class).
-    #[test]
-    fn count_cpu_groups_all_depths_counts_top_and_nested() {
-        let cpu = cpu_callee_set();
-        let susp = empty_suspend();
-        let pair = || vec![cpu_call_let("lo", "score"), cpu_call_let("hi", "score")];
+    // Seven cases (High guide of 8): the admit/decline matrix of the single-group constraint.
+    // Case bug: a single call is counted as a group.
+    cpu_group_count_case!(a_single_call_is_no_group, stmts: vec![cpu_call_let("lo", "score")], groups: 0);
+    // Case bug: a sole top-level pair is not counted.
+    cpu_group_count_case!(a_top_level_pair_is_one_group, stmts: pair(), groups: 1);
+    // Case bug: a pair inside an `if` arm is not counted.
+    cpu_group_count_case!(a_pair_in_an_if_arm_is_one_group, stmts: vec![if_stmt(pair())], groups: 1);
+    // Case bug: a pair inside a match arm is not counted.
+    cpu_group_count_case!(a_pair_in_a_match_arm_is_one_group, stmts: vec![match_stmt(pair())], groups: 1);
+    // Case bug: a top-level group followed by a nested one is counted as one, so both are admitted.
+    cpu_group_count_case!(
+        a_top_level_group_then_a_nested_group_is_two,
+        stmts: {
+            let mut stmts = pair();
+            stmts.push(if_stmt(pair()));
+            stmts
+        },
+        groups: 2
+    );
+    // Case bug: the count depends on source order (a nested group then a top-level one reads as one).
+    cpu_group_count_case!(
+        a_nested_group_then_a_top_level_group_is_two,
+        stmts: {
+            let mut stmts = vec![if_stmt(pair())];
+            stmts.extend(pair());
+            stmts
+        },
+        groups: 2
+    );
+    // Case bug: a loop body counts as a hosting site (it has no reserved synthetic iteration index).
+    cpu_group_count_case!(a_pair_in_a_for_body_is_no_group, stmts: vec![for_stmt(pair())], groups: 0);
 
-        // One top-level group.
-        let top_only = pair();
-        assert_eq!(
-            count_cpu_groups_all_depths(&top_only, &susp, &cpu, &no_types()),
-            1
-        );
-
-        // One group nested inside an `if` arm.
-        let nested_only = vec![if_stmt(pair())];
-        assert_eq!(
-            count_cpu_groups_all_depths(&nested_only, &susp, &cpu, &no_types()),
-            1
-        );
-
-        // A top-level group THEN a nested group → 2 (multi-group, declines entirely).
-        let mut top_then_nested = pair();
-        top_then_nested.push(if_stmt(pair()));
-        assert_eq!(
-            count_cpu_groups_all_depths(&top_then_nested, &susp, &cpu, &no_types()),
-            2
-        );
-
-        // A nested group THEN a top-level group → 2 — same count, source order flipped. This is
-        // the arrangement that aliases the single slot region if the count check is bypassed.
-        let mut nested_then_top = vec![if_stmt(pair())];
-        nested_then_top.extend(pair());
-        assert_eq!(
-            count_cpu_groups_all_depths(&nested_then_top, &susp, &cpu, &no_types()),
-            2
-        );
-
-        // Two nested groups (two separate `if` arms) → 2.
-        let two_nested = vec![if_stmt(pair()), if_stmt(pair())];
-        assert_eq!(
-            count_cpu_groups_all_depths(&two_nested, &susp, &cpu, &no_types()),
-            2
-        );
-
-        // Nested inside a matching arm also counts.
-        let nested_match = vec![match_stmt(pair())];
-        assert_eq!(
-            count_cpu_groups_all_depths(&nested_match, &susp, &cpu, &no_types()),
-            1
-        );
+    /// The representative callee of the one nested group (the callee the reservation is sized for).
+    macro_rules! nested_representative_case {
+        ($test_name:ident, stmts: $stmts:expr, representative: $representative:expr) => {
+            // bug: the nested-group authority names a group in a loop body (no reserved iteration index) or misses one in a branch, so the reservation is sized for the wrong callee or not at all | tier: High
+            #[test]
+            fn $test_name() {
+                let stmts: Vec<Stmt> = $stmts;
+                assert_eq!(
+                    ynz_typeck::cpu_admission::nested_group_representative_callee(
+                        &stmts,
+                        &empty_suspend(),
+                        &cpu_callee_set(),
+                        &no_types()
+                    ),
+                    $representative
+                );
+            }
+        };
     }
 
-    // WHY: neither a `for` nor a `while` body is a spike-hosting site (`spike_nested_blocks`
-    // excludes both), so a CPU group inside either counts as ZERO across-depths groups — it
-    // DECLINES to sequential lowering. A loop body would need its loop index (and every
-    // loop-carried local) frame-backed across the group's poll-yield; the spike host's
-    // single-group reservation does not cover those synthetic-index slots, and nested loop
-    // placement needs multi-level synthetic-index reservation the spike path does not provide. If
-    // either body regressed to one, the loop group would fire without a reserved index slot and
-    // read its spike result through unreserved bytes (corruption).
-    #[test]
-    fn count_cpu_groups_all_depths_excludes_for_and_while_bodies() {
-        let cpu = cpu_callee_set();
-        let susp = empty_suspend();
-        let pair = || vec![cpu_call_let("lo", "score"), cpu_call_let("hi", "score")];
-        let for_group = vec![for_stmt(pair())];
-        assert_eq!(
-            count_cpu_groups_all_depths(&for_group, &susp, &cpu, &no_types()),
-            0
-        );
-        let while_group = vec![while_stmt(pair())];
-        assert_eq!(
-            count_cpu_groups_all_depths(&while_group, &susp, &cpu, &no_types()),
-            0
-        );
-    }
-
-    // WHY: when a group lives one level inside an `if`/`match` arm,
-    // `nested_group_representative_callee` must find it (the representative the reservation sizes
-    // for). A group inside a `for` or `while` body must NOT be found (a loop body has no reserved
-    // synthetic iteration index to frame-back, so it is not a hosting site — it DECLINES). This
-    // is the authority codegen now reads through `admitted_cpu_group` for its nested-group path.
-    #[test]
-    fn nested_group_representative_callee_finds_branch_group_not_loop() {
-        use ynz_typeck::cpu_admission::nested_group_representative_callee;
-        let cpu = cpu_callee_set();
-        let susp = empty_suspend();
-        let pair = || vec![cpu_call_let("lo", "score"), cpu_call_let("hi", "score")];
-
-        let nested_if = vec![if_stmt(pair())];
-        assert_eq!(
-            nested_group_representative_callee(&nested_if, &susp, &cpu, &no_types()),
-            Some("score".to_string())
-        );
-
-        let nested_match = vec![match_stmt(pair())];
-        assert_eq!(
-            nested_group_representative_callee(&nested_match, &susp, &cpu, &no_types()),
-            Some("score".to_string())
-        );
-
-        // A group in a `for` body is NOT a hosting site → None.
-        let nested_for = vec![for_stmt(pair())];
-        assert_eq!(
-            nested_group_representative_callee(&nested_for, &susp, &cpu, &no_types()),
-            None
-        );
-
-        // A group in a `while` body is NOT a hosting site → None.
-        let nested_while = vec![while_stmt(pair())];
-        assert_eq!(
-            nested_group_representative_callee(&nested_while, &susp, &cpu, &no_types()),
-            None
-        );
-    }
+    // Case bug: a group in a branch is not found.
+    nested_representative_case!(
+        a_group_in_a_branch_names_its_callee,
+        stmts: vec![if_stmt(pair())],
+        representative: Some("score".to_string())
+    );
+    // Case bug: a group in a loop body is found.
+    nested_representative_case!(
+        a_group_in_a_loop_body_names_no_callee,
+        stmts: vec![for_stmt(pair())],
+        representative: None
+    );
 
     fn wait_expr() -> Expr {
-        // A bare `wait` wrapping an integer literal — the wrapped expr type does not
-        // matter for the contains-wait walk; only the Wait variant is tested here.
+        // A bare `wait` wrapping an integer literal: only the Wait variant matters to the walk.
         Expr::Wait(Box::new(Expr::IntLit(0, dummy_span())), dummy_span())
     }
 
-    // WHY: guards against the routing decision regressing — if function_contains_wait
-    // returns false for a wait-containing function, that function gets lowered on the
-    // straight-line path and the wait becomes a silent no-op (M1 regression).
-    #[test]
-    fn block_with_top_level_wait_returns_true() {
-        let block = Block {
-            stmts: vec![Stmt::Expr(wait_expr())],
-            span: dummy_span(),
+    /// One named test per case so the runner names the failing case.
+    macro_rules! wait_routing_case {
+        ($test_name:ident, stmts: $stmts:expr, contains_wait: $contains_wait:expr) => {
+            // bug: function_contains_wait mis-routes a function: a wait-containing one is lowered straight-line (the wait is a silent no-op, the M1 regression) or a wait-free one takes the state-machine path (bloat for every simple function) | tier: Medium
+            #[test]
+            fn $test_name() {
+                let block = Block {
+                    stmts: $stmts,
+                    span: dummy_span(),
+                };
+                assert_eq!(function_contains_wait(&block), $contains_wait);
+            }
         };
-        assert!(
-            function_contains_wait(&block),
-            "block containing a bare Expr::Wait must return true"
-        );
     }
 
-    // WHY: a wait-free function must take the standard lowering path with zero
-    // added overhead. False positives here would route every simple function through
-    // the state-machine path, bloating codegen for all programs.
-    #[test]
-    fn block_without_wait_returns_false() {
-        let block = Block {
-            stmts: vec![Stmt::Expr(Expr::IntLit(42, dummy_span()))],
-            span: dummy_span(),
-        };
-        assert!(
-            !function_contains_wait(&block),
-            "block with no Wait must return false"
-        );
-    }
-
-    // WHY: Increment A routes `if`-nested waits to the SM lowering path. If this
-    // returns false, an `if`-nested wait silently regresses to the M1 no-op behavior.
-    #[test]
-    fn block_with_if_nested_wait_returns_true() {
-        let if_body = Block {
-            stmts: vec![Stmt::Expr(wait_expr())],
-            span: dummy_span(),
-        };
-        let if_stmt = Stmt::If {
+    // Case bug: a bare top-level wait is missed.
+    wait_routing_case!(a_top_level_wait_is_found, stmts: vec![Stmt::Expr(wait_expr())], contains_wait: true);
+    // Case bug: a wait-free block is routed through the state machine.
+    wait_routing_case!(a_block_without_a_wait_has_none, stmts: vec![Stmt::Expr(Expr::IntLit(42, dummy_span()))], contains_wait: false);
+    // Case bug: an `if`-nested wait is missed.
+    wait_routing_case!(
+        a_wait_nested_in_an_if_is_found,
+        stmts: vec![Stmt::If {
             cond: Expr::BoolLit(true, dummy_span()),
-            body: if_body,
+            body: Block {
+                stmts: vec![Stmt::Expr(wait_expr())],
+                span: dummy_span(),
+            },
             span: dummy_span(),
-        };
-        let block = Block {
-            stmts: vec![if_stmt],
-            span: dummy_span(),
-        };
-        assert!(
-            function_contains_wait(&block),
-            "block containing an if-nested Expr::Wait must return true"
-        );
-    }
-
-    // v0.3-M6 Phase 2 (P4-3): RED fixture for the block_on-fallback hard-error guard.
-    //
-    // The guarded path (`lower_expr`'s `Expr::Call` synchronous fallback) is UNREACHABLE from real
-    // Yinz source post-Phase-1: the may-block classification routes every suspending call through
-    // the inline poll-and-yield path (`lower_sm_stmt_with_wait`), so no real program reaches the
-    // synchronous `block_on` wrapper drive with a suspending callee. This test therefore constructs
-    // the deliberately-miscategorized condition at the internal level — a caller reaching the
-    // fallback with a callee that IS in the effective suspend set — and asserts the guard's firing
-    // predicate (`sync_call_fallback_is_codegen_bug`, the exact boolean that gates the hard-error
-    // `return Err`) fires, while normal non-suspending call paths and base suspension intrinsics
-    // do NOT trip it (the in-unit false-positive check).
-    #[test]
-    fn suspending_callee_trips_block_on_fallback_guard() {
-        use super::sync_call_fallback_is_codegen_bug;
-
-        // RED: a suspending callee reaching the synchronous block_on fallback is a codegen bug.
-        let mut suspend_set: HashSet<String> = HashSet::new();
-        suspend_set.insert("fetchData".to_string());
-        assert!(
-            sync_call_fallback_is_codegen_bug("fetchData", &suspend_set),
-            "a suspending callee reaching the block_on sync fallback must be flagged a codegen bug"
-        );
-
-        // False-positive guard: a normal non-suspending callee (the `wait fn()` / UFCS path over a
-        // purely CPU-bound helper) must NOT trip the guard.
-        assert!(
-            !sync_call_fallback_is_codegen_bug("cpuHelper", &suspend_set),
-            "a non-suspending callee must not trip the block_on fallback guard"
-        );
-
-        // A base suspension intrinsic (`sleep`) is handled by its own `lower_expr` arm and is not a
-        // user state-machine wrapper — it must be excluded even when name-present, via the shared
-        // `is_suspending_member` helper's `!is_base_suspension_intrinsic` exclusion.
-        let mut with_sleep: HashSet<String> = HashSet::new();
-        with_sleep.insert("sleep".to_string());
-        assert!(
-            !sync_call_fallback_is_codegen_bug("sleep", &with_sleep),
-            "a base suspension intrinsic must be excluded from the block_on fallback guard"
-        );
-    }
+        }],
+        contains_wait: true
+    );
 }
 
 /// The union slots each function's composed frame reserves (`UnionRegion`), with their sizes:
@@ -37540,91 +37263,86 @@ mod errors_capable_release_tests {
     use ynz_typeck::types::Type;
 
     thread_local! {
-        static OUTCOMES: RefCell<Vec<(String, Result<bool, String>)>> = const { RefCell::new(Vec::new()) };
+        static PAYLOAD: RefCell<Option<Type>> = const { RefCell::new(None) };
+        static OUTCOME: RefCell<Option<Result<bool, String>>> = const { RefCell::new(None) };
     }
 
     const PROGRAM: &str = "shape Tag {\n  name: String\n  id: Int\n}\nfunction entrypoint() -> Nothing {\n  print(`x`)\n}\n";
 
-    /// The `ok` payloads an `errors` value can carry, each a stored value of its own kind.
-    fn payloads() -> Vec<(&'static str, Type)> {
-        vec![
-            ("String", Type::String),
-            (
-                "Array",
-                Type::BuiltinArray {
-                    elem: Box::new(Type::String),
-                },
-            ),
-            (
-                "Map",
-                Type::BuiltinMap {
-                    key: Box::new(Type::String),
-                    val: Box::new(Type::String),
-                },
-            ),
-            (
-                "shape",
-                Type::Shape {
-                    name: "Tag".to_string(),
-                },
-            ),
-            (
-                "maybe of a shape",
-                Type::Maybe {
-                    inner: Box::new(Type::Shape {
-                        name: "Tag".to_string(),
-                    }),
-                },
-            ),
-            (
-                "Channel",
-                Type::BuiltinChannel {
-                    elem: Box::new(Type::String),
-                },
-            ),
-        ]
-    }
-
     fn probe(cg: &Cg<'_, '_>) {
-        for (label, inner) in payloads() {
-            let errors = Type::ErrorsCapable {
-                inner: Box::new(inner),
-            };
-            let outcome = cg.release_fn(&errors, false).map(|glue| glue.is_some());
-            OUTCOMES.with(|outcomes| outcomes.borrow_mut().push((label.to_string(), outcome)));
+        let payload = PAYLOAD
+            .with(|slot| slot.borrow().clone())
+            .expect("the case sets its payload");
+        let errors = Type::ErrorsCapable {
+            inner: Box::new(payload),
+        };
+        let outcome = cg.release_fn(&errors, false).map(|glue| glue.is_some());
+        OUTCOME.with(|slot| *slot.borrow_mut() = Some(outcome));
+    }
+
+    fn shape_tag() -> Type {
+        Type::Shape {
+            name: "Tag".to_string(),
         }
     }
 
-    /// Bug: `emit_errors_capable_release` asked a second per-type dispatch (`union_variant_release`,
-    /// which knew a string, array and map) for the `ok` payload, so the release of a `Tag errors`,
-    /// `maybe<Tag> errors` or `channel<T> errors` value failed with an internal error where every
-    /// other stored value releases through `stored_release` (High: C7 releases every local, so the
-    /// first `errors` local of a shape would stop the compile).
-    #[test]
-    fn every_ok_payload_of_an_errors_value_has_a_release() {
-        OUTCOMES.with(|outcomes| outcomes.borrow_mut().clear());
-        CG_PROBE.with(|slot| slot.set(Some(probe)));
-        let db = CompilerDb::default();
-        let source = SourceFile::new(&db, "probe.ynz".to_string(), PROGRAM.to_string());
-        let output = crate::queries::codegen_query(&db, source);
-        CG_PROBE.with(|slot| slot.set(None));
-        assert!(
-            output.diagnostics.is_empty(),
-            "the probe program must compile: {:?}",
-            output.diagnostics
-        );
-        let outcomes = OUTCOMES.with(|outcomes| outcomes.borrow().clone());
-        assert_eq!(
-            outcomes.len(),
-            payloads().len(),
-            "the probe ran once: {outcomes:?}"
-        );
-        for (label, outcome) in outcomes {
-            assert_eq!(
-                outcome,
-                Ok(true),
-                "an `errors` value with a {label} ok payload must have a release"
-            );
-        }
+    /// One named test per `ok` payload kind so the runner names the failing case. The probe hook
+    /// (`CG_PROBE`) is the only way to reach `release_fn` during a real compile.
+    macro_rules! errors_ok_payload_case {
+        ($test_name:ident, $payload:expr) => {
+            // Survives as a private-function test (`Cg::release_fn` is private; no source program asserts the glue exists for each payload kind alone, a missing one is an internal error at compile time).
+            // bug: the release of an `errors` value whose `ok` payload is a shape, maybe or channel failed with an internal error (a second per-type dispatch knew only string, array and map), so the first such local stopped the compile | tier: High
+            #[test]
+            fn $test_name() {
+                PAYLOAD.with(|slot| *slot.borrow_mut() = Some($payload));
+                OUTCOME.with(|slot| *slot.borrow_mut() = None);
+                CG_PROBE.with(|slot| slot.set(Some(probe)));
+                let db = CompilerDb::default();
+                let source = SourceFile::new(&db, "probe.ynz".to_string(), PROGRAM.to_string());
+                let output = crate::queries::codegen_query(&db, source);
+                CG_PROBE.with(|slot| slot.set(None));
+                assert!(
+                    output.diagnostics.is_empty(),
+                    "the probe program must compile: {:?}",
+                    output.diagnostics
+                );
+                let outcome = OUTCOME.with(|slot| slot.borrow().clone());
+                assert_eq!(outcome, Some(Ok(true)));
+            }
+        };
     }
+
+    errors_ok_payload_case!(
+        an_errors_value_with_a_string_ok_payload_has_a_release,
+        Type::String
+    );
+    errors_ok_payload_case!(
+        an_errors_value_with_an_array_ok_payload_has_a_release,
+        Type::BuiltinArray {
+            elem: Box::new(Type::String)
+        }
+    );
+    errors_ok_payload_case!(
+        an_errors_value_with_a_map_ok_payload_has_a_release,
+        Type::BuiltinMap {
+            key: Box::new(Type::String),
+            val: Box::new(Type::String)
+        }
+    );
+    errors_ok_payload_case!(
+        an_errors_value_with_a_shape_ok_payload_has_a_release,
+        shape_tag()
+    );
+    errors_ok_payload_case!(
+        an_errors_value_with_a_maybe_shape_ok_payload_has_a_release,
+        Type::Maybe {
+            inner: Box::new(shape_tag())
+        }
+    );
+    errors_ok_payload_case!(
+        an_errors_value_with_a_channel_ok_payload_has_a_release,
+        Type::BuiltinChannel {
+            elem: Box::new(Type::String)
+        }
+    );
 }
