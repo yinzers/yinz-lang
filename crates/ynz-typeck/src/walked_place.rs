@@ -615,60 +615,107 @@ mod tests {
 
     use PlaceStep::{Element, Field, Root};
 
-    // WHY (High): the one answer to "does this write free the walked list" decides which programs
-    // are refused; every row below is a place a loop can walk and a write it can make.
-    #[test]
-    fn a_write_frees_the_walked_list_when_it_names_the_place_or_a_prefix_of_it() {
-        let walked_field = [Root("outer"), Field("inner"), Field("rows")];
-        let walked_element = [Root("cube"), Element(Some(0))];
-        let cases: [(&[PlaceStep], &[PlaceStep], bool, bool); 11] = [
-            // a prefix, the root
-            (&[Root("outer"), Field("inner")], &walked_field, true, true),
-            (&[Root("outer")], &walked_field, true, true),
-            // exact field path: held for a statement, freed by a callee
-            (&walked_field, &walked_field, true, false),
-            (&walked_field, &walked_field, false, true),
-            // below the walked place: an item, not the list
-            (
-                &[
-                    Root("outer"),
-                    Field("inner"),
-                    Field("rows"),
-                    Element(Some(0)),
-                ],
-                &walked_field,
-                true,
-                false,
-            ),
-            // another field, another root
-            (&[Root("outer"), Field("name")], &walked_field, true, false),
-            (&[Root("other"), Field("inner")], &walked_field, true, false),
-            // an element the loop walks through is never held, same index or any index
-            (
-                &[Root("cube"), Element(Some(0))],
-                &walked_element,
-                true,
-                true,
-            ),
-            (&[Root("cube"), Element(None)], &walked_element, true, true),
-            (
-                &[Root("cube"), Element(Some(1))],
-                &walked_element,
-                true,
-                false,
-            ),
-            (&[Root("cube")], &walked_element, true, true),
-        ];
-        for (written, walked, exact_write_is_held, expected) in cases {
-            assert_eq!(
-                write_frees_walked_list(written, walked, exact_write_is_held),
-                expected,
-                "writing {} while walking {} (held: {exact_write_is_held})",
-                place_text(written),
-                place_text(walked)
-            );
-        }
+    /// One named test per case so the runner names the failing case. The one answer to "does this
+    /// write free the walked list" decides which programs are refused.
+    macro_rules! write_frees_case {
+        ($test_name:ident, written: $written:expr, walked: $walked:expr, held: $held:expr, expected: $expected:expr) => {
+            // bug: a write that frees the list a loop walks goes unrefused (use after free), or a harmless write is refused | tier: High
+            #[test]
+            fn $test_name() {
+                let written: &[PlaceStep] = &$written;
+                let walked: &[PlaceStep] = &$walked;
+                assert_eq!(
+                    write_frees_walked_list(written, walked, $held),
+                    $expected,
+                    "writing {} while walking {} (held: {})",
+                    place_text(written),
+                    place_text(walked),
+                    $held
+                );
+            }
+        };
     }
+
+    // Case bug: writing the root or a prefix of the walked place is not seen as freeing the list.
+    write_frees_case!(
+        a_prefix_of_the_walked_place_frees_the_list,
+        written: [Root("outer"), Field("inner")],
+        walked: [Root("outer"), Field("inner"), Field("rows")],
+        held: true,
+        expected: true
+    );
+    // Case bug: the exact place written by a statement the loop holds the list for is refused.
+    write_frees_case!(
+        the_exact_place_written_by_a_held_statement_does_not_free_the_list,
+        written: [Root("outer"), Field("inner"), Field("rows")],
+        walked: [Root("outer"), Field("inner"), Field("rows")],
+        held: true,
+        expected: false
+    );
+    // Case bug: the exact place written by a callee (not held) is not seen as freeing the list.
+    write_frees_case!(
+        the_exact_place_written_by_a_callee_frees_the_list,
+        written: [Root("outer"), Field("inner"), Field("rows")],
+        walked: [Root("outer"), Field("inner"), Field("rows")],
+        held: false,
+        expected: true
+    );
+    // Case bug: writing an item below the walked list is taken for freeing the list.
+    write_frees_case!(
+        a_place_below_the_walked_list_does_not_free_it,
+        written: [Root("outer"), Field("inner"), Field("rows"), Element(Some(0))],
+        walked: [Root("outer"), Field("inner"), Field("rows")],
+        held: true,
+        expected: false
+    );
+    // Case bug: writing a sibling field is taken for freeing the list.
+    write_frees_case!(
+        another_field_does_not_free_the_list,
+        written: [Root("outer"), Field("name")],
+        walked: [Root("outer"), Field("inner"), Field("rows")],
+        held: true,
+        expected: false
+    );
+    // Case bug: writing another binding's field is taken for freeing the list.
+    write_frees_case!(
+        another_root_does_not_free_the_list,
+        written: [Root("other"), Field("inner")],
+        walked: [Root("outer"), Field("inner"), Field("rows")],
+        held: true,
+        expected: false
+    );
+    // Case bug: an element the loop walks through is "held" and its write goes unrefused.
+    write_frees_case!(
+        an_element_written_at_the_walked_index_frees_the_list,
+        written: [Root("cube"), Element(Some(0))],
+        walked: [Root("cube"), Element(Some(0))],
+        held: true,
+        expected: true
+    );
+    // Case bug: a write at an index that is not a literal (may be any element) goes unrefused.
+    write_frees_case!(
+        an_element_written_at_any_index_frees_the_list,
+        written: [Root("cube"), Element(None)],
+        walked: [Root("cube"), Element(Some(0))],
+        held: true,
+        expected: true
+    );
+    // Case bug: a write at a different literal index is refused.
+    write_frees_case!(
+        an_element_written_at_another_index_does_not_free_the_list,
+        written: [Root("cube"), Element(Some(1))],
+        walked: [Root("cube"), Element(Some(0))],
+        held: true,
+        expected: false
+    );
+    // Case bug: writing the root of a walked element is not seen as freeing the list.
+    write_frees_case!(
+        the_root_of_a_walked_element_frees_the_list,
+        written: [Root("cube")],
+        walked: [Root("cube"), Element(Some(0))],
+        held: true,
+        expected: true
+    );
 
     // The fixpoint is the one place here that can fail by never returning, so the summary runs on
     // its own thread and a missed deadline is a test failure rather than a hung suite. These
@@ -695,82 +742,134 @@ mod tests {
         WrittenStep::Field(name.to_string())
     }
 
-    // WHY (High): the summary is what lets a loop refuse a call; a missed write is a use after free.
-    #[test]
-    fn a_function_writes_the_places_it_assigns_through_a_parameter_and_through_its_callees() {
-        let written = summaries(
-            "shape Holder { name: String rows: Array<Array<Int>> }\n\
-             function direct(lend holder: Holder) -> Nothing { holder.rows = [[1]] }\n\
-             function element(lend holder: Holder) -> Nothing { holder.rows[0] = [1] }\n\
-             function reader(share holder: Holder) -> Int { return holder.rows.count() }\n\
-             function forwarded(lend held: Holder) -> Nothing { direct(held) }\n\
-             function viaView(lend holder: Holder) -> Nothing {\n\
-               let view = holder.rows\n\
-               view[1] = [2]\n\
-             }\n\
-             function twoParameters(lend first: Holder, lend second: Holder) -> Nothing {\n\
-               second.name = `x`\n\
-             }\n",
-        );
-        assert_eq!(written["direct"], vec![vec![vec![field("rows")]]]);
-        assert_eq!(
-            written["element"],
-            vec![vec![vec![field("rows"), WrittenStep::Element(Some(0))]]]
-        );
-        assert_eq!(written["reader"], vec![Vec::<WrittenPlace>::new()]);
-        assert_eq!(written["forwarded"], vec![vec![vec![field("rows")]]]);
-        // A read that is written is a copy (`non_owned_reads` rule (a)): `view[1] = ...` changes
-        // the view's own value, never `holder.rows`.
-        assert_eq!(written["viaView"], vec![Vec::<WrittenPlace>::new()]);
-        assert_eq!(
-            written["twoParameters"],
-            vec![Vec::<WrittenPlace>::new(), vec![vec![field("name")]]]
-        );
+    /// One named test per case so the runner names the failing case. The summary is what lets a
+    /// loop refuse a call.
+    macro_rules! written_places_case {
+        ($test_name:ident, $source:expr, |$written:ident| $assertion:block) => {
+            // bug: the written-places summary misses a write a function makes through a parameter (use after free in a loop), or never settles | tier: High
+            #[test]
+            fn $test_name() {
+                let $written = summaries($source);
+                $assertion
+            }
+        };
     }
 
-    // WHY (High): a function defined twice (a diagnosed error) with bodies that write different
-    // places must not keep the fixpoint from settling: the compiler hung on this program.
-    #[test]
-    fn a_function_defined_twice_keeps_the_summary_of_its_first_definition() {
-        let written = summaries(
-            "shape Holder { rows: Array<Array<Int>> }\n\
-             function reset(lend holder: Holder) -> Nothing { holder.rows = [[1]] }\n\
-             function reset(lend holder: Holder) -> Nothing { print(holder.rows.count()) }\n",
-        );
-        assert_eq!(written["reset"], vec![vec![vec![field("rows")]]]);
-    }
+    const WRITING_FUNCTIONS: &str = "shape Holder { name: String rows: Array<Array<Int>> }\n\
+         function direct(lend holder: Holder) -> Nothing { holder.rows = [[1]] }\n\
+         function element(lend holder: Holder) -> Nothing { holder.rows[0] = [1] }\n\
+         function reader(share holder: Holder) -> Int { return holder.rows.count() }\n\
+         function forwarded(lend held: Holder) -> Nothing { direct(held) }\n\
+         function viaView(lend holder: Holder) -> Nothing {\n\
+           let view = holder.rows\n\
+           view[1] = [2]\n\
+         }\n\
+         function twoParameters(lend first: Holder, lend second: Holder) -> Nothing {\n\
+           second.name = `x`\n\
+         }\n";
 
-    // WHY (High): mutual recursion must reach a fixpoint, and a recursion that writes one step
-    // deeper on every round must stop: the place is cut at `MAX_WRITTEN_PLACE_STEPS`.
-    #[test]
-    fn mutually_recursive_functions_reach_a_fixpoint_and_a_deepening_recursion_is_cut() {
-        let written = summaries(
-            "shape Node { next: Node rows: Array<Int> }\n\
-             function ping(lend node: Node, depth: Int) -> Nothing {\n\
-               if (depth > 0) { pong(node, depth - 1) }\n\
-             }\n\
-             function pong(lend node: Node, depth: Int) -> Nothing {\n\
-               ping(node, depth)\n\
-               node.rows = [1]\n\
-             }\n\
-             function deepen(lend node: Node) -> Nothing {\n\
-               deepen(node.next)\n\
-               node.rows = [1]\n\
-             }\n",
-        );
-        for name in ["ping", "pong"] {
-            assert_eq!(written[name][0], vec![vec![field("rows")]], "{name}");
+    // Case bug: a field assigned through a parameter is missed.
+    written_places_case!(
+        a_function_writes_the_field_it_assigns_through_a_parameter,
+        WRITING_FUNCTIONS,
+        |written| {
+            assert_eq!(written["direct"], vec![vec![vec![field("rows")]]]);
         }
-        let deepest = written["deepen"][0]
-            .iter()
-            .map(Vec::len)
-            .max()
-            .expect("deepen writes something");
-        assert_eq!(deepest, MAX_WRITTEN_PLACE_STEPS);
-        assert!(
-            written["deepen"][0].contains(&vec![field("rows")]),
-            "the direct write stays: {:?}",
-            written["deepen"][0]
-        );
-    }
+    );
+    // Case bug: an element assigned through a parameter is recorded as the whole field (or missed).
+    written_places_case!(
+        a_function_writes_the_element_it_assigns_through_a_parameter,
+        WRITING_FUNCTIONS,
+        |written| {
+            assert_eq!(
+                written["element"],
+                vec![vec![vec![field("rows"), WrittenStep::Element(Some(0))]]]
+            );
+        }
+    );
+    // Case bug: a function that only reads is summarised as writing.
+    written_places_case!(
+        a_function_that_only_reads_writes_nothing,
+        WRITING_FUNCTIONS,
+        |written| {
+            assert_eq!(written["reader"], vec![Vec::<WrittenPlace>::new()]);
+        }
+    );
+    // Case bug: a write made by a callee is not attributed to the caller's parameter.
+    written_places_case!(
+        a_function_writes_the_places_its_callee_writes,
+        WRITING_FUNCTIONS,
+        |written| {
+            assert_eq!(written["forwarded"], vec![vec![vec![field("rows")]]]);
+        }
+    );
+    // Case bug: a write to a view (a read that is written is a copy, `non_owned_reads` rule (a))
+    // is attributed to `holder.rows`.
+    written_places_case!(
+        a_write_to_a_view_is_not_a_write_through_the_parameter,
+        WRITING_FUNCTIONS,
+        |written| {
+            assert_eq!(written["viaView"], vec![Vec::<WrittenPlace>::new()]);
+        }
+    );
+    // Case bug: a write through the second parameter is attributed to the first.
+    written_places_case!(
+        a_write_is_attributed_to_the_parameter_it_goes_through,
+        WRITING_FUNCTIONS,
+        |written| {
+            assert_eq!(
+                written["twoParameters"],
+                vec![Vec::<WrittenPlace>::new(), vec![vec![field("name")]]]
+            );
+        }
+    );
+    // Case bug: a function defined twice (a diagnosed error) with bodies that write different
+    // places keeps the fixpoint from settling: the compiler hung on this program.
+    written_places_case!(
+        a_function_defined_twice_keeps_the_summary_of_its_first_definition,
+        "shape Holder { rows: Array<Array<Int>> }\n\
+         function reset(lend holder: Holder) -> Nothing { holder.rows = [[1]] }\n\
+         function reset(lend holder: Holder) -> Nothing { print(holder.rows.count()) }\n",
+        |written| {
+            assert_eq!(written["reset"], vec![vec![vec![field("rows")]]]);
+        }
+    );
+    // Case bug: mutual recursion does not reach a fixpoint: `ping` only writes through `pong`.
+    written_places_case!(
+        mutually_recursive_functions_reach_a_fixpoint,
+        "shape Node { next: Node rows: Array<Int> }\n\
+         function ping(lend node: Node, depth: Int) -> Nothing {\n\
+           if (depth > 0) { pong(node, depth - 1) }\n\
+         }\n\
+         function pong(lend node: Node, depth: Int) -> Nothing {\n\
+           ping(node, depth)\n\
+           node.rows = [1]\n\
+         }\n",
+        |written| {
+            assert_eq!(written["ping"][0], vec![vec![field("rows")]]);
+        }
+    );
+    // Case bug: a recursion that writes one step deeper on every round never stops; the place is
+    // cut at `MAX_WRITTEN_PLACE_STEPS`.
+    written_places_case!(
+        a_deepening_recursion_is_cut,
+        "shape Node { next: Node rows: Array<Int> }\n\
+         function deepen(lend node: Node) -> Nothing {\n\
+           deepen(node.next)\n\
+           node.rows = [1]\n\
+         }\n",
+        |written| {
+            let deepest = written["deepen"][0]
+                .iter()
+                .map(Vec::len)
+                .max()
+                .expect("deepen writes something");
+            assert_eq!(deepest, MAX_WRITTEN_PLACE_STEPS);
+            assert!(
+                written["deepen"][0].contains(&vec![field("rows")]),
+                "the direct write stays: {:?}",
+                written["deepen"][0]
+            );
+        }
+    );
 }

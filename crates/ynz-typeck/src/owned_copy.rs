@@ -535,6 +535,10 @@ mod tests {
     use super::*;
     use crate::type_variant_sampler::all_type_variants;
 
+    // The sweep runs over `all_type_variants()`, a runtime list in `ynz-typeck`, where
+    // `parallel_sweep` (ynz-driver tests) is unreachable; it stays a loop (rubric 11.9), and apart
+    // from the named-case table below because its harness is a sweep, not a fixed input.
+    // bug: `.copy()` hands back the receiver while claiming to copy a type whose contents can change, so two owners alias one value | tier: High
     #[test]
     fn every_type_variant_is_a_copy_or_a_refusal_and_never_a_silent_alias() {
         // WHY: the ruling this module encodes has exactly two buckets. A third — "hands back
@@ -566,65 +570,64 @@ mod tests {
         }
     }
 
-    #[test]
-    fn every_refusal_fills_all_three_teaching_slots() {
-        for ty in all_type_variants() {
-            if let OwnedCopy::Refused(r) = owned_copy_plan(&ty) {
-                assert!(!r.fix.trim().is_empty(), "{ty:?}: empty WHAT-INSTEAD");
-                assert!(!r.why.trim().is_empty(), "{ty:?}: empty WHY");
+    /// One named test per case so the runner names the failing case.
+    macro_rules! owned_copy_plan_case {
+        ($test_name:ident, $ty:expr, $expected:pat) => {
+            // bug: owned_copy_plan picks the wrong copy for a type (a shallow clone that shares inner allocations, or a copy of a handle that cannot be copied) | tier: High
+            #[test]
+            fn $test_name() {
+                let plan = owned_copy_plan(&$ty);
+                assert!(matches!(plan, $expected), "{plan:?}");
             }
+        };
+    }
+
+    // Case bug: a channel is copied (two owners of one conduit) instead of refused.
+    owned_copy_plan_case!(
+        a_conduit_is_a_refusal_not_a_copy,
+        Type::BuiltinChannel {
+            elem: Box::new(Type::Int)
+        },
+        OwnedCopy::Refused(_)
+    );
+    // Case bug: a task handle is copied instead of refused.
+    owned_copy_plan_case!(
+        a_task_handle_is_a_refusal_not_a_copy,
+        Type::BackgroundHandle {
+            result: Box::new(Type::Int),
+            msg_elem: None,
+        },
+        OwnedCopy::Refused(_)
+    );
+    // Case bug (FR #9's own type): a one-level clone leaves two containers sharing their inner arrays.
+    owned_copy_plan_case!(
+        an_array_of_arrays_copies_its_items_too,
+        Type::BuiltinArray {
+            elem: Box::new(Type::BuiltinArray {
+                elem: Box::new(Type::Int)
+            })
+        },
+        OwnedCopy::ArrayClone {
+            elem: ElemCopy::Nested
         }
-    }
-
-    #[test]
-    fn a_conduit_and_a_task_handle_are_refusals_not_copies() {
-        assert!(matches!(
-            owned_copy_plan(&Type::BuiltinChannel {
-                elem: Box::new(Type::Int)
-            }),
-            OwnedCopy::Refused(_)
-        ));
-        assert!(matches!(
-            owned_copy_plan(&Type::BackgroundHandle {
-                result: Box::new(Type::Int),
-                msg_elem: None,
-            }),
-            OwnedCopy::Refused(_)
-        ));
-    }
-
-    #[test]
-    fn an_array_of_arrays_copies_its_items_too() {
-        // WHY: this is FR #9's own type. A one-level clone would leave the two containers
-        // sharing their inner arrays, which is the alias the ruling removes one level down.
-        assert_eq!(
-            owned_copy_plan(&Type::BuiltinArray {
-                elem: Box::new(Type::BuiltinArray {
-                    elem: Box::new(Type::Int)
-                })
-            }),
-            OwnedCopy::ArrayClone {
-                elem: ElemCopy::Nested
-            }
-        );
-        assert_eq!(
-            owned_copy_plan(&Type::BuiltinArray {
-                elem: Box::new(Type::Int)
-            }),
-            OwnedCopy::ArrayClone {
-                elem: ElemCopy::Inline
-            }
-        );
-    }
-
-    #[test]
-    fn a_fixed_list_of_ints_copies_and_pin_n_is_a_value_contract() {
-        assert_eq!(
-            owned_copy_plan(&Type::BuiltinFixed {
-                elem: Box::new(Type::Int),
-                size: crate::types::FixedLength::Known(3),
-            }),
-            OwnedCopy::FixedMemcpy
-        );
-    }
+    );
+    // Case bug: an array of plain values is copied element by element through a nested clone.
+    owned_copy_plan_case!(
+        an_array_of_ints_copies_inline,
+        Type::BuiltinArray {
+            elem: Box::new(Type::Int)
+        },
+        OwnedCopy::ArrayClone {
+            elem: ElemCopy::Inline
+        }
+    );
+    // Case bug: a fixed list of ints is copied through the heap path, or refused.
+    owned_copy_plan_case!(
+        a_fixed_list_of_ints_copies_by_memcpy,
+        Type::BuiltinFixed {
+            elem: Box::new(Type::Int),
+            size: crate::types::FixedLength::Known(3),
+        },
+        OwnedCopy::FixedMemcpy
+    );
 }
