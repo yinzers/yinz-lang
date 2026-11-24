@@ -573,12 +573,79 @@ fn message_before_failed_check_is_rendered_from_the_registry() {
     );
 }
 
-// bug: typeck refuses a `.message` read inside the true branch of its own `.failed()` check, so a correct program is rejected | tier: High
-#[test]
-fn message_is_admitted_inside_its_own_failed_check() {
+// The `.message` read of an error value that was never checked with `.failed()` is refused, and the
+// refusal is rendered from the registry, so the slots are asserted with it. One named test per receiver.
+macro_rules! message_refused_cases {
+    ($($case:ident: $program:expr, $name:literal;)+) => {
+        $(
+            // bug: typeck admits a `.message` read of an error value that was never checked (a shadowing rebinding inside the guard, a receiver never bound to a name), so an empty or null error message is read at run time | tier: High
+            #[test]
+            fn $case() {
+                assert_rendered(
+                    DiagnosticKind::MessageBeforeFailedCheck,
+                    $program,
+                    &[("name", $name), ("field", "message")],
+                );
+            }
+        )+
+    };
+}
+
+// A `.message` read of an error value that WAS checked with `.failed()` is admitted: no
+// `MessageBeforeFailedCheck`. A different harness from the refusals (`errors_for`, not
+// `assert_rendered`), so a table of its own.
+macro_rules! message_admitted_cases {
+    ($($case:ident: $program:expr, $context:literal, $bug:literal;)+) => {
+        $(
+            // bug: typeck refuses a `.message` read of an error value checked with `.failed()`, so a correct program is rejected | tier: High
+            #[doc = $bug]
+            #[test]
+            fn $case() {
+                let errors = errors_for($program);
+                assert!(
+                    !errors
+                        .iter()
+                        .any(|d| d.kind == Some(DiagnosticKind::MessageBeforeFailedCheck)),
+                    "{}; got:\n{:#?}",
+                    $context,
+                    errors.iter().map(|d| &d.what).collect::<Vec<_>>()
+                );
+            }
+        )+
+    };
+}
+
+message_refused_cases! {
+    // WHY: v0.3 concurrency hardening Phase 3 (FRAGO 002 cluster C3, closes parked 33). RED
+    // before the fix: `errors_failed_true_branch`/`errors_consumed`/`errors_success_narrowed`
+    // keyed on the bare name "x", so a shadowing inner `let x = ...` INSIDE the guarded block
+    // inherited the outer `x`'s checked status and this compiled clean, printing `""` at
+    // runtime instead of refusing at compile time. GREEN after the fix: the sets are keyed by
+    // `ScopeEntry::alias_class` (binding identity), so the inner `x` - a fresh alias class -
+    // is never a member and is correctly refused.
+    message_before_failed_check_fires_on_a_shadowed_rebinding_inside_the_guard:
+        "function mayFail(n: Int) -> String errors { return `v${n}` }\n\
+         function entrypoint() -> Nothing {\n\
+           let x = mayFail(1)\n\
+           if (x.failed()) {\n\
+             let x = mayFail(3)\n\
+             print(x.message)\n\
+           }\n\
+         }", "x";
+    // A `.message` read on a receiver that was never bound to a name can never have been
+    // legally checked (`extract_failed_binding` only recognizes bare-ident receivers) -
+    // always refused, with a source-shaped `{name}` rendered from the expression itself.
+    message_before_failed_check_refuses_a_non_ident_receiver:
+        "function freshResult() -> String errors { return `hello` }\n\
+         function entrypoint() -> Nothing {\n\
+           print(freshResult().message)\n\
+         }", "freshResult()";
+}
+
+message_admitted_cases! {
     // The one shape REF-errors.md documents as legal: `.message` read INSIDE the true
     // branch of `if (name.failed())`. Must compile with NO MessageBeforeFailedCheck.
-    let errors = errors_for(
+    message_is_admitted_inside_its_own_failed_check:
         "function entrypoint() -> Nothing {\n\
            let wire: Channel<Int> = Channel<Int>(2)\n\
            wire.close()\n\
@@ -587,55 +654,15 @@ fn message_is_admitted_inside_its_own_failed_check() {
              print(late.message)\n\
            }\n\
          }",
-    );
-    assert!(
-        !errors
-            .iter()
-            .any(|d| d.kind == Some(DiagnosticKind::MessageBeforeFailedCheck)),
-        "a `.message` read inside `if (late.failed()) {{ ... }}` must be admitted; got:\n{:#?}",
-        errors.iter().map(|d| &d.what).collect::<Vec<_>>()
-    );
-}
-
-// bug: typeck lets a shadowing `let x` inside a `.failed()` guard inherit the outer binding's checked status, so an unchecked `.message` read compiles and prints an empty string at run time | tier: High
-#[test]
-fn message_before_failed_check_fires_on_a_shadowed_rebinding_inside_the_guard() {
-    // WHY: v0.3 concurrency hardening Phase 3 (FRAGO 002 cluster C3, closes parked 33). RED
-    // before the fix: `errors_failed_true_branch`/`errors_consumed`/`errors_success_narrowed`
-    // keyed on the bare name "x", so a shadowing inner `let x = ...` INSIDE the guarded block
-    // inherited the outer `x`'s checked status and this compiled clean, printing `""` at
-    // runtime instead of refusing at compile time. GREEN after the fix: the sets are keyed by
-    // `ScopeEntry::alias_class` (binding identity), so the inner `x` — a fresh alias class —
-    // is never a member and is correctly refused.
-    assert_rendered(
-        DiagnosticKind::MessageBeforeFailedCheck,
-        "function mayFail(n: Int) -> String errors { return `v${n}` }\n\
-         function entrypoint() -> Nothing {\n\
-           let x = mayFail(1)\n\
-           if (x.failed()) {\n\
-             let x = mayFail(3)\n\
-             print(x.message)\n\
-           }\n\
-         }",
-        &[("name", "x"), ("field", "message")],
-    );
-}
-
-// bug: a for-destructure binding that shadows a `.failed()`-checked name disturbs the checked set, so the outer binding's `.message` read after the loop is refused | tier: High
-#[test]
-fn a_for_destructure_binding_shadows_by_identity_not_just_by_type_mismatch() {
-    // WHY: the plan's own note — `for ((k, v) in m)` desugars its destructure names to
-    // synthetic `Stmt::Let`s (`ynz-parser`'s `parse_for_destructure`), which go through the
-    // SAME binding-event path (`binding_event_origin`, a fresh `alias_class` per binding
-    // event) as a source-level `let` — no special-casing needed, only verification. `v` here
-    // shadows the outer `.failed()`-checked `v`; `Map<String,Int>`'s value type means the
-    // inner `v` is `Int`, which correctly refuses `.message` for an ordinary reason (`Int` has
-    // no fields) — a DIFFERENT diagnostic than `MessageBeforeFailedCheck`. That difference is
-    // the point: it proves the inner `v`'s alias class was never a member of
-    // `errors_failed_true_branch` in the first place (had the old bare-name key survived,
-    // `.message` would have been evaluated as an EC field access at all, not stopped one step
-    // earlier by ordinary field-lookup on `Int`).
-    let errors = errors_for(
+        "a `.message` read inside `if (late.failed()) { ... }` must be admitted",
+        "typeck refuses a `.message` read inside the true branch of its own `.failed()` check";
+    // The plan's own note: `for ((k, v) in m)` desugars its destructure names to synthetic
+    // `Stmt::Let`s, which go through the same binding-event path (a fresh `alias_class` per
+    // binding event) as a source-level `let`. `v` here shadows the outer checked `v`; the inner
+    // `v` is an `Int`, which refuses `.message` for an ordinary reason (`Int` has no fields), a
+    // DIFFERENT diagnostic than `MessageBeforeFailedCheck`. That difference proves the inner
+    // `v`'s alias class was never a member of `errors_failed_true_branch`.
+    a_for_destructure_binding_shadows_by_identity_not_just_by_type_mismatch:
         "function mayFail(n: Int) -> String errors { return `v${n}` }\n\
          function entrypoint() -> Nothing {\n\
            let v = mayFail(1)\n\
@@ -647,27 +674,12 @@ fn a_for_destructure_binding_shadows_by_identity_not_just_by_type_mismatch() {
              print(v.message)\n\
            }\n\
          }",
-    );
-    assert!(
-        !errors
-            .iter()
-            .any(|d| d.kind == Some(DiagnosticKind::MessageBeforeFailedCheck)),
-        "the OUTER `v`, checked with `.failed()` and read AFTER the for-destructure loop's \
-         scope pops, must still be admitted — the loop's own scope push/pop must not disturb \
-         `errors_failed_true_branch`'s bookkeeping for a name it shadowed and released; \
-         got:\n{:#?}",
-        errors.iter().map(|d| &d.what).collect::<Vec<_>>()
-    );
-}
-
-// bug: typeck forgets the outer binding's checked status once an inner shadow's block exits, so a correct `.message` read is refused | tier: High
-#[test]
-fn message_is_still_admitted_for_the_outer_binding_after_a_shadow_pops() {
-    // WHY: the fix must not overcorrect — after the shadowing inner block exits and its
-    // alias class goes out of scope, the OUTER `x` (the one actually checked) must still be
-    // admitted. Guards against a fix that empties the checked-set on any shadow rather than
-    // scoping it correctly.
-    let errors = errors_for(
+        "the OUTER `v`, checked with `.failed()` and read AFTER the for-destructure loop's scope pops, must still be admitted: the loop's own scope push/pop must not disturb `errors_failed_true_branch`'s bookkeeping for a name it shadowed and released",
+        "a for-destructure binding that shadows a `.failed()`-checked name disturbs the checked set, so the outer binding's `.message` read after the loop is refused";
+    // The fix must not overcorrect: after the shadowing inner block exits and its alias class
+    // goes out of scope, the OUTER `x` (the one actually checked) must still be admitted.
+    // Guards against a fix that empties the checked set on any shadow rather than scoping it.
+    message_is_still_admitted_for_the_outer_binding_after_a_shadow_pops:
         "function mayFail(n: Int) -> String errors { return `v${n}` }\n\
          function entrypoint() -> Nothing {\n\
            let x = mayFail(1)\n\
@@ -676,15 +688,8 @@ fn message_is_still_admitted_for_the_outer_binding_after_a_shadow_pops() {
              print(x.message)\n\
            }\n\
          }",
-    );
-    assert!(
-        !errors
-            .iter()
-            .any(|d| d.kind == Some(DiagnosticKind::MessageBeforeFailedCheck)),
-        "the outer `x`, still in scope and still checked after the inner shadow's block \
-         exits, must be admitted; got:\n{:#?}",
-        errors.iter().map(|d| &d.what).collect::<Vec<_>>()
-    );
+        "the outer `x`, still in scope and still checked after the inner shadow's block exits, must be admitted",
+        "typeck forgets the outer binding's checked status once an inner shadow's block exits, so a correct `.message` read is refused";
 }
 
 // bug: typeck renders EcFieldNotYetAvailable from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
@@ -759,22 +764,6 @@ fn ec_field_not_yet_available_does_not_shadow_the_failed_check_gate() {
            print(late.trace.count().toString())\n\
          }",
         &[("name", "late"), ("field", "trace")],
-    );
-}
-
-// bug: typeck admits a `.message` read on a receiver that was never bound to a name, so an unchecked error value is read | tier: High
-#[test]
-fn message_before_failed_check_refuses_a_non_ident_receiver() {
-    // A `.message` read on a receiver that was never bound to a name can never have been
-    // legally checked (`extract_failed_binding` only recognizes bare-ident receivers) —
-    // always refused, with a source-shaped `{name}` rendered from the expression itself.
-    assert_rendered(
-        DiagnosticKind::MessageBeforeFailedCheck,
-        "function freshResult() -> String errors { return `hello` }\n\
-         function entrypoint() -> Nothing {\n\
-           print(freshResult().message)\n\
-         }",
-        &[("name", "freshResult()"), ("field", "message")],
     );
 }
 
