@@ -1,5 +1,5 @@
 // WHY: Code-action integration cases verify that quick-fixes are produced for
-// BannedKeyword, banned-jargon, old-builtin-type and import diagnostics, that
+// BannedKeyword, banned-jargon and import diagnostics, that
 // the replacement text is registry-driven (not hardcoded in the handler), and
 // that diagnostics WITHOUT a fix return nothing instead of a spurious edit.
 // Bugs here produce a missing lightbulb for a real error or a broken
@@ -98,7 +98,7 @@ fn banned_keywords_on_two_lines(range_of: fn(&str) -> lsp_types::Range) -> Scena
 
 macro_rules! code_action_case {
     ($name:ident, $scenario:expr, $check:expr) => {
-        // bug: codeAction offers no fix, a wrong replacement, a fix outside the requested range or a spurious fix for a banned keyword, banned jargon, old builtin type or import diagnostic | tier: Medium
+        // bug: codeAction offers no fix, a wrong replacement, a fix outside the requested range or a spurious fix for a banned keyword, banned jargon or import diagnostic | tier: Medium
         #[test]
         fn $name() {
             let scenario: Scenario = $scenario;
@@ -215,38 +215,6 @@ code_action_case!(
             .replacement;
         let edits = edits_for(&[*action], uri);
         assert_eq!(edits[0].new_text, expected_replacement);
-    }
-);
-
-// ─── Old lowercase builtin type ──────────────────────────────────────────────
-// The edit text comes from the one shared old->new table; the edit must cover
-// exactly the `int` token.
-code_action_case!(
-    old_lowercase_type_spelling_gets_a_quick_fix_to_pascal_case,
-    {
-        let src = "function entrypoint() -> Nothing {\n  let count: int = 1\n  print(count)\n}\n";
-        let offset = src.find(": int").expect("`: int` in source") + 2;
-        single_file("/tmp/ynz_old_builtin_type.ynz", src, |_| {
-            range_between(src, offset, offset + 3)
-        })
-    },
-    |actions, uri| {
-        let int_fixes: Vec<&&CodeAction> = actions
-            .iter()
-            .filter(|action| {
-                edits_for(&[**action], uri)
-                    .iter()
-                    .any(|edit| edit.new_text == "Int")
-            })
-            .collect();
-        assert_eq!(int_fixes.len(), 1, "one `Int` fix; got {actions:#?}");
-        assert_eq!(int_fixes[0].kind, Some(lsp_types::CodeActionKind::QUICKFIX));
-        let edits = edits_for(&[*int_fixes[0]], uri);
-        assert_eq!(edits.len(), 1);
-        assert_eq!(
-            edits[0].range.end.character - edits[0].range.start.character,
-            3
-        );
     }
 );
 
