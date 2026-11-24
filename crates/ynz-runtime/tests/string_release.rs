@@ -27,8 +27,9 @@ fn text<'string>(string: *const u8) -> &'string str {
         .expect("test strings are UTF-8")
 }
 
-/// Bug caught: a release that frees a literal's (or `[REDACTED]`'s) bytes: an invalid free
-/// (SEGV on .rodata), the S1 crash of t01/t31/t32. (High)
+/// A release that frees a literal's bytes is an invalid free (SEGV on .rodata), the S1 crash of
+/// t01/t31/t32.
+// bug: ynz_string_release frees a literal's static bytes, an invalid free that crashes | tier: High
 #[test]
 fn releasing_static_bytes_leaves_them_untouched() {
     let literal = LITERAL.string_pointer();
@@ -41,8 +42,14 @@ fn releasing_static_bytes_leaves_them_untouched() {
         "hello",
         "a literal survives any number of releases"
     );
+}
 
-    // Without YNZ_REVEAL_SENSITIVE the sensitive-to-string result is the static redaction.
+/// Without YNZ_REVEAL_SENSITIVE the sensitive-to-string result is the static redaction, which is
+/// released like any other string.
+// bug: ynz_string_release frees the static `[REDACTED]` bytes that ynz_sensitive_to_string returns, an invalid free that crashes | tier: High
+#[test]
+fn releasing_the_redaction_leaves_it_untouched() {
+    let literal = LITERAL.string_pointer();
     let redacted = unsafe { ynz_sensitive_to_string(literal) };
     assert_ne!(redacted, literal, "the test needs the redacted branch");
     unsafe { ynz_string_release(redacted) };
@@ -54,6 +61,7 @@ fn releasing_static_bytes_leaves_them_untouched() {
 macro_rules! int_to_string_case {
     ($bug:literal; $($case:ident: $value:expr => $expected:expr,)+) => {
         $(
+                        // bug: ynz_int_to_string's digit loop is wrong at a boundary (zero, a carry into a new digit, the sign, i64::MIN, the 20-byte maximum) | tier: High
             #[doc = $bug]
             #[test]
             fn $case() {
@@ -74,7 +82,8 @@ int_to_string_case!(
     int_to_string_of_i64_min: i64::MIN => "-9223372036854775808",
 );
 
-/// Bug caught: two conversions alive at once share one buffer (the `222 222` bug, S1 t06). (High)
+/// Two conversions alive at once must not share one buffer (the `222 222` bug, S1 t06).
+// bug: two int or float to-string conversions alive at once share one buffer, so both read the later value | tier: High
 #[test]
 fn two_live_conversions_hold_two_values() {
     let first = ynz_int_to_string(111);
@@ -95,6 +104,7 @@ fn two_live_conversions_hold_two_values() {
 macro_rules! float_to_string_case {
     ($bug:literal; $($case:ident: $value:expr => $expected:expr,)+) => {
         $(
+                        // bug: ynz_float_to_string cuts a long float text to a fixed buffer, hiding a wrong float literal behind a truncated denormal | tier: High
             #[doc = $bug]
             #[test]
             fn $case() {

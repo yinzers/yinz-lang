@@ -68,6 +68,7 @@ fn assert_frees_only_the_heap_strings(
     );
 }
 
+// bug: releasing an array or map frees a static string's bytes (invalid free) or leaks a heap string it owns | tier: High
 #[test]
 fn a_container_release_frees_its_heap_strings_and_leaves_its_static_ones() {
     // Latched once by `ynz_rt_init`, exactly as a compiled program does.

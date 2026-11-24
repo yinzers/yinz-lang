@@ -10,21 +10,38 @@ fn convert(text: &str) -> f64 {
     unsafe { ynz_bignum_to_float(c_text.as_ptr()) }
 }
 
-#[test]
-fn bignum_text_converts_to_nearest_f64() {
-    // Bug caught: wrong f64 for well-formed bignum text (sign, fraction, zero, 40-digit input).
-    assert_eq!(convert("12345.5"), 12345.5);
-    assert_eq!(convert("-0.25"), -0.25);
-    assert_eq!(convert("0"), 0.0);
-    assert_eq!(
-        convert("0.3333333333333333333333333333333333333333"),
-        1.0 / 3.0
-    );
+macro_rules! bignum_to_float_cases {
+    ($($case:ident: $text:literal => $expected:expr;)+) => {
+        $(
+            // bug: ynz_bignum_to_float returns the wrong f64 for well-formed bignum text (sign, fraction, zero, 40-digit input), so `.toFloat()` and `.toInt()` on number<N> are wrong | tier: High
+            #[test]
+            fn $case() {
+                assert_eq!(convert($text), $expected);
+            }
+        )+
+    };
 }
 
-#[test]
-fn unparseable_text_is_nan_not_zero() {
-    // Bug caught: unparseable text silently converting to 0.0.
-    assert!(convert("not a number").is_nan());
-    assert!(convert("").is_nan());
+bignum_to_float_cases! {
+    positive_fraction_converts_exactly: "12345.5" => 12345.5;
+    negative_fraction_converts_exactly: "-0.25" => -0.25;
+    zero_converts_to_zero: "0" => 0.0;
+    forty_digit_input_rounds_to_the_nearest_f64: "0.3333333333333333333333333333333333333333" => 1.0 / 3.0;
+}
+
+macro_rules! unparseable_bignum_text_cases {
+    ($($case:ident: $text:literal;)+) => {
+        $(
+            // bug: ynz_bignum_to_float turns unparseable text silently into 0.0 instead of NaN | tier: High
+            #[test]
+            fn $case() {
+                assert!(convert($text).is_nan());
+            }
+        )+
+    };
+}
+
+unparseable_bignum_text_cases! {
+    words_are_nan_not_zero: "not a number";
+    empty_text_is_nan_not_zero: "";
 }
