@@ -3916,28 +3916,6 @@ mod m3d_join_shims {
         CaptureCtx::<F, R>(Some(f), std::marker::PhantomData).await
     }
 
-    // bug: ynz_rt_join_poll writes a wrong or partial 16-byte result for an int return, so a joined cpu task returns the wrong value | tier: High
-    #[tokio::test]
-    async fn value_roundtrip_int() {
-        // WHY: guards that ynz_rt_join_poll writes the correct 16-byte result to the
-        // result_out slot and returns 0 (Ready) when the child has finished.
-        let slot = spawn_join_collect(returns_42).await;
-        assert_eq!(slot.0, [42, 0], "result must be [42, 0] for returns_42");
-    }
-
-    // bug: ynz_rt_join_poll truncates or sign-extends a word of a saturated [i64::MIN, i64::MAX] result, so a decimal128 half is wrong | tier: High
-    #[tokio::test]
-    async fn value_roundtrip_saturation() {
-        // WHY: decimal128 paths write [lo_word, hi_word]; this test uses [i64::MIN, i64::MAX]
-        // to confirm neither word is truncated or sign-extended incorrectly through the ABI.
-        let slot = spawn_join_collect(returns_saturated).await;
-        assert_eq!(
-            slot.0,
-            [i64::MIN, i64::MAX],
-            "saturated values must survive the ABI unchanged"
-        );
-    }
-
     // float result: the f64 is bit-cast (NOT truncated) into the low i64 word.
     extern "C-unwind" fn returns_float(_ctx: *mut u8) -> YnzCpuResult {
         YnzCpuResult([(std::f64::consts::PI).to_bits() as i64, 0])
@@ -4000,84 +3978,37 @@ mod m3d_join_shims {
         }
     }
 
-    // bug: ynz_rt_join_poll int-casts an f64 result instead of bit-casting it into the low word, so a joined float is wrong | tier: High
-    #[tokio::test]
-    async fn value_roundtrip_float() {
-        // WHY: the float return class bit-casts an f64 into the low i64 word. A truncation
-        // or an int-cast (instead of a bit-cast) would corrupt the value; reconstructing the
-        // f64 from the round-tripped bits proves the ABI preserves the exact bit pattern.
-        let slot = spawn_join_collect(returns_float).await;
-        let recovered = f64::from_bits(slot.0[0] as u64);
-        assert_eq!(
-            recovered,
-            std::f64::consts::PI,
-            "float must survive the [i64;2] ABI as an exact bit-cast"
-        );
-        assert_eq!(slot.0[1], 0, "high word must be zero for the float class");
+    /// `join_poll_result_case!(case_name: child_fn => expected_words)`: a joined cpu task's
+    /// 16-byte result reaches the caller's result slot as exactly the two words the child
+    /// returned, and the 16-aligned slot also reads back as the matching i128 (the decimal128
+    /// load); `expected_words` is `[low_word, high_word]` for each result class.
+    macro_rules! join_poll_result_case {
+        ($($name:ident: $child:ident => $expected_words:expr,)*) => {$(
+            // bug: ynz_rt_join_poll writes a wrong or partial word of a joined cpu task's 16-byte result (an int, saturated halves sign-extended, an f64 int-cast instead of bit-cast, clobbered pointer bits, swapped decimal128 lo/hi, a dropped err_tag or ok word), or the slot is not 16-byte aligned for the i128 load | tier: High
+            #[tokio::test]
+            async fn $name() {
+                let slot = spawn_join_collect($child).await;
+                assert_eq!(slot.0, $expected_words, "result words must survive the ABI unchanged");
+                let slot_address = slot.0.as_ptr() as usize;
+                assert_eq!(
+                    slot_address % 16,
+                    0,
+                    "the result slot must be 16-byte aligned (a misaligned i128 load is SIGBUS or silently wrong)"
+                );
+                // SAFETY: slot_address is 16-byte aligned (asserted above) and points to 16 valid bytes.
+                let as_i128 = unsafe { (slot.0.as_ptr() as *const u128).read() };
+                let [low_word, high_word] = $expected_words;
+                assert_eq!(as_i128, ((high_word as u64 as u128) << 64) | (low_word as u64 as u128));
+            }
+        )*};
     }
-
-    // bug: ynz_rt_join_poll clobbers the pointer bits of a string, array or map result | tier: High
-    #[tokio::test]
-    async fn value_roundtrip_ptr() {
-        // WHY: string/array/map returns pack a heap pointer into the low word. The runtime
-        // moves the bits opaquely; this guards that no pointer bits are clobbered in transit.
-        let slot = spawn_join_collect(returns_ptr_bits).await;
-        assert_eq!(
-            slot.0[0] as u64, 0x0000_7FFF_DEAD_C0DE_u64,
-            "pointer-shaped low word must round-trip unchanged"
-        );
-        assert_eq!(slot.0[1], 0, "high word must be zero for the pointer class");
-    }
-
-    // bug: ynz_rt_join_poll swaps or truncates the lo/hi words of a decimal128 result, or the result slot is not 16-byte aligned for the i128 load | tier: High
-    #[tokio::test]
-    async fn value_roundtrip_decimal128_aligned() {
-        // WHY: number/decimal128 returns use BOTH i64 words ([lo, hi]). A decimal128 is a
-        // 128-bit value; reading the round-tripped result slot AS an i128 is only correct
-        // when the slot is 16-byte aligned — a misaligned i128 load is a SIGBUS / silent-wrong
-        // class on strict-alignment targets (the failure mode the plan calls out explicitly).
-        // This test (a) confirms both words survive without a lo/hi swap, and (b) asserts the
-        // result slot is 16-byte aligned and reads back as the exact i128 via an aligned load.
-        let slot = spawn_join_collect(returns_decimal128).await;
-
-        // (a) Both words survive independently.
-        let lo = slot.0[0] as u64;
-        let hi = slot.0[1] as u64;
-        let reconstructed = ((hi as u128) << 64) | (lo as u128);
-        assert_eq!(
-            reconstructed, DECIMAL128_TEST_VALUE,
-            "decimal128 must round-trip through [lo, hi] without word swap or truncation"
-        );
-
-        // (b) Explicit 16-byte alignment assertion on the result slot, then an aligned i128
-        // load. AlignedResultSlot is #[repr(C, align(16))] so the slot base is 16-aligned —
-        // the same alignment codegen guarantees for the frame result slot. Reading it as a
-        // *const u128 must not fault and must equal the expected value.
-        let slot_addr = slot.0.as_ptr() as usize;
-        assert_eq!(
-            slot_addr % 16,
-            0,
-            "decimal128 result slot must be 16-byte aligned (misaligned i128 load is SIGBUS/silent-wrong class)"
-        );
-        // SAFETY: slot_addr is 16-byte aligned (asserted above) and points to 16 valid bytes.
-        let as_i128 = unsafe { (slot.0.as_ptr() as *const u128).read() };
-        assert_eq!(
-            as_i128, DECIMAL128_TEST_VALUE,
-            "aligned i128 load of the result slot must equal the original decimal128 value"
-        );
-    }
-
-    // bug: ynz_rt_join_poll drops or merges the err_tag or ok word of a `T errors` result pair | tier: High
-    #[tokio::test]
-    async fn value_roundtrip_error_pair() {
-        // WHY: `T errors` returns pack [err_tag, ok_bits]. Both words are load-bearing — the
-        // tag selects the variant and must not be dropped or merged with the ok word.
-        let slot = spawn_join_collect(returns_error_pair).await;
-        assert_eq!(
-            slot.0,
-            [7, 0],
-            "error-channel pair must round-trip both words ([err_tag, ok_bits])"
-        );
+    join_poll_result_case! {
+        value_roundtrip_int: returns_42 => [42, 0],
+        value_roundtrip_saturation: returns_saturated => [i64::MIN, i64::MAX],
+        value_roundtrip_float: returns_float => [std::f64::consts::PI.to_bits() as i64, 0],
+        value_roundtrip_ptr: returns_ptr_bits => [0x0000_7FFF_DEAD_C0DE_u64 as i64, 0],
+        value_roundtrip_decimal128_aligned: returns_decimal128 => [DECIMAL128_TEST_VALUE as u64 as i64, (DECIMAL128_TEST_VALUE >> 64) as u64 as i64],
+        value_roundtrip_error_pair: returns_error_pair => [7, 0],
     }
 
     // bug: ynz_rt_join_handle_free on a handle mid-flight frees the child's ctx copy or stops the child, so a cancelled parent crashes the child or loses its completion | tier: High
