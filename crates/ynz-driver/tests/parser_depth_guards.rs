@@ -26,56 +26,6 @@ fn deeply_nested_program(depth: usize) -> String {
     src
 }
 
-#[test]
-fn deeply_nested_blocks_never_abort_the_process() {
-    // 20 000 matches the audit's own live repro — comfortably past any real program
-    // and past the 8 MB default main-thread stack if recursion were unbounded.
-    let src = deeply_nested_program(20_000);
-
-    let mut file = tempfile::Builder::new()
-        .prefix("f2-deep-nest-")
-        .suffix(".ynz")
-        .tempfile()
-        .expect("failed to create temp fixture");
-    file.write_all(src.as_bytes())
-        .expect("failed to write fixture");
-    let path = file.path().to_path_buf();
-
-    let out = Command::new(ynz_binary())
-        .args(["run", path.to_str().unwrap()])
-        .env("CLICOLOR", "0")
-        .output()
-        .expect("failed to spawn ynz binary");
-
-    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-
-    // The process must exit normally (Some(code)), never be killed by a signal
-    // (SIGABRT/SIGSEGV from a raw stack overflow surfaces as `status.code() == None`
-    // on Unix). This is the load-bearing assertion — before the F2 fix, this fired
-    // as a raw stack-overflow abort with no code at all.
-    assert!(
-        out.status.code().is_some(),
-        "process was killed by a signal (raw stack overflow), not a clean diagnostic exit; \
-         status: {:?}\nstderr:\n{stderr}",
-        out.status
-    );
-
-    // Exit code 1 = clean compile error (see main.rs EXIT_COMPILE_ERROR). Exit code 2
-    // would mean this routed through the ICE hook (a panic), which is also wrong — F2's
-    // fix is a parser-level teaching diagnostic, not a caught panic.
-    assert_eq!(
-        out.status.code(),
-        Some(1),
-        "expected a clean compile-error exit (1), got {:?}\nstderr:\n{stderr}",
-        out.status.code()
-    );
-
-    assert!(
-        stderr.contains("Nesting too deep"),
-        "expected the F2 nesting-depth teaching diagnostic in stderr; got:\n{stderr}"
-    );
-}
-
 /// Builds a `.ynz` source string with `depth` levels of nested anonymous inline shape
 /// TYPES (`{ a: { a: { a: ... } } }`) used as a `let` binding's type annotation.
 fn deeply_nested_anon_shape_type_program(depth: usize) -> String {
@@ -93,19 +43,11 @@ fn deeply_nested_anon_shape_type_program(depth: usize) -> String {
     src
 }
 
-#[test]
-fn deeply_nested_anonymous_shape_types_never_abort_the_process() {
-    // BLOCKER 1: `parse_type_with_depth`'s
-    // `Token::LBrace` arm (anonymous inline shape type) parsed each field's type via a
-    // bare `self.parse_field_decl(...)` → `self.parse_type()`, which resets depth to 0
-    // on every nested field — bypassing BOTH the 16-level generic-nesting cap and the
-    // 256-level block-depth cap. `{ a: { a: ... } }` nesting in TYPE position overflowed
-    // the stack (real repro: SIGABRT around depth ~5000) with no diagnostic at all.
-    // 5_000 mirrors the audit's own live repro depth.
-    let src = deeply_nested_anon_shape_type_program(5_000);
-
+/// Writes `src` to a temp `.ynz` file and runs `ynz run` on it. Returns the exit code
+/// (`None` when a signal killed the process) and stderr.
+fn run_source(src: &str) -> (Option<i32>, String) {
     let mut file = tempfile::Builder::new()
-        .prefix("f-anon-shape-depth-")
+        .prefix("parser-depth-")
         .suffix(".ynz")
         .tempfile()
         .expect("failed to create temp fixture");
@@ -118,96 +60,97 @@ fn deeply_nested_anonymous_shape_types_never_abort_the_process() {
         .env("CLICOLOR", "0")
         .output()
         .expect("failed to spawn ynz binary");
-
-    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-
-    // Load-bearing assertion: before the fix, this fired as a raw stack-overflow abort
-    // (status.code() == None on Unix — killed by SIGABRT/SIGSEGV), not a clean diagnostic.
-    assert!(
-        out.status.code().is_some(),
-        "process was killed by a signal (raw stack overflow via anon-shape-type field \
-         recursion bypassing the depth cap), not a clean diagnostic exit; status: {:?}\nstderr:\n{stderr}",
-        out.status
-    );
-
-    assert_eq!(
+    (
         out.status.code(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// Nesting past the cap: a clean compile error (exit 1) carrying the cap's diagnostic.
+/// Exit `None` is a raw stack-overflow abort (SIGABRT/SIGSEGV); exit 2 would mean the ICE
+/// hook caught a panic, but the fix is a parser-level diagnostic, not a caught panic.
+fn assert_rejected_with(src: &str, expected_phrase: &str) {
+    let (code, stderr) = run_source(src);
+    assert!(
+        code.is_some(),
+        "process was killed by a signal (raw stack overflow), not a clean diagnostic exit\nstderr:\n{stderr}"
+    );
+    assert_eq!(
+        code,
         Some(1),
-        "expected a clean compile-error exit (1), got {:?}\nstderr:\n{stderr}",
-        out.status.code()
+        "expected a clean compile-error exit (1), got {code:?}\nstderr:\n{stderr}"
     );
-
-    // The fix threads depth through field-type parsing so this hits the EXISTING
-    // 16-level generic-nesting cap's teaching diagnostic — no new diagnostic needed.
     assert!(
-        stderr.contains("Generic type nesting exceeds 16 levels"),
-        "expected the existing 16-level type-nesting cap diagnostic in stderr; got:\n{stderr}"
+        stderr.contains(expected_phrase),
+        "expected the depth-cap diagnostic {expected_phrase:?} in stderr; got:\n{stderr}"
     );
 }
 
-#[test]
-fn moderately_nested_anonymous_shape_types_still_compile_cleanly() {
-    // WHY: guard against an off-by-one cap that rejects legitimate (if unusual) code.
-    // 10 levels is well under the 16-level generic-nesting cap and must compile cleanly.
-    let src = deeply_nested_anon_shape_type_program(10);
-
-    let mut file = tempfile::Builder::new()
-        .prefix("f-anon-shape-moderate-")
-        .suffix(".ynz")
-        .tempfile()
-        .expect("failed to create temp fixture");
-    file.write_all(src.as_bytes())
-        .expect("failed to write fixture");
-    let path = file.path().to_path_buf();
-
-    let out = Command::new(ynz_binary())
-        .args(["run", path.to_str().unwrap()])
-        .env("CLICOLOR", "0")
-        .output()
-        .expect("failed to spawn ynz binary");
-
-    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    // Depth-only concern here — the type isn't expected to type-check meaningfully
-    // (it's an anonymous shape assigned an int literal), so we only assert the process
-    // wasn't killed by a signal and no depth-cap diagnostic fired. Typeck errors (if
-    // any) are irrelevant to this test's WHY.
+/// Nesting under the cap: never killed by a signal and never trips the cap's diagnostic.
+/// `must_exit_zero` is set where the program also type-checks cleanly.
+fn assert_accepted(src: &str, cap_phrase: &str, must_exit_zero: bool) {
+    let (code, stderr) = run_source(src);
     assert!(
-        out.status.code().is_some(),
-        "process was killed by a signal at a depth well under the cap; status: {:?}\nstderr:\n{stderr}",
-        out.status
+        code.is_some(),
+        "process was killed by a signal at a depth under the cap\nstderr:\n{stderr}"
     );
     assert!(
-        !stderr.contains("Generic type nesting exceeds 16 levels"),
-        "10 levels of anon-shape-type nesting is well under the 16-level cap and must not \
-         trip it; stderr:\n{stderr}"
+        !stderr.contains(cap_phrase),
+        "nesting under the cap must not trip {cap_phrase:?}; stderr:\n{stderr}"
     );
+    if must_exit_zero {
+        assert_eq!(
+            code,
+            Some(0),
+            "nesting under the cap must compile cleanly; stderr:\n{stderr}"
+        );
+    }
 }
 
-#[test]
-fn moderately_nested_blocks_still_compile_cleanly() {
-    // WHY: guard against an off-by-one cap that rejects legitimate (if unusual) code.
-    // 100 levels is well under the 256 cap and must compile with zero diagnostics.
-    let src = deeply_nested_program(100);
-
-    let mut file = tempfile::Builder::new()
-        .prefix("f2-moderate-nest-")
-        .suffix(".ynz")
-        .tempfile()
-        .expect("failed to create temp fixture");
-    file.write_all(src.as_bytes())
-        .expect("failed to write fixture");
-    let path = file.path().to_path_buf();
-
-    let out = Command::new(ynz_binary())
-        .args(["run", path.to_str().unwrap()])
-        .env("CLICOLOR", "0")
-        .output()
-        .expect("failed to spawn ynz binary");
-
-    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    assert_eq!(
-        out.status.code(),
-        Some(0),
-        "100 levels of nesting is well under the 256 cap and must compile cleanly; stderr:\n{stderr}"
-    );
+/// One named test per input class the depth caps decide differently.
+macro_rules! depth_guard_case {
+    ($test_name:ident, $check:ident($source:expr $(, $argument:expr)*)) => {
+        // bug: nesting past a parser depth cap aborts the process with a stack overflow instead of a diagnostic, or a legitimate depth under the cap is rejected | tier: High
+        #[test]
+        fn $test_name() {
+            $check(&$source $(, $argument)*);
+        }
+    };
 }
+
+// 20 000 matches the audit's own live repro: well past any real program and past the
+// 8 MB main-thread stack if recursion were unbounded.
+depth_guard_case!(
+    deeply_nested_blocks_are_rejected_not_aborted,
+    assert_rejected_with(deeply_nested_program(20_000), "Nesting too deep")
+);
+
+// Anonymous shape TYPES (`{ a: { a: ... } }`): each nested field's type reset the depth to 0,
+// bypassing both caps, so 5 000 levels (the audit's repro) overflowed the stack with no
+// diagnostic. The fix threads depth through field-type parsing, so the existing 16-level
+// generic-nesting cap's diagnostic fires.
+depth_guard_case!(
+    deeply_nested_anonymous_shape_types_are_rejected_not_aborted,
+    assert_rejected_with(
+        deeply_nested_anon_shape_type_program(5_000),
+        "Generic type nesting exceeds 16 levels"
+    )
+);
+
+// Guard against a cap set too low: 100 levels is well under the 256 block cap and must
+// compile with zero diagnostics.
+depth_guard_case!(
+    moderately_nested_blocks_are_accepted,
+    assert_accepted(deeply_nested_program(100), "Nesting too deep", true)
+);
+
+// 10 levels is under the 16-level type cap. The type is not expected to type-check (an
+// int literal assigned to a shape), so only the depth-cap diagnostic's absence is asserted.
+depth_guard_case!(
+    moderately_nested_anonymous_shape_types_are_accepted,
+    assert_accepted(
+        deeply_nested_anon_shape_type_program(10),
+        "Generic type nesting exceeds 16 levels",
+        false
+    )
+);
