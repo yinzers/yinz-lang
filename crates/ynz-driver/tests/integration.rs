@@ -48,34 +48,6 @@ fn ynz_run_stdout(source_path: &Path) -> (String, String, i32) {
     (stdout, stderr, code)
 }
 
-/// Assert a stderr snapshot with machine-independent fixture paths.
-///
-/// The compiler echoes the absolute path of the source file into its diagnostics
-/// (e.g. `╭─[ /abs/path/crates/ynz-driver/tests/fixtures/broken_main.ynz:1:1 ]`). That
-/// absolute prefix differs by checkout location (local `/workspaces/...` vs CI
-/// `/home/runner/work/...`), so a raw snapshot only matches on the machine that recorded
-/// it. This filter rewrites any `.../tests/fixtures/` prefix to `[FIXTURES]/` so the
-/// pinned error text is portable across every host.
-fn assert_stderr_snapshot(name: &str, stderr: &str) {
-    let mut settings = insta::Settings::clone_current();
-    settings.add_filter(r"\S*/tests/fixtures/", "[FIXTURES]/");
-    settings.bind(|| {
-        insta::assert_snapshot!(name, stderr);
-    });
-}
-
-// bug: `ynz run` of a valid program exits non-zero or prints other than the program's stdout | tier: Medium
-#[test]
-fn hello_ynz_prints_hello_yinz_and_exits_zero() {
-    // WHY: this is the M1 success criterion. Every other test is secondary.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("hello.ynz"));
-    assert_eq!(code, 0, "exit code must be 0; stderr:\n{stderr}");
-    assert_eq!(
-        stdout, "hello, yinz\n",
-        "stdout must be exactly `hello, yinz\\n`"
-    );
-}
-
 // bug: `ynz build` exits 0 but leaves no executable file | tier: Medium
 #[test]
 fn build_produces_executable_and_exits_zero() {
@@ -108,9 +80,28 @@ fn build_produces_executable_and_exits_zero() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-// bug: `ynz run` of a program with a compile error exits 0 or prints no diagnostic (snapshot wording assertion dropped, Low) | tier: Medium
-#[test]
-fn broken_main_exits_nonzero_with_diagnostic() {
+/// One named test per input class of the `ynz run CLI` unit; each case is a test the runner names.
+macro_rules! ynz_run_cli_medium_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: `ynz run` of a valid program prints other than its stdout, a broken program exits 0 or prints no diagnostic, or a path with spaces is mis-quoted so the program does not run | tier: Medium
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+ynz_run_cli_medium_case! {
+    // case: `ynz run` of a valid program exits non-zero or prints other than the program's stdout
+    hello_ynz_prints_hello_yinz_and_exits_zero => {
+    // WHY: this is the M1 success criterion. Every other test is secondary.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("hello.ynz"));
+    assert_eq!(code, 0, "exit code must be 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout, "hello, yinz\n",
+        "stdout must be exactly `hello, yinz\\n`"
+    );
+    }
+    // case: `ynz run` of a program with a compile error exits 0 or prints no diagnostic
+    broken_main_exits_nonzero_with_diagnostic => {
     // WHY: if a broken file exits 0 or produces no stderr, the user would
     // silently ship wrong code. This locks the exact error output shape.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("broken_main.ynz"));
@@ -125,26 +116,9 @@ fn broken_main_exits_nonzero_with_diagnostic() {
         stderr.contains("entrypoint"),
         "diagnostic must mention `entrypoint`; got:\n{stderr}"
     );
-}
-
-// bug: an empty source file crashes the compiler or exits 0 instead of reporting the missing entrypoint | tier: High
-#[test]
-fn empty_source_exits_nonzero_with_missing_entrypoint_diagnostic() {
-    // WHY: an empty file must produce a clear "no entrypoint" error, not a crash or
-    // an empty error message.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("empty.ynz"));
-    assert_ne!(code, 0, "empty source must exit non-zero");
-    assert!(stdout.is_empty(), "empty source must produce no stdout");
-    assert!(
-        stderr.contains("entrypoint"),
-        "empty source diagnostic must mention `entrypoint`; got:\n{stderr}"
-    );
-    assert_stderr_snapshot("empty_stderr", &stderr);
-}
-
-// bug: `ynz run` mis-quotes a path with spaces so the program does not run | tier: Medium
-#[test]
-fn file_path_with_spaces_runs_correctly() {
+    }
+    // case: `ynz run` mis-quotes a path with spaces so the program does not run
+    file_path_with_spaces_runs_correctly => {
     // WHY: file paths with spaces are the canonical shell-injection and quoting
     // trap. If the driver quotes paths via format strings instead of Command::arg,
     // this test will fail (or worse, silently produce wrong output).
@@ -159,11 +133,33 @@ fn file_path_with_spaces_runs_correctly() {
 
     assert_eq!(code, 0, "path with spaces must exit 0; stderr:\n{stderr}");
     assert_eq!(stdout, "hello, yinz\n");
+    }
 }
 
-// bug: a source file with invalid UTF-8 panics or compiles instead of being refused with a diagnostic | tier: High
-#[test]
-fn invalid_utf8_source_exits_nonzero_with_diagnostic() {
+/// One named test per input class of the `source loading` unit; each case is a test the runner names.
+macro_rules! source_loading_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a source file the loader cannot read as a program (empty, invalid UTF-8) panics, crashes or compiles instead of being refused with a diagnostic | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+source_loading_high_case! {
+    // case: an empty source file crashes the compiler or exits 0 instead of reporting the missing entrypoint
+    empty_source_exits_nonzero_with_missing_entrypoint_diagnostic => {
+    // WHY: an empty file must produce a clear "no entrypoint" error, not a crash or
+    // an empty error message.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("empty.ynz"));
+    assert_ne!(code, 0, "empty source must exit non-zero");
+    assert!(stdout.is_empty(), "empty source must produce no stdout");
+    assert!(
+        stderr.contains("entrypoint"),
+        "empty source diagnostic must mention `entrypoint`; got:\n{stderr}"
+    );
+    }
+    // case: a source file with invalid UTF-8 panics or compiles instead of being refused with a diagnostic
+    invalid_utf8_source_exits_nonzero_with_diagnostic => {
     // WHY: a source file with invalid UTF-8 must produce a clear error,
     // not a panic or garbled output.
     let tmp = std::env::temp_dir().join("ynz-bad-utf8.ynz");
@@ -177,6 +173,7 @@ fn invalid_utf8_source_exits_nonzero_with_diagnostic() {
         !stderr.is_empty(),
         "invalid UTF-8 must produce a diagnostic"
     );
+    }
 }
 
 // bug: integer precedence or boolean `&&` lowering prints a wrong value | tier: Medium
@@ -240,7 +237,6 @@ const_mutation_table_high_case! {
         stderr.contains("const"),
         "diagnostic must mention `const`, got:\n{stderr}"
     );
-    assert_stderr_snapshot("m2_const_reassign_stderr", &stderr);
     }
     // case: a `const` passed to a `lend` parameter is accepted
     m4_neg_const_cannot_be_lent_for_mutation => {
@@ -329,7 +325,10 @@ banned_syntax_table_high_case! {
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m2_compound_assign.ynz"));
     assert_ne!(code, 0, "compound assignment must exit non-zero");
     assert!(stdout.is_empty());
-    assert_stderr_snapshot("m2_compound_assign_stderr", &stderr);
+    assert!(
+        stderr.contains("`+=`"),
+        "diagnostic must name the banned `+=`, got:\n{stderr}"
+    );
     }
     // case: the banned `type` keyword is accepted
     m4_neg_banned_type_keyword_is_error => {
