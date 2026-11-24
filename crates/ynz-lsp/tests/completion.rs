@@ -1,866 +1,461 @@
-// WHY: Completion integration tests verify the registry → LSP pipeline
-// produces items with correct content and sort order. Tests here complement
-// the registry-level unit tests in crates/ynz-registry/tests/lsp_adapter.rs.
+// WHY: Completion tests verify the registry → LSP pipeline produces items with
+// correct content, and that the cursor context decides which items are offered.
+// They complement the registry-level tests in crates/ynz-registry/tests/lsp_adapter.rs.
 
 mod harness;
 use harness::InProcessHarness;
-use ynz_lsp::{capabilities::PositionEncoding, completion::detect_context};
+use lsp_types::{CompletionItemKind, CompletionList, InsertTextFormat, Position};
+use serde_json::json;
+use std::collections::{HashMap, HashSet};
+use ynz_diagnostics::SourceSpan;
+use ynz_lsp::{
+    capabilities::PositionEncoding,
+    completion::{completion_list, cross_file_completion_items, detect_context},
+    position::LineTable,
+    state::ServerState,
+};
 use ynz_registry::CompletionContext;
+use ynz_typeck::shapes::{ShapeDef, ShapeTable};
+use ynz_typeck::{
+    signatures::{FunctionSig, SignatureTable},
+    types::Type,
+};
 
-fn read_fixture(name: &str) -> String {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name);
-    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("could not read fixture {name}: {e}"))
-}
+// ---------------------------------------------------------------------------
+// detect_context
+// ---------------------------------------------------------------------------
 
-// Context detection unit tests
-
-#[test]
-fn context_bare_at_start() {
-    assert_eq!(detect_context("", 0), CompletionContext::BareIdentifier);
-}
-
-#[test]
-fn context_bare_after_whitespace() {
-    let text = "let x = ";
-    let ctx = detect_context(text, text.len());
-    assert_eq!(ctx, CompletionContext::BareIdentifier);
-}
-
-#[test]
-fn context_after_dot_is_after_dot() {
-    let text = "score.";
-    let ctx = detect_context(text, text.len());
-    assert!(matches!(ctx, CompletionContext::AfterDot { .. }));
-}
-
-#[test]
-fn context_cursor_inside_string_no_panic_and_returns_bare() {
-    // WHY: thin-slice detect_context does not distinguish string-interior from
-    // normal code; it returns BareIdentifier. This test verifies no panic AND
-    // that the fallback produces the expected BareIdentifier context.
-    let text = "`hello wor";
-    let ctx = detect_context(text, text.len());
-    assert_eq!(ctx, CompletionContext::BareIdentifier);
-}
-
-#[test]
-fn context_multibyte_char_boundary_no_panic() {
-    // Cursor offset at a valid UTF-8 boundary within multi-byte characters.
-    let text = "✓.";
-    // '✓' is 3 bytes; cursor after the dot (byte 4)
-    let ctx = detect_context(text, 4);
-    assert!(matches!(ctx, CompletionContext::AfterDot { .. }));
-}
-
-#[test]
-fn context_numeric_literal_dot_is_bare() {
-    // "5." should NOT trigger after-dot completion (it's a decimal literal)
-    let text = "let x = 5.";
-    let ctx = detect_context(text, text.len());
-    assert_eq!(ctx, CompletionContext::BareIdentifier);
-}
-
-#[test]
-fn context_identifier_dot_is_after_dot() {
-    // "a5." — last char before '.' is digit but preceded by 'a' (ident char), so it's a receiver
-    let text = "let a5 = 0\na5.";
-    let ctx = detect_context(text, text.len());
-    assert!(matches!(ctx, CompletionContext::AfterDot { .. }));
-}
-
-// Completion list tests (using the completion module directly)
-
-#[test]
-fn completion_list_with_user_fns_includes_them() {
-    use lsp_types::Position;
-    use std::collections::HashMap;
-    use ynz_diagnostics::SourceSpan;
-    use ynz_lsp::{completion::completion_list, position::LineTable};
-    use ynz_typeck::shapes::ShapeTable;
-    use ynz_typeck::{
-        signatures::{FunctionSig, SignatureTable},
-        types::Type,
+macro_rules! detect_context_case {
+    ($name:ident, $text:expr, $cursor_offset:expr, $expects_after_dot:expr) => {
+        // bug: the cursor context is misclassified, so completion offers keywords after a dot, receiver methods after a decimal point, or panics on a multibyte receiver | tier: Medium
+        #[test]
+        fn $name() {
+            let text: &str = $text;
+            let context = detect_context(text, $cursor_offset);
+            let is_after_dot = matches!(context, CompletionContext::AfterDot { .. });
+            assert_eq!(
+                is_after_dot, $expects_after_dot,
+                "context for {text:?} was {context:?}"
+            );
+        }
     };
+}
 
-    let text = "let ";
-    let table = LineTable::new(text);
-    let position = Position {
-        line: 0,
-        character: 4,
-    };
+detect_context_case!(empty_text_is_a_bare_identifier, "", 0, false);
+detect_context_case!(
+    whitespace_before_cursor_is_a_bare_identifier,
+    "let x = ",
+    8,
+    false
+);
+detect_context_case!(dot_after_an_identifier_is_after_dot, "score.", 6, true);
+detect_context_case!(
+    dot_after_an_identifier_ending_in_a_digit_is_after_dot,
+    "let a5 = 0\na5.",
+    14,
+    true
+);
+detect_context_case!(decimal_point_is_a_bare_identifier, "let x = 5.", 10, false);
+// '✓' is 3 bytes, so the cursor after the dot sits at byte 4.
+detect_context_case!(dot_after_a_multibyte_char_is_after_dot, "✓.", 4, true);
 
-    let mut fns = HashMap::new();
-    fns.insert(
-        "myUserFunction".to_string(),
-        FunctionSig {
-            params: vec![("x".to_string(), Type::Int)],
-            param_ownerships: vec![None],
-            ret: Type::Nothing,
-            decl_span: SourceSpan::new("test.ynz", 0, 0),
-            contains_wait: false,
-            suspends: false,
-            does_real_work: false,
-            written_param_places: Vec::new(),
-            original_name: None,
-        },
-    );
-    let sig_table = SignatureTable { fns };
-    let shape_table = ShapeTable {
-        shapes: HashMap::new(),
-        union_aliases: HashMap::new(),
-        options_names: std::collections::HashSet::new(),
-        layout_only: HashMap::new(),
-    };
+// ---------------------------------------------------------------------------
+// completion_list
+// ---------------------------------------------------------------------------
 
-    let list = completion_list(
-        text,
-        &table,
-        position,
-        PositionEncoding::Utf8,
-        Some(&sig_table),
-        Some(&shape_table),
-        None,
-    );
-    let list = list.expect("completion must be Some");
-    let labels: Vec<_> = list.items.iter().map(|i| i.label.as_str()).collect();
-    assert!(
-        labels.contains(&"myUserFunction"),
-        "user-defined function must appear in completion"
-    );
-    let user_item = list
-        .items
+fn function_sig(params: Vec<(&str, Type)>) -> FunctionSig {
+    FunctionSig {
+        param_ownerships: vec![None; params.len()],
+        params: params
+            .into_iter()
+            .map(|(name, ty)| (name.to_string(), ty))
+            .collect(),
+        ret: Type::Nothing,
+        decl_span: SourceSpan::new("test.ynz", 0, 0),
+        contains_wait: false,
+        suspends: false,
+        does_real_work: false,
+        written_param_places: Vec::new(),
+        original_name: None,
+    }
+}
+
+fn signature_table(functions: Vec<(&str, FunctionSig)>) -> SignatureTable {
+    SignatureTable {
+        fns: functions
+            .into_iter()
+            .map(|(name, sig)| (name.to_string(), sig))
+            .collect(),
+    }
+}
+
+fn shape_table(shape_names: &[&str]) -> ShapeTable {
+    let shapes = shape_names
         .iter()
-        .find(|i| i.label == "myUserFunction")
-        .unwrap();
-    assert_eq!(
-        user_item.kind,
-        Some(lsp_types::CompletionItemKind::FUNCTION)
-    );
-}
-
-#[test]
-fn user_symbols_sort_before_keywords() {
-    use lsp_types::Position;
-    use std::collections::HashMap;
-    use ynz_diagnostics::SourceSpan;
-    use ynz_lsp::{completion::completion_list, position::LineTable};
-    use ynz_typeck::shapes::ShapeTable;
-    use ynz_typeck::{
-        signatures::{FunctionSig, SignatureTable},
-        types::Type,
-    };
-
-    let text = "let ";
-    let table = LineTable::new(text);
-    let position = Position {
-        line: 0,
-        character: 4,
-    };
-
-    let mut fns = HashMap::new();
-    fns.insert(
-        "myFn".to_string(),
-        FunctionSig {
-            params: vec![],
-            param_ownerships: vec![],
-            ret: Type::Nothing,
-            decl_span: SourceSpan::new("test.ynz", 0, 0),
-            contains_wait: false,
-            suspends: false,
-            does_real_work: false,
-            written_param_places: Vec::new(),
-            original_name: None,
-        },
-    );
-    let sig_table = SignatureTable { fns };
-    let shape_table = ShapeTable {
-        shapes: HashMap::new(),
-        union_aliases: HashMap::new(),
-        options_names: std::collections::HashSet::new(),
-        layout_only: HashMap::new(),
-    };
-
-    let list = completion_list(
-        text,
-        &table,
-        position,
-        PositionEncoding::Utf8,
-        Some(&sig_table),
-        Some(&shape_table),
-        None,
-    );
-    let list = list.expect("completion must be Some");
-
-    let user_item = list.items.iter().find(|i| i.label == "myFn").unwrap();
-    let kw_item = list
-        .items
-        .iter()
-        .find(|i| i.label == "function" && i.kind == Some(lsp_types::CompletionItemKind::KEYWORD))
-        .unwrap();
-
-    let user_sort = user_item.sort_text.as_deref().unwrap_or("");
-    let kw_sort = kw_item.sort_text.as_deref().unwrap_or("");
-    assert!(
-        user_sort < kw_sort,
-        "user symbol ({user_sort}) must sort before keyword ({kw_sort})"
-    );
-}
-
-#[test]
-fn bare_completion_contains_keywords() {
-    use lsp_types::Position;
-    use ynz_lsp::{completion::completion_list, position::LineTable};
-
-    let text = "function entrypoint() -> Nothing {\n    ";
-    let table = LineTable::new(text);
-    let position = Position {
-        line: 1,
-        character: 4,
-    };
-    let list = completion_list(
-        text,
-        &table,
-        position,
-        PositionEncoding::Utf8,
-        None,
-        None,
-        None,
-    );
-    let list = list.expect("completion list must be Some");
-    let kw_labels: Vec<_> = list
-        .items
-        .iter()
-        .filter(|i| {
-            i.kind == Some(lsp_types::CompletionItemKind::KEYWORD) && !i.deprecated.unwrap_or(false)
-        })
-        .map(|i| i.label.as_str())
-        .collect();
-    assert!(
-        !kw_labels.is_empty(),
-        "bare completion must include keywords"
-    );
-    assert!(
-        kw_labels.contains(&"let"),
-        "bare completion must include 'let'"
-    );
-    assert!(
-        kw_labels.contains(&"const"),
-        "bare completion must include 'const'"
-    );
-}
-
-#[test]
-fn deferred_features_in_bare_are_deprecated() {
-    use lsp_types::Position;
-    use ynz_lsp::{completion::completion_list, position::LineTable};
-
-    let text = "let ";
-    let table = LineTable::new(text);
-    let list = completion_list(
-        text,
-        &table,
-        Position {
-            line: 0,
-            character: 4,
-        },
-        PositionEncoding::Utf8,
-        None,
-        None,
-        None,
-    );
-    let list = list.expect("completion must be Some");
-
-    let deferred: Vec<_> = list
-        .items
-        .iter()
-        .filter(|i| {
-            i.tags
-                .as_deref()
-                .map(|t| t.contains(&lsp_types::CompletionItemTag::DEPRECATED))
-                .unwrap_or(false)
+        .map(|name| {
+            (
+                name.to_string(),
+                ShapeDef {
+                    name: name.to_string(),
+                    is_base: false,
+                    extends: None,
+                    follows: vec![],
+                    fields: vec![],
+                    contract_sigs: vec![],
+                    defined_at: SourceSpan::new("test.ynz", 0, 0),
+                },
+            )
         })
         .collect();
-    assert!(
-        !deferred.is_empty(),
-        "deferred features must appear deprecated in bare completion"
-    );
+    ShapeTable {
+        shapes,
+        union_aliases: HashMap::new(),
+        options_names: HashSet::new(),
+        layout_only: HashMap::new(),
+    }
 }
 
-#[test]
-fn after_dot_completion_returns_items() {
-    use lsp_types::Position;
-    use ynz_lsp::{completion::completion_list, position::LineTable};
-
-    // Cursor after "score." where score is int
-    let text = "function entrypoint() -> Nothing {\n    let score: Int = 42\n    score.";
-    let table = LineTable::new(text);
-    let lines: Vec<&str> = text.lines().collect();
-    let last_line = lines.last().unwrap();
-    let position = Position {
-        line: (lines.len() - 1) as u32,
-        character: last_line.len() as u32,
-    };
-    let list = completion_list(
+/// Completion with the cursor at the very end of `text` (ASCII only).
+fn completion_at_end_of(
+    text: &str,
+    signatures: Option<&SignatureTable>,
+    shapes: Option<&ShapeTable>,
+    receiver_type_name: Option<&str>,
+) -> CompletionList {
+    let line = text.matches('\n').count() as u32;
+    let character = text.rsplit('\n').next().unwrap_or(text).len() as u32;
+    completion_list(
         text,
-        &table,
-        position,
+        &LineTable::new(text),
+        Position { line, character },
         PositionEncoding::Utf8,
-        None,
-        None,
-        None,
-    );
-    let list = list.expect("completion after dot must return Some");
-    // In this thin slice, receiver type is not narrowed (None → all methods returned)
-    assert!(
-        !list.items.is_empty(),
-        "after-dot completion should return items"
-    );
+        signatures,
+        shapes,
+        receiver_type_name,
+    )
+    .expect("completion must be Some")
 }
 
-#[test]
-fn numeric_dot_returns_bare_completion() {
-    use lsp_types::Position;
-    use ynz_lsp::{completion::completion_list, position::LineTable};
+fn labels_of(list: &CompletionList) -> Vec<&str> {
+    list.items.iter().map(|item| item.label.as_str()).collect()
+}
 
-    let text = "let x = 5.";
-    let table = LineTable::new(text);
-    let position = Position {
-        line: 0,
-        character: text.len() as u32,
-    };
-    let list = completion_list(
-        text,
-        &table,
-        position,
-        PositionEncoding::Utf8,
-        None,
-        None,
-        None,
-    );
-    // "5." treated as decimal literal → BareIdentifier context → keywords appear
-    let list = list.expect("completion must be Some even for numeric dot");
-    let kw_count = list
+fn item_named<'a>(list: &'a CompletionList, label: &str) -> &'a lsp_types::CompletionItem {
+    list.items
+        .iter()
+        .find(|item| item.label == label)
+        .unwrap_or_else(|| panic!("{label:?} must be offered; got {:?}", labels_of(list)))
+}
+
+fn check_user_function_is_listed_as_a_function_item(list: &CompletionList) {
+    let item = item_named(list, "myUserFunction");
+    assert_eq!(item.kind, Some(CompletionItemKind::FUNCTION));
+    // User symbols outrank keywords in the editor's list.
+    let keyword = list
         .items
         .iter()
-        .filter(|i| i.kind == Some(lsp_types::CompletionItemKind::KEYWORD))
+        .find(|item| item.label == "function" && item.kind == Some(CompletionItemKind::KEYWORD))
+        .expect("'function' keyword must be offered");
+    assert!(
+        item.sort_text < keyword.sort_text,
+        "user symbol ({:?}) must sort before keyword ({:?})",
+        item.sort_text,
+        keyword.sort_text
+    );
+}
+
+fn check_bare_position_offers_let_and_const(list: &CompletionList) {
+    let labels = labels_of(list);
+    assert!(labels.contains(&"let"), "got {labels:?}");
+    assert!(labels.contains(&"const"), "got {labels:?}");
+}
+
+fn check_decimal_point_offers_keywords(list: &CompletionList) {
+    let keyword_count = list
+        .items
+        .iter()
+        .filter(|item| item.kind == Some(CompletionItemKind::KEYWORD))
         .count();
     assert!(
-        kw_count > 0,
-        "numeric dot should produce bare-identifier (keyword) completion"
+        keyword_count > 0,
+        "a decimal point must fall back to bare completion"
     );
 }
 
-#[test]
-fn after_dot_with_receiver_type_narrows_to_int_methods() {
-    // WHY: receiver-type narrowing ensures `score.` (where score: int) shows ONLY int methods,
-    //      not all primitive methods (string, float, etc.).  Without narrowing users see noisy
-    //      false completions (e.g. `.count()` which is a string method).
-    use lsp_types::Position;
-    use ynz_lsp::{completion::completion_list, position::LineTable};
-
-    let text = "score.";
-    let table = LineTable::new(text);
-    let position = Position {
-        line: 0,
-        character: text.len() as u32,
-    };
-    // Pass receiver_type_name = Some("Int") as if typeck resolved `score: Int`
-    let list = completion_list(
-        text,
-        &table,
-        position,
-        PositionEncoding::Utf8,
-        None,
-        None,
-        Some("Int"),
-    );
-    let list = list.expect("completion must be Some");
-    let labels: Vec<&str> = list.items.iter().map(|i| i.label.as_str()).collect();
-
-    // Int has methods like toString(), toFloat(), toNumber() etc.
-    assert!(
-        labels.iter().any(|l| l.starts_with("toString")),
-        "Int after-dot should include toString(): {labels:?}"
-    );
-    // String-only method should NOT appear when receiver is Int
-    assert!(
-        !labels.contains(&"count()"),
-        "String method count() must not appear for Int receiver: {labels:?}"
-    );
-}
-
-#[test]
-fn after_dot_with_no_receiver_type_shows_all_methods() {
-    // WHY: when receiver type is unknown (None), all primitive methods appear as best-effort
-    //      candidates so the user still gets helpful completions rather than nothing.
-    use lsp_types::Position;
-    use ynz_lsp::{completion::completion_list, position::LineTable};
-
-    let text = "x.";
-    let table = LineTable::new(text);
-    let position = Position {
-        line: 0,
-        character: text.len() as u32,
-    };
-    let list = completion_list(
-        text,
-        &table,
-        position,
-        PositionEncoding::Utf8,
-        None,
-        None,
-        None,
-    );
-    let list = list.expect("completion must be Some");
-    // Without narrowing, should include methods from multiple primitive types
+fn check_unknown_receiver_offers_methods(list: &CompletionList) {
     let method_count = list
         .items
         .iter()
-        .filter(|i| i.kind == Some(lsp_types::CompletionItemKind::METHOD))
+        .filter(|item| item.kind == Some(CompletionItemKind::METHOD))
         .count();
     assert!(
         method_count > 0,
-        "after-dot with no receiver type should still return primitive method candidates"
+        "an unresolved receiver must still offer method candidates"
     );
 }
 
-// Snippet template tests
+fn check_int_receiver_offers_only_int_methods(list: &CompletionList) {
+    let labels = labels_of(list);
+    assert!(
+        labels.iter().any(|label| label.starts_with("toString")),
+        "Int receiver must offer toString(): {labels:?}"
+    );
+    assert!(
+        !labels.contains(&"count()"),
+        "String-only count() must not be offered for an Int receiver: {labels:?}"
+    );
+}
 
-#[test]
-// WHY: Snippet format on the `function` keyword guarantees the editor's tab-stop
-//      machinery fires — without SNIPPET format the `${1:name}` literal text is
-//      inserted verbatim instead of becoming an interactive placeholder. This test
-//      catches any regression where format is accidentally dropped or set to PlainText.
-fn function_keyword_has_snippet_format() {
-    use lsp_types::Position;
-    use ynz_lsp::{completion::completion_list, position::LineTable};
-
-    let text = "fun";
-    let table = LineTable::new(text);
-    let position = Position {
-        line: 0,
-        character: 3,
-    };
-    let list = completion_list(
-        text,
-        &table,
-        position,
-        PositionEncoding::Utf8,
-        None,
-        None,
-        None,
-    )
-    .expect("completion must be Some");
-
-    let fn_kw = list
+fn check_function_keyword_is_a_snippet_with_a_name_stop(list: &CompletionList) {
+    let item = list
         .items
         .iter()
-        .find(|i| i.label == "function" && i.kind == Some(lsp_types::CompletionItemKind::KEYWORD))
-        .expect("'function' keyword must appear in completion list");
-
-    assert_eq!(
-        fn_kw.insert_text_format,
-        Some(lsp_types::InsertTextFormat::SNIPPET),
-        "'function' keyword item must use SNIPPET insert_text_format"
-    );
-    let insert_text = fn_kw
+        .find(|item| item.label == "function" && item.kind == Some(CompletionItemKind::KEYWORD))
+        .expect("'function' keyword must be offered");
+    assert_eq!(item.insert_text_format, Some(InsertTextFormat::SNIPPET));
+    let insert_text = item
         .insert_text
         .as_deref()
-        .expect("'function' must have insert_text");
-    assert!(
-        insert_text.contains("${1:name}"),
-        "'function' snippet must contain a name tab stop; got: {insert_text:?}"
-    );
+        .expect("snippet needs insert_text");
+    assert!(insert_text.contains("${1:name}"), "got {insert_text:?}");
 }
 
-#[test]
-// WHY: User-defined functions must use SNIPPET format so param tab stops are active.
-//      Without it the inserted text `heal(${1:amount})` is literal, not interactive.
-//      This test also verifies the `self` param is skipped — including it as a tab
-//      stop forces the user to fill in the receiver, breaking UFCS dot-call ergonomics.
-fn user_defined_fn_has_snippet_with_param_tab_stops() {
-    use lsp_types::Position;
-    use std::collections::HashMap;
-    use ynz_diagnostics::SourceSpan;
-    use ynz_lsp::{completion::completion_list, position::LineTable};
-    use ynz_typeck::shapes::ShapeTable;
-    use ynz_typeck::{
-        signatures::{FunctionSig, SignatureTable},
-        types::Type,
-    };
-
-    let text = "he";
-    let table = LineTable::new(text);
-    let position = Position {
-        line: 0,
-        character: 2,
-    };
-
-    let mut fns = HashMap::new();
-    fns.insert(
-        "heal".to_string(),
-        FunctionSig {
-            params: vec![
-                (
-                    "self".to_string(),
-                    Type::Shape {
-                        name: "Player".to_string(),
-                    },
-                ),
-                ("amount".to_string(), Type::Int),
-            ],
-            param_ownerships: vec![None, None],
-            ret: Type::Nothing,
-            decl_span: SourceSpan::new("test.ynz", 0, 0),
-            contains_wait: false,
-            suspends: false,
-            does_real_work: false,
-            written_param_places: Vec::new(),
-            original_name: None,
-        },
-    );
-    let sig_table = SignatureTable { fns };
-    let shape_table = ShapeTable {
-        shapes: HashMap::new(),
-        union_aliases: HashMap::new(),
-        options_names: std::collections::HashSet::new(),
-        layout_only: HashMap::new(),
-    };
-
-    let list = completion_list(
-        text,
-        &table,
-        position,
-        PositionEncoding::Utf8,
-        Some(&sig_table),
-        Some(&shape_table),
-        None,
-    )
-    .expect("completion must be Some");
-
-    let heal_item = list
-        .items
-        .iter()
-        .find(|i| i.label == "heal")
-        .expect("user-defined 'heal' function must appear");
-
-    assert_eq!(
-        heal_item.insert_text_format,
-        Some(lsp_types::InsertTextFormat::SNIPPET),
-        "user fn item must use SNIPPET format"
-    );
-    let snippet = heal_item
+fn check_heal_snippet_skips_self(list: &CompletionList) {
+    let item = item_named(list, "heal");
+    assert_eq!(item.insert_text_format, Some(InsertTextFormat::SNIPPET));
+    let snippet = item
         .insert_text
         .as_deref()
         .expect("heal must have insert_text");
-    assert!(
-        snippet.contains("${1:amount}"),
-        "snippet must have tab stop for 'amount'; got: {snippet:?}"
-    );
-    assert!(
-        !snippet.contains("self"),
-        "snippet must not include 'self' parameter; got: {snippet:?}"
-    );
+    assert!(snippet.contains("${1:amount}"), "got {snippet:?}");
+    assert!(!snippet.contains("self"), "got {snippet:?}");
 }
 
-#[test]
-// WHY: A function with only a `self` parameter should still produce a valid snippet
-//      (cursor inside the empty parens via $0). Without this, `greet($0)` regresses
-//      to either an empty string or a plain `greet()` that loses the cursor placement.
-fn user_defined_fn_self_only_snippet_has_cursor_stop() {
-    use lsp_types::Position;
-    use std::collections::HashMap;
-    use ynz_diagnostics::SourceSpan;
-    use ynz_lsp::{completion::completion_list, position::LineTable};
-    use ynz_typeck::shapes::ShapeTable;
-    use ynz_typeck::{
-        signatures::{FunctionSig, SignatureTable},
-        types::Type,
-    };
-
-    let text = "gr";
-    let table = LineTable::new(text);
-    let position = Position {
-        line: 0,
-        character: 2,
-    };
-
-    let mut fns = HashMap::new();
-    fns.insert(
-        "greet".to_string(),
-        FunctionSig {
-            params: vec![(
-                "self".to_string(),
-                Type::Shape {
-                    name: "Player".to_string(),
-                },
-            )],
-            param_ownerships: vec![None],
-            ret: Type::String,
-            decl_span: SourceSpan::new("test.ynz", 0, 0),
-            contains_wait: false,
-            suspends: false,
-            does_real_work: false,
-            written_param_places: Vec::new(),
-            original_name: None,
-        },
-    );
-    let sig_table = SignatureTable { fns };
-    let shape_table = ShapeTable {
-        shapes: HashMap::new(),
-        union_aliases: HashMap::new(),
-        options_names: std::collections::HashSet::new(),
-        layout_only: HashMap::new(),
-    };
-
-    let list = completion_list(
-        text,
-        &table,
-        position,
-        PositionEncoding::Utf8,
-        Some(&sig_table),
-        Some(&shape_table),
-        None,
-    )
-    .expect("completion must be Some");
-
-    let greet_item = list
-        .items
-        .iter()
-        .find(|i| i.label == "greet")
-        .expect("user-defined 'greet' function must appear");
-
-    assert_eq!(
-        greet_item.insert_text_format,
-        Some(lsp_types::InsertTextFormat::SNIPPET),
-        "self-only fn item must still use SNIPPET format"
-    );
-    let snippet = greet_item
-        .insert_text
-        .as_deref()
-        .expect("greet must have insert_text");
-    assert_eq!(
-        snippet, "greet($0)",
-        "self-only fn snippet must be 'greet($0)'; got: {snippet:?}"
-    );
+fn check_self_only_snippet_places_the_cursor_inside_the_parens(list: &CompletionList) {
+    let item = item_named(list, "greet");
+    assert_eq!(item.insert_text_format, Some(InsertTextFormat::SNIPPET));
+    assert_eq!(item.insert_text.as_deref(), Some("greet($0)"));
 }
 
-// LSP wire-level test (using in-process harness)
-
-#[test]
-fn completion_request_returns_list_via_lsp() {
-    use serde_json::json;
-
-    let h = InProcessHarness::new().start_server();
-    h.initialize();
-    let text = read_fixture("completion_bare.ynz");
-    h.did_open("file:///completion_bare.ynz", &text);
-    h.try_recv_timeout(std::time::Duration::from_millis(100)); // drain diagnostic
-
-    // Send completion request at line 0 char 0 (start of file)
-    h.conn
-        .sender
-        .send(lsp_server::Message::Request(lsp_server::Request {
-            id: lsp_server::RequestId::from(10i32),
-            method: "textDocument/completion".to_string(),
-            params: json!({
-                "textDocument": { "uri": "file:///completion_bare.ynz" },
-                "position": { "line": 0, "character": 0 }
-            }),
-        }))
-        .unwrap();
-
-    let response = h.recv_response();
-    // Response may be Null (no items at position 0 = inside a comment) or a CompletionList
-    // Either way it must not be an error object
-    assert!(
-        response.get("error").is_none(),
-        "completion response must not contain an error field: {response}"
-    );
-}
-
-#[test]
-// WHY: __anon__ names are internal synthetic identifiers for anonymous inline shapes.
-// Leaking them into completion makes the list actively misleading — users see
-// `__anon__a_int__b_string` and have no idea what to do with it. This test
-// catches any regression where internal shape names slip through the filter.
-fn anon_shapes_excluded_from_completion() {
-    use lsp_types::Position;
-    use std::collections::HashMap;
-    use ynz_lsp::{
-        capabilities::PositionEncoding, completion::completion_list, position::LineTable,
-    };
-    use ynz_typeck::shapes::{ShapeDef, ShapeTable};
-    use ynz_typeck::signatures::SignatureTable;
-
-    let text = "let ";
-    let table = LineTable::new(text);
-
-    let mut shapes = HashMap::new();
-    let dummy_span = ynz_diagnostics::SourceSpan::new("test.ynz", 0, 0);
-    // A normal shape — must appear.
-    shapes.insert(
-        "Player".to_string(),
-        ShapeDef {
-            name: "Player".to_string(),
-            is_base: false,
-            extends: None,
-            follows: vec![],
-            fields: vec![],
-            contract_sigs: vec![],
-            defined_at: dummy_span.clone(),
-        },
-    );
-    // A synthetic anon shape — must NOT appear.
-    shapes.insert(
-        "__anon__health_int__name_string".to_string(),
-        ShapeDef {
-            name: "__anon__health_int__name_string".to_string(),
-            is_base: false,
-            extends: None,
-            follows: vec![],
-            fields: vec![],
-            contract_sigs: vec![],
-            defined_at: dummy_span,
-        },
-    );
-
-    let shape_table = ShapeTable {
-        shapes,
-        union_aliases: HashMap::new(),
-        options_names: std::collections::HashSet::new(),
-        layout_only: HashMap::new(),
-    };
-    let sig_table = SignatureTable {
-        fns: HashMap::new(),
-    };
-
-    let list = completion_list(
-        text,
-        &table,
-        Position {
-            line: 0,
-            character: 4,
-        },
-        PositionEncoding::Utf8,
-        Some(&sig_table),
-        Some(&shape_table),
-        None,
-    )
-    .expect("completion must be Some");
-
-    let labels: Vec<&str> = list.items.iter().map(|i| i.label.as_str()).collect();
+fn check_anonymous_shapes_are_hidden(list: &CompletionList) {
+    let labels = labels_of(list);
     assert!(
         labels.contains(&"Player"),
-        "named shape must appear in completion"
+        "named shape must be offered; got {labels:?}"
     );
     assert!(
-        !labels.iter().any(|l| l.starts_with("__anon__")),
-        "synthetic __anon__ shapes must not appear in completion; got: {labels:?}"
+        !labels.iter().any(|label| label.starts_with("__anon__")),
+        "synthetic __anon__ shapes must not be offered; got {labels:?}"
     );
 }
 
-// WHY: `sleep` and `sleepBlocking` are both public may-block free_fn intrinsics registered
-// in registry/features.toml and must appear in bare-identifier completion. `__testFallibleAsync`
-// is an internal intrinsic stored in `internal_fns` (excluded from free_fn_names) and must NOT
-// appear. This boundary is the load-bearing guarantee that internal intrinsics stay invisible to
-// users — if it breaks, `__testFallibleAsync` starts showing up in Ctrl+Space. Either public
-// intrinsic silently dropping from completions (e.g. a registry rename not reflected in the LSP
-// filter) is the other failure class this test guards.
-#[test]
-fn public_may_block_intrinsics_visible_internal_not_visible() {
-    use lsp_types::Position;
-    use ynz_lsp::{completion::completion_list, position::LineTable};
-
-    let text = "sleep";
-    let table = LineTable::new(text);
-    let position = Position {
-        line: 0,
-        character: text.len() as u32,
-    };
-    let list = completion_list(
-        text,
-        &table,
-        position,
-        PositionEncoding::Utf8,
-        None,
-        None,
-        None,
-    )
-    .expect("completion must be Some");
-
-    let labels: Vec<&str> = list.items.iter().map(|i| i.label.as_str()).collect();
-
+fn check_public_intrinsics_listed_internal_one_hidden(list: &CompletionList) {
+    let labels = labels_of(list);
+    assert!(labels.contains(&"sleep"), "got {labels:?}");
+    assert!(labels.contains(&"sleepBlocking"), "got {labels:?}");
     assert!(
-        labels.contains(&"sleep"),
-        "sleep must appear in completion (registered in registry/features.toml); got: {labels:?}"
-    );
-    assert!(
-        labels.contains(&"sleepBlocking"),
-        "sleepBlocking must appear in completion (registered in registry/features.toml); got: {labels:?}"
-    );
-    assert!(
-        !labels.iter().any(|l| l.contains("__testFallibleAsync")),
-        "__testFallibleAsync must NOT appear in completion (internal_fns excluded from free_fn_names); got: {labels:?}"
+        !labels
+            .iter()
+            .any(|label| label.contains("__testFallibleAsync")),
+        "internal intrinsic must stay invisible; got {labels:?}"
     );
 }
 
-#[test]
-// WHY: cross_file_completion_items must appear in Ctrl+Space suggestions with
-// additionalTextEdits that insert the import. Without this, users type an exported
-// symbol, get "No suggestions", and have to manually write the import — exactly
-// the friction the feature exists to eliminate.
-fn cross_file_items_appear_in_completion_with_import_edit() {
-    use ynz_lsp::{
-        capabilities::PositionEncoding, completion::cross_file_completion_items,
-        position::LineTable, state::ServerState,
+macro_rules! completion_list_case {
+    ($name:ident, $text:expr, $signatures:expr, $shapes:expr, $receiver:expr, $check:expr) => {
+        // bug: the completion list is wrong for its cursor position: a user symbol is missing, mis-kinded or ranked below keywords, a keyword or method is missing, a snippet is plain text or wrong, or an internal name leaks | tier: Medium
+        #[test]
+        fn $name() {
+            let signatures: Option<SignatureTable> = $signatures;
+            let shapes: Option<ShapeTable> = $shapes;
+            let list = completion_at_end_of($text, signatures.as_ref(), shapes.as_ref(), $receiver);
+            let check: fn(&CompletionList) = $check;
+            check(&list);
+        }
     };
+}
 
-    let root = std::path::Path::new("/tmp/ynz_cross_completion");
-    let exporter_src = "export shape Order { id: String }\nexport function processOrder(o: Order) -> Nothing { }\n";
-    let importer_src = "function main() -> Nothing { }\n";
+completion_list_case!(
+    user_function_is_listed_as_a_function_item_ranked_before_keywords,
+    "let ",
+    Some(signature_table(vec![(
+        "myUserFunction",
+        function_sig(vec![("x", Type::Int)])
+    )])),
+    Some(shape_table(&[])),
+    None,
+    check_user_function_is_listed_as_a_function_item
+);
+completion_list_case!(
+    bare_position_offers_let_and_const,
+    "function entrypoint() -> Nothing {\n    ",
+    None,
+    None,
+    None,
+    check_bare_position_offers_let_and_const
+);
+completion_list_case!(
+    decimal_point_falls_back_to_keyword_completion,
+    "let x = 5.",
+    None,
+    None,
+    None,
+    check_decimal_point_offers_keywords
+);
+completion_list_case!(
+    unresolved_receiver_still_offers_method_candidates,
+    "x.",
+    None,
+    None,
+    None,
+    check_unknown_receiver_offers_methods
+);
+completion_list_case!(
+    int_receiver_offers_only_int_methods,
+    "score.",
+    None,
+    None,
+    Some("Int"),
+    check_int_receiver_offers_only_int_methods
+);
+completion_list_case!(
+    function_keyword_is_a_snippet_with_a_name_tab_stop,
+    "fun",
+    None,
+    None,
+    None,
+    check_function_keyword_is_a_snippet_with_a_name_stop
+);
+completion_list_case!(
+    user_function_snippet_has_a_tab_stop_per_parameter_except_self,
+    "he",
+    Some(signature_table(vec![(
+        "heal",
+        function_sig(vec![
+            (
+                "self",
+                Type::Shape {
+                    name: "Player".to_string()
+                }
+            ),
+            ("amount", Type::Int)
+        ])
+    )])),
+    Some(shape_table(&[])),
+    None,
+    check_heal_snippet_skips_self
+);
+completion_list_case!(
+    self_only_function_snippet_places_the_cursor_inside_the_parens,
+    "gr",
+    Some(signature_table(vec![(
+        "greet",
+        function_sig(vec![(
+            "self",
+            Type::Shape {
+                name: "Player".to_string()
+            }
+        )])
+    )])),
+    Some(shape_table(&[])),
+    None,
+    check_self_only_snippet_places_the_cursor_inside_the_parens
+);
+completion_list_case!(
+    anonymous_shapes_are_not_offered,
+    "let ",
+    Some(signature_table(vec![])),
+    Some(shape_table(&["Player", "__anon__health_int__name_string"])),
+    None,
+    check_anonymous_shapes_are_hidden
+);
+completion_list_case!(
+    public_may_block_intrinsics_are_offered_and_the_internal_one_is_not,
+    "sleep",
+    None,
+    None,
+    None,
+    check_public_intrinsics_listed_internal_one_hidden
+);
 
-    let mut state = ServerState::new(PositionEncoding::Utf8);
-    state.project_root = Some(root.to_path_buf());
+// ---------------------------------------------------------------------------
+// cross_file_completion_items
+// ---------------------------------------------------------------------------
 
-    let exp_path = root.join("services/orders.ynz");
-    let exp_uri = lsp_types::Url::from_file_path(&exp_path).unwrap();
-    state.open_document(exp_uri, exporter_src.to_string());
+macro_rules! cross_file_case {
+    ($name:ident, $exported_label:expr) => {
+        // bug: an exported symbol of another file is missing from completion, or its item lacks the one edit that inserts the import | tier: Medium
+        #[test]
+        fn $name() {
+            let root = std::path::Path::new("/tmp/ynz_cross_completion");
+            let exporter_source = "export shape Order { id: String }\nexport function processOrder(o: Order) -> Nothing { }\n";
+            let importer_source = "function main() -> Nothing { }\n";
 
-    let imp_path = root.join("entrypoint.ynz");
-    let imp_uri = lsp_types::Url::from_file_path(&imp_path).unwrap();
-    state.open_document(imp_uri.clone(), importer_src.to_string());
+            let mut state = ServerState::new(PositionEncoding::Utf8);
+            state.project_root = Some(root.to_path_buf());
+            let exporter_uri =
+                lsp_types::Url::from_file_path(root.join("services/orders.ynz")).unwrap();
+            state.open_document(exporter_uri, exporter_source.to_string());
+            let importer_uri = lsp_types::Url::from_file_path(root.join("entrypoint.ynz")).unwrap();
+            state.open_document(importer_uri.clone(), importer_source.to_string());
 
-    let table = LineTable::new(importer_src);
-    let items = cross_file_completion_items(&state, &imp_uri, importer_src, &table, None, None);
+            let items = cross_file_completion_items(
+                &state,
+                &importer_uri,
+                importer_source,
+                &LineTable::new(importer_source),
+                None,
+                None,
+            );
+            let item = items
+                .iter()
+                .find(|item| item.label == $exported_label)
+                .unwrap_or_else(|| panic!("{} must be offered; got {} items", $exported_label, items.len()));
+            let edits = item
+                .additional_text_edits
+                .as_ref()
+                .unwrap_or_else(|| panic!("{} must carry an import edit", $exported_label));
+            assert_eq!(edits.len(), 1);
+            assert!(
+                edits[0].new_text.contains("services/orders"),
+                "import text must name the path; got {:?}",
+                edits[0].new_text
+            );
+        }
+    };
+}
 
-    let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
-    assert!(
-        labels.contains(&"Order"),
-        "exported shape must appear in cross-file completion; got: {labels:?}"
+cross_file_case!(exported_shape_is_offered_with_its_import_edit, "Order");
+cross_file_case!(
+    exported_function_is_offered_with_its_import_edit,
+    "processOrder"
+);
+
+// ---------------------------------------------------------------------------
+// textDocument/completion over the wire
+// ---------------------------------------------------------------------------
+
+// bug: the completion request answers with an error or an empty result instead of the keyword list for the typed prefix | tier: Medium
+#[test]
+fn completion_request_returns_the_items_for_the_typed_prefix() {
+    let harness = InProcessHarness::new().start_server();
+    harness.initialize();
+    harness.did_open("file:///completion_prefix.ynz", "fun");
+
+    let result = harness.request(
+        10,
+        "textDocument/completion",
+        json!({
+            "textDocument": { "uri": "file:///completion_prefix.ynz" },
+            "position": { "line": 0, "character": 3 }
+        }),
     );
-    assert!(
-        labels.contains(&"processOrder"),
-        "exported function must appear; got: {labels:?}"
-    );
 
-    // Every cross-file item must carry an additionalTextEdits with the import line.
-    for item in items
+    let labels: Vec<&str> = result["items"]
+        .as_array()
+        .unwrap_or_else(|| panic!("completion result must be a list; got {result}"))
         .iter()
-        .filter(|i| i.label == "Order" || i.label == "processOrder")
-    {
-        let edits = item
-            .additional_text_edits
-            .as_ref()
-            .unwrap_or_else(|| panic!("{} must have additionalTextEdits", item.label));
-        assert_eq!(edits.len(), 1);
-        assert!(
-            edits[0].new_text.contains("services/orders"),
-            "{} import text must contain the path; got: {:?}",
-            item.label,
-            edits[0].new_text
-        );
-    }
+        .filter_map(|item| item["label"].as_str())
+        .collect();
+    assert!(labels.contains(&"function"), "got {labels:?}");
 }

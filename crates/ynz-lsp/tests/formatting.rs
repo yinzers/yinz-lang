@@ -45,9 +45,9 @@ fn notification_methods(
         .collect()
 }
 
-// bug: format-on-save returns edits for a canonical file (endless format loop), none for a dirty file, or no edits and no showMessage for a file with parse errors | tier: Medium
 macro_rules! formatting_case {
     ($name:ident, $source:expr, $expected:ident) => {
+        // bug: format-on-save returns edits for a canonical file (endless format loop), none for a dirty file, or no edits and no showMessage for a file with parse errors | tier: Medium
         #[test]
         fn $name() {
             let (state, uri) =
@@ -97,9 +97,9 @@ formatting_case!(
     no_edit_and_a_message
 );
 
-// bug: range formatting panics on an inverted range or returns edits for a canonical or unparseable file, or says nothing about a file it cannot format | tier: Medium
 macro_rules! range_formatting_case {
     ($name:ident, $source:expr, $range:expr, $expect_message:expr) => {
+        // bug: range formatting panics on an inverted range or returns edits for a canonical or unparseable file, or says nothing about a file it cannot format | tier: Medium
         #[test]
         fn $name() {
             let (state, uri) =
