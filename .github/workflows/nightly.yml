@@ -1,0 +1,79 @@
+name: Nightly
+
+# The nightly lane (plan #19, card #681; marking convention frozen by card #680): every test
+# whose function name starts with `nightly_` — wall-clock timing and performance assertions,
+# ratios, benchmarks, soak, load, and the dedicated-lane sweeps (ASan, leaks). The per-PR CI
+# leaves them out through the default-filter in .config/nextest.toml.
+#
+# It runs on a schedule, on demand, and on a PR that changes this lane's own definition, so a
+# broken selector is seen before it lands. It is not a required check.
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/nightly.yml
+      - .github/actions/**
+      - .config/nextest.toml
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+permissions:
+  contents: read
+
+jobs:
+  nightly:
+    name: Nightly tests (nightly_*)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # libclang-rt-18-dev: the ASan sweep links its programs against libclang_rt.asan.
+      - name: Install LLVM 18 and the ASan runtime
+        uses: ./.github/actions/install-apt
+        with:
+          packages: llvm-18 llvm-18-dev libclang-18-dev clang-18 libclang-rt-18-dev
+
+      - name: Point the build at LLVM 18
+        run: echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> "$GITHUB_ENV"
+
+      - name: Install Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-name: nightly
+
+      - name: Install cargo-nextest
+        uses: ./.github/actions/install-nextest
+
+      # ynz-driver and ynz-watch embed the runtime staticlib via include_bytes!, and the ASan
+      # sweep hands the same file to clang, so build it first (same as the CI jobs).
+      - name: Build runtime archive (required by include_bytes! in driver/watch)
+        run: cargo build -p ynz-runtime
+
+      - name: List the nightly tests
+        run: |
+          cargo nextest list --workspace --profile nightly --ignore-default-filter \
+            -E 'test(/(^|::)nightly_/)' --message-format oneline | tee nightly-list.txt
+          echo "NIGHTLY TESTS LISTED: $(wc -l < nightly-list.txt)"
+
+      # `--no-tests=warn`: the lane may legitimately select nothing until a test is renamed
+      # `nightly_`; the count printed above is the evidence. Not `pass`: a warning stays visible.
+      - name: Run the nightly tests
+        run: |
+          cargo nextest run --workspace --profile nightly --ignore-default-filter \
+            -E 'test(/(^|::)nightly_/)' --no-tests=warn --failure-output immediate-final
+
+      - name: Slowest nightly tests
+        if: always()
+        run: |
+          if [ -f target/nextest/nightly/junit.xml ]; then
+            .github/scripts/slowest-tests.sh target/nextest/nightly/junit.xml
+          else
+            echo "no junit.xml: no nightly test ran"
+          fi
