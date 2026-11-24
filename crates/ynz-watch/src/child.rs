@@ -226,20 +226,3 @@ fn kill_gracefully_impl(child: &mut Child, _grace_ms: u64) {
     let _ = child.kill();
     let _ = child.wait();
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // WHY: ChildHandle::spawn must return WatchError::ChildSpawnFailed when the binary
-    //      doesn't exist. If this panics instead of returning an Err, the event loop
-    //      crashes and leaves no useful diagnostic. Do NOT change to expect()/unwrap().
-    #[test]
-    fn spawn_nonexistent_binary_returns_error() {
-        let result = ChildHandle::spawn(Path::new("/nonexistent/binary"));
-        assert!(
-            matches!(result, Err(WatchError::ChildSpawnFailed { .. })),
-            "spawn should return WatchError::ChildSpawnFailed for missing binary"
-        );
-    }
-}

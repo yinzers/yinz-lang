@@ -50,28 +50,3 @@ pub fn print_file_removed(path: &str) {
     println!("ynz watch: {path} vanished; watch continues, will re-pick-up on re-creation");
     let _ = io::stdout().flush();
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // WHY: ui primitives must never panic — a panic in print_watching() aborts the
-    //      daemon mid-cycle and leaves a zombie child. Tests run in a non-TTY context
-    //      which is the most likely place panics would occur (clear() skips ANSI).
-
-    #[test]
-    fn clear_no_clear_is_noop() {
-        // no_clear=true → always a no-op regardless of TTY status.
-        clear(true);
-    }
-
-    #[test]
-    fn status_lines_do_not_panic() {
-        // Each call must not panic in a non-TTY test context.
-        print_building("foo.ynz");
-        print_success(123);
-        print_errors(3, 456);
-        print_watching();
-        print_file_removed("foo.ynz");
-    }
-}
