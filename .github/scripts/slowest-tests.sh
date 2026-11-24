@@ -15,6 +15,9 @@ testcases \
   | sed -E 's/<testcase name="([^"]*)" classname="([^"]*)".*time="([^"]*)"/\3\t\2\t\1/' \
   | sort -t$'\t' -k1,1 -rn | awk 'NR<=10'
 
+slowest="$(testcases | sed -E 's/<testcase name="([^"]*)" classname="([^"]*)".*time="([^"]*)"/\3 s \2 \1/' | sort -rn | awk 'NR==1')"
+echo "::notice title=slowest test::${slowest}"
+
 echo "--- 10 binaries by summed test time (seconds, tests, binary)"
 testcases \
   | sed -E 's/<testcase name="([^"]*)" classname="([^"]*)".*time="([^"]*)"/\2\t\3/' \
