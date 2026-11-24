@@ -3106,7 +3106,7 @@ fn m8_combo_doc_sensitive_bignum() {
 // v0.3-M1: sleepBlocking intrinsic end-to-end
 // ─────────────────────────────────────────────────────────────────────────────
 
-// bug: `sleepBlocking` is registered but unreachable from .ynz source (typeck/codegen/link); wall-clock lower bound dropped from CI | tier: Medium
+// bug: `sleepBlocking` is registered but unreachable from .ynz source (typeck/codegen/link) | tier: Medium
 #[test]
 fn sleep_ms_intrinsic_links_and_runs() {
     // WHY: sleepBlocking(int) must be reachable end-to-end — typeck → codegen → link
@@ -3122,6 +3122,25 @@ fn sleep_ms_intrinsic_links_and_runs() {
         stdout.trim(),
         "slept",
         "sleepBlocking fixture must print `slept`; got:\n{stdout}"
+    );
+}
+
+// bug: `sleepBlocking(50)` returns without sleeping (a no-op intrinsic), so the run takes under 40 ms; wall-clock lower bound goes nightly | tier: Medium
+#[test]
+fn nightly_sleep_blocking_sleeps_at_least_its_duration() {
+    // WHY: the only detector of a no-op `sleepBlocking` is the elapsed time; the 40 ms floor
+    // leaves 10 ms of slack under the 50 ms the fixture asks for. A lower bound cannot flake
+    // slow, but it is a wall-clock assertion, so it runs in the nightly lane (rubric s8).
+    let start = std::time::Instant::now();
+    let (_stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m1_sleep_ms.ynz"));
+    let elapsed = start.elapsed();
+    assert_eq!(
+        code, 0,
+        "sleepBlocking fixture must exit 0; stderr:\n{stderr}"
+    );
+    assert!(
+        elapsed.as_millis() >= 40,
+        "sleepBlocking(50) must sleep at least 40ms, but the whole run took {elapsed:?}"
     );
 }
 
