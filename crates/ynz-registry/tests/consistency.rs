@@ -7,6 +7,7 @@
 // [[banned_jargon]] invariants
 // ---------------------------------------------------------------------------
 
+// bug: a [[banned_jargon]] entry with an empty replacement or reason reaches diagnostics and hovers as a blank teaching line | tier: Medium
 #[test]
 fn banned_jargon_all_have_replacement_and_reason() {
     let mut violations = Vec::new();
@@ -31,6 +32,7 @@ fn banned_jargon_all_have_replacement_and_reason() {
     );
 }
 
+// bug: duplicate [[banned_jargon]] names make the lookup return an arbitrary replacement | tier: Medium
 #[test]
 fn banned_jargon_names_are_unique() {
     let mut names: Vec<&str> = ynz_registry::banned_jargon().map(|e| e.name).collect();
@@ -48,6 +50,7 @@ fn banned_jargon_names_are_unique() {
 // [[deferred_language_feature]] and [[deferred_tooling_feature]] invariants
 // ---------------------------------------------------------------------------
 
+// bug: a [[deferred_language_feature]] entry missing why, ships_in, design_doc or triggers renders an empty deferred-feature error | tier: Medium
 #[test]
 fn deferred_language_features_have_required_fields() {
     let mut violations = Vec::new();
@@ -84,6 +87,7 @@ fn deferred_language_features_have_required_fields() {
     );
 }
 
+// bug: a [[deferred_tooling_feature]] entry missing why, ships_in or design_doc renders an empty deferred-tool error | tier: Medium
 #[test]
 fn deferred_tooling_features_have_required_fields() {
     let mut violations = Vec::new();
@@ -118,6 +122,7 @@ fn deferred_tooling_features_have_required_fields() {
 // [[type_attached_constant]] invariants
 // ---------------------------------------------------------------------------
 
+// bug: a [[type_attached_constant]] literal that does not parse as its declared type breaks the generated constant | tier: Medium
 #[test]
 fn type_attached_constants_have_parseable_value_literals() {
     let mut violations = Vec::new();
@@ -176,6 +181,7 @@ fn type_attached_constants_have_parseable_value_literals() {
 // [[primitive_intrinsic]] invariants
 // ---------------------------------------------------------------------------
 
+// bug: a [[primitive_intrinsic]] with an unknown kind, or a method without receiver_type or a method_1arg without exactly one param type, is unusable by typeck | tier: Medium
 #[test]
 fn primitive_intrinsics_have_valid_kinds() {
     let valid_kinds = ["print_type", "free_fn", "method", "method_1arg"];
@@ -216,6 +222,7 @@ fn primitive_intrinsics_have_valid_kinds() {
 // [[muted_hint_domain]] invariants
 // ---------------------------------------------------------------------------
 
+// bug: a [[muted_hint_domain]] with an invalid placement category or empty example breaks the inlay-hint docs | tier: Medium
 #[test]
 fn muted_hint_domains_have_valid_placement_categories() {
     let valid = ["Addition", "Replacement", "Informational"];
@@ -258,6 +265,7 @@ fn muted_hint_domains_have_valid_placement_categories() {
 // [[diagnostic_template]] invariants
 // ---------------------------------------------------------------------------
 
+// bug: a [[diagnostic_template]] missing WHAT, WHAT INSTEAD or WHY breaks the three-part diagnostic contract | tier: Medium
 #[test]
 fn diagnostic_templates_have_all_three_parts() {
     let mut violations = Vec::new();
@@ -292,6 +300,7 @@ fn diagnostic_templates_have_all_three_parts() {
 // [[keyword]] and [[banned_declaration_keyword]] invariants
 // ---------------------------------------------------------------------------
 
+// bug: a [[keyword]] with an empty token or since leaves the lexer and docs without data | tier: Medium
 #[test]
 fn keywords_have_populated_fields() {
     let mut violations = Vec::new();
@@ -316,6 +325,7 @@ fn keywords_have_populated_fields() {
     );
 }
 
+// bug: a [[banned_declaration_keyword]] with empty what_instead or why shows users a rejection with no teaching text | tier: Medium
 #[test]
 fn banned_declaration_keywords_have_teaching_text() {
     let mut violations = Vec::new();
@@ -349,6 +359,7 @@ fn banned_declaration_keywords_have_teaching_text() {
 // registry field contains these substrings, the client would mis-split the message
 // and lose structured content. This test catches that at registry-build time so the
 // mis-split can never reach a production editor session.
+// bug: a registry field containing the LSP WHAT INSTEAD/WHY delimiters makes the client mis-split diagnostic messages | tier: Medium
 #[test]
 fn no_registry_field_contains_lsp_delimiter_substrings() {
     const D1: &str = "WHAT INSTEAD:";

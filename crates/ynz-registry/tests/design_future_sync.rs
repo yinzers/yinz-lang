@@ -108,6 +108,7 @@ fn deferred_design_docs() -> Vec<&'static str> {
         .collect()
 }
 
+// bug: a future-design doc has no registry entry, so users hitting that deferred syntax get no consistent deferred-feature error | tier: Medium
 #[test]
 fn every_future_doc_has_a_registry_entry_or_is_skipped() {
     let future_dir = design_future_dir();
@@ -155,6 +156,7 @@ fn every_future_doc_has_a_registry_entry_or_is_skipped() {
     );
 }
 
+// bug: a registry entry's design_doc points at a missing file, so the deferred-feature error links nowhere | tier: Medium
 #[test]
 fn every_registry_entry_design_doc_exists() {
     let workspace_root = workspace_root();
@@ -190,6 +192,7 @@ fn every_registry_entry_design_doc_exists() {
     );
 }
 
+// bug: a SKIP entry without a rationale hides a future-design doc from the registry parity check unexplained | tier: Medium
 #[test]
 fn skip_list_has_rationale_for_every_entry() {
     // Every skipped file must have a non-empty rationale.
