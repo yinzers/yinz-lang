@@ -1812,6 +1812,62 @@ suspension_local_table_high_case! {
     );
     assert_eq!(stdout, "1\n", "expected output mismatch; stderr:\n{stderr}");
     }
+    // case: a cross-module Boolean local is mis-sized so its value is corrupted after resume
+    v03_m3e_bool_crossing_local_direct_runs_correctly => {
+    // test-ratchet: M3e Phase 2 LIFT — was assert_m3e_reject (exit 1); now asserts correct
+    // runtime output. Bool crossing-local must hold its value across the resume boundary.
+    // WHY: bool × crossing-local × direct (escape danger matrix axis 1). A bool local
+    // declared before a cross-module suspending call must hold its value after resume.
+    // Wrong frame layout → corrupted stack slot → wrong after-value; SIGILL is the failure
+    // mode this test gates against by requiring the exact correct output.
+    let (stdout, _stderr, code) = ynz_run_stdout(&fixture("v0_3_m3e_bool_crossing_local_direct"));
+    assert_eq!(
+        code, 0,
+        "bool crossing-local direct: must exit 0; exit was {code}"
+    );
+    assert_eq!(
+        stdout, "before: true\nafter: true\n",
+        "bool crossing-local direct: wrong output"
+    );
+    }
+    // case: a cross-module Float local is mis-sized so its f64 bits are corrupted after resume
+    v03_m3e_float_crossing_local_direct_runs_correctly => {
+    // test-ratchet: M3e Phase 2 LIFT — was assert_m3e_reject (exit 1); now asserts correct
+    // runtime output. Float crossing-local must hold its value across the resume boundary.
+    // WHY: float × crossing-local × direct. Float (f64) local must survive resume.
+    // Detection: the fixture uses boolean comparison (temp > threshold) instead of
+    // float.toString() — toString() renders decimal128-zero for all float values (pre-existing
+    // base bug). The boolean comparison detects slot corruption: if temp is zeroed by a
+    // frame mis-size, the comparison returns false instead of true.
+    // test-ratchet: fixture changed from toString() approach to boolean comparison so the
+    // test assertion can detect corruption rather than passing trivially on two matching zeros.
+    let (stdout, _stderr, code) = ynz_run_stdout(&fixture("v0_3_m3e_float_crossing_local_direct"));
+    assert_eq!(
+        code, 0,
+        "float crossing-local direct: must exit 0; exit was {code}"
+    );
+    assert_eq!(
+        stdout, "big_before: true\nbig_after: true\n",
+        "float crossing-local direct: both comparisons must be true \
+         (3.14 > 3.0 before AND after suspension); slot corruption would produce false"
+    );
+    }
+    // case: a cross-module String local is mis-sized so its pointer dangles after resume
+    v03_m3e_string_crossing_local_direct_runs_correctly => {
+    // test-ratchet: M3e Phase 2 LIFT — was assert_m3e_reject (exit 1); now asserts correct
+    // runtime output. String crossing-local must hold its pointer across the resume boundary.
+    // WHY: string × crossing-local × direct. String (pointer-sized) local must survive resume.
+    // Wrong frame layout → dangling pointer → wrong string read or crash.
+    let (stdout, _stderr, code) = ynz_run_stdout(&fixture("v0_3_m3e_string_crossing_local_direct"));
+    assert_eq!(
+        code, 0,
+        "string crossing-local direct: must exit 0; exit was {code}"
+    );
+    assert_eq!(
+        stdout, "before: hello\nafter: hello\n",
+        "string crossing-local direct: wrong output"
+    );
+    }
     // case: a cross-module Number (decimal128) local is sized as one slot so its high half is overwritten
     v03_m3e_number_crossing_local_direct_runs_correctly => {
     // test-ratchet: M3e Phase 2 LIFT — was assert_m3e_reject (exit 1); now asserts correct
@@ -2188,6 +2244,36 @@ suspension_local_table_high_case! {
         stdout.trim(),
         "7",
         "must print the original parameter value (7) after suspension; stderr:\n{stderr}"
+    );
+    }
+    // case: an `Array` local held across a wait reloads a stale or dangling heap pointer so its elements read wrong
+    v03_m3a_p3_audit_array_crossing_local => {
+    // WHY: array<T> is heap-allocated — the heap pointer is stable across suspension.
+    // Flush stores the pointer as i64, reload restores the same heap address.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_audit_array_crossing.ynz"));
+    assert_eq!(
+        code, 0,
+        "array crossing local must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "10\n20\n30",
+        "array elements must be correct after wait; got:\n{stdout}"
+    );
+    }
+    // case: a `Map` local held across a wait reloads a stale or dangling heap pointer so its entries are lost
+    v03_m3a_p3_audit_map_crossing_local => {
+    // WHY: map<K,V> is heap-allocated — the heap pointer is stable across suspension.
+    // Verifies the map can be iterated correctly after a wait (entry count = 3).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_audit_map_crossing.ynz"));
+    assert_eq!(
+        code, 0,
+        "map crossing local must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "3",
+        "map must have 3 entries after wait; got:\n{stdout}"
     );
     }
     // case: an `options` local's i8 tag is not preserved across a wait so the wrong arm fires
@@ -2840,7 +2926,7 @@ fn v03_m3d_imported_suspending_after_pair_byte_identical_and_clean() {
 /// One named test per input class of the `bignum table` unit; each case is a test the runner names.
 macro_rules! bignum_table_high_case {
     ($($case_name:ident => $case_body:block)+) => { $(
-        // bug: `Number<100>` addition uses binary floats so 0.1 + 0.2 is not exactly 0.3 | tier: High
+        // bug: `Number<100>` addition or multiplication uses binary floats so 0.1 + 0.2 is not exactly 0.3 or 0.1 * 0.2 is not 0.02, or a bignum interpolates wrong | tier: High
         #[test]
         fn $case_name() $case_body
     )+ };
@@ -2857,6 +2943,22 @@ bignum_table_high_case! {
         "bignum add must compile and run; stderr:\n{stderr}"
     );
     assert_eq!(stdout.trim(), "0.3", "0.1 + 0.2 must equal exactly 0.3");
+    }
+    // case: `Number<100>` multiplication or `${}` interpolation of a bignum uses binary floats or garbles the digits
+    m8_combo_modules_bignum_interpolation => {
+    // WHY: guards that number<100> arithmetic and string interpolation work together
+    // in a multi-file project. If bignum values are lost at module boundaries or
+    // interpolation formats them wrong, this catches it.
+    let project_root = fixtures_dir().join("m8_combo_modules_bignum_interpolation");
+    let (stdout, stderr, code) = ynz_run_stdout(&project_root);
+    assert_eq!(
+        code, 0,
+        "bignum+interpolation combo must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout, "0.1 + 0.2 = 0.3\n0.1 * 0.2 = 0.02\n",
+        "bignum arithmetic must be exact and interpolate correctly"
+    );
     }
 }
 
@@ -4395,6 +4497,47 @@ array_shape_survives_table_high_case! {
          (10+20=30); got:\n{stdout}"
     );
     }
+    // case: a struct-of-arrays `Array<Shape>` in a suspending main loses its `.copy()` snapshot, scatter write or background copy across a wait
+    m5_p5_soa_copy_wait_bg_matrix => {
+    // WHY: THE SoA cell of E9's matrix — qualifying SoA array × `wait` (SM
+    // main; pts crosses the suspension) × `.copy()` (soa_copy_to_aos snapshot)
+    // × IndexAssign scatter × `background` coexisting in the same SM main
+    // (spawn-site `.copy()` ownership transfer on the SM-descriptor path, on a
+    // SECOND shape — see the fixture's D11 note: bg-crossing a shape pads it
+    // and padding-wins would force the SoA array AoS) × dual-mode
+    // byte-identity. Behavior:
+    //   - the AoS snapshot taken before the mutation reads 7884 after it;
+    //   - the post-mutation hot loop reads the scatter through segment
+    //     addressing (2727/5454);
+    //   - the bg task sees the pre-mutation Part copy (30), the caller 119.
+    m5_p3_sweep_assert_dual_mode(
+        "m5_p5_soa_copy_wait_bg.ynz",
+        "hotx: 2727\nhoty: 5454\nsnap: 7884\ncaller: 119\nbg: 30\n",
+    );
+
+    // SoA actually FIRED on the SM path (the M3d silent-decline corpse class:
+    // a fixture that "passes" because the array quietly declined to AoS proves
+    // nothing about SoA). `soa_new` = the ynz_array_new_sized construction call
+    // in lower_soa_construction; `soa_ctor` = its per-element scatter prefix.
+    let src = fixture("m5_p5_soa_copy_wait_bg.ynz");
+    let par_ir = build_to_tmpdir_emit_ir_mode(&src, false);
+    assert!(
+        par_ir.contains("soa_new") && par_ir.contains("soa_ctor"),
+        "default-mode IR must contain SoA construction instructions (soa_new + \
+         soa_ctor) — their absence means the qualifying array silently declined \
+         to AoS (or the SM lowering path lost the Stmt::Let SoA interception) \
+         and this fixture is proving nothing about SoA"
+    );
+
+    // And NEVER fires under --no-auto-parallel (Phase 4 entry gate + the
+    // build_module belt assert): zero soa-named instructions in sequential IR.
+    let seq_ir = build_to_tmpdir_emit_ir_mode(&src, true);
+    assert!(
+        !seq_ir.contains("soa_new") && !seq_ir.contains("soa_ctor"),
+        "--no-auto-parallel IR must contain ZERO SoA instructions — a hit means \
+         a SoA decision leaked past the Phase 4 no-auto-parallel entry gate"
+    );
+    }
 }
 
 // bug: an `Array<Shape>` loop variable adds per-element or per-iteration heap copies, or leaves them unfreed | tier: High
@@ -5093,6 +5236,37 @@ auto_parallel_identity_table_medium_case! {
     let fa_pos = stdout.find("fa").expect("fa in stdout");
     let fb_pos = stdout.find("fb").expect("fb in stdout");
     assert!(fa_pos < fb_pos, "fa must appear before fb in stdout");
+    }
+    // case: a `wait` on a callee that depends on an in-flight result runs before its dependency resolves
+    v03_m3b_p4_wait_data_dependent_correct_output => {
+    // WHY: `wait` whose callee depends on an in-flight result. The data dependency
+    // forces ordering; the explicit `wait` forces the join. Output must be deterministic.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_wait_data_dependent.ynz"));
+    assert_eq!(
+        code, 0,
+        "wait-data-dependent must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "result:99\ndone",
+        "result must be 99 and done must follow; stdout:\n{stdout}"
+    );
+    }
+    // case: two consecutive `wait` statements are not each an ordering barrier
+    v03_m3b_p4_wait_two_consecutive_correct_output => {
+    // WHY: Two consecutive `wait` statements — each is a separate barrier that forces
+    // sequential ordering: alpha completes, then beta starts. The output order must
+    // be alpha then beta.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_wait_two_consecutive.ynz"));
+    assert_eq!(
+        code, 0,
+        "two-consecutive-wait must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "alpha\nbeta\ndone",
+        "alpha must appear before beta; stdout:\n{stdout}"
+    );
     }
     // case: a `wait` followed by a fresh parallel group does not order the group after the barrier
     v03_m3b_p4_wait_then_fresh_group_correct_output => {
@@ -6288,6 +6462,12 @@ cpu_group_fires_table_high_case! {
         1,
     );
     }
+    // case: a `float` CPU result (f64 bits in one word) packed inside an `if` arm loses its bit pattern
+    v03_m3d_danger_float_if_arm_fires_byte_identical => {
+    // WHY: a `float` (f64 bits in one word) packed inside an `if` arm. The f64 bit pattern must
+    // travel through the result slot intact. A whole-valued float prints without a trailing `.0`.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_danger_float_if_arm.ynz", "6\n15");
+    }
     // case: a heap-pointer (`string`) CPU result packed inside an `if` arm is lost or leaks
     v03_m3d_danger_string_if_arm_fires_byte_identical => {
     // WHY: a heap-pointer return (`string`) packed inside an `if` arm. The result slot holds a
@@ -6325,6 +6505,17 @@ cpu_group_fires_table_high_case! {
         "n=3\nn=7",
     );
     }
+    // case: two same-callee `array` members inside an `if` arm share one result slot, so their counts coincide
+    v03_m3d_danger_same_callee_array_if_arm_fires_byte_identical => {
+    // WHY: same-callee distinctness with a heap-pointer (`array<int>`) return INSIDE an `if` arm.
+    // The member-index slot keying must hold for a pointer pack in nested control flow; the two
+    // calls give DIFFERENT counts (3, 6).
+    m3d_assert_fires_byte_identical_alloc_gap(
+        "v0_3_m3d_danger_same_callee_array_if_arm.ynz",
+        "3\n6",
+        0,
+    );
+    }
     // case: two same-callee wide `number` members inside a `match` arm share one result slot or leak
     v03_m3d_danger_same_callee_number_match_arm_fires_byte_identical => {
     // WHY: same-callee distinctness with a wide-value return INSIDE a `match` arm — the two-word
@@ -6351,6 +6542,28 @@ cpu_group_fires_table_high_case! {
     // alloc==free: 2 maps × 5 counted buffers, all released at scope exit (v0.3-M5 P3 by-value
     // map ABI; see v03_m3d_return_class_map_fires_byte_identical's WHY).
     m3d_assert_fires_byte_identical_alloc_gap("v0_3_m3d_danger_map_match_arm.ynz", "3\n5", 0);
+    }
+    // case: a heap-pointer (`array`) CPU result packed inside a `match` arm loses its pointer or leaks its buffer
+    v03_m3d_danger_array_match_arm_fires_byte_identical => {
+    // WHY: a heap-pointer return (`array<int>`) packed inside a `match` arm. Same pointer-slot
+    // risk as the string-if-arm cell, but in match-arm frame machinery and with the counts read
+    // inside the arm (so the int counts, not the array pointers, cross the arm boundary).
+    m3d_assert_fires_byte_identical_alloc_gap("v0_3_m3d_danger_array_match_arm.ynz", "3\n5", 0);
+    }
+    // case: a mixed CPU(number)+I/O group is declined or mis-packs the CPU child's decimal128 result
+    v03_m3d_danger_mixed_number_declines_byte_identical => {
+    // WHY (v0.3-M3g Phase 3 FLIP — same reasoning as the string sibling below; test name
+    // retained for history continuity): a mixed group with a wide-value (`number`) CPU child.
+    // The original decline was scope-bounded ("mixed CPU+I/O overlap is M3g, not M3d"), not a
+    // safety concern about decimal128 CPU children — `build_cpu_trampoline`'s i128 packing arm
+    // already handles `number` returns for the pure-CPU path unchanged. FIRES (1 spawn),
+    // byte-identical to `--no-auto-parallel` ("6.0\n2.5"). If this shows 0 spawns, the fusion
+    // regressed — fix the codegen, not this test.
+    m3d_assert_fires_n_byte_identical_alloc_free(
+        "v0_3_m3d_danger_mixed_number_declines.ynz",
+        "6.0\n2.5",
+        1,
+    );
     }
     // case: a mixed CPU(string)+I/O group is declined or leaks the CPU child's owned string
     v03_m3d_danger_mixed_string_declines_byte_identical => {
@@ -6748,6 +6961,17 @@ worth_it_table_medium_case! {
     // this fire (≠ 0 spawns), the worth-it proxy stopped gating trivial leaves — fix the gate,
     // not this test.
     m3d_assert_declines_byte_identical("v0_3_m3d_worth_it_trivial_leaf_inline.ynz", "40\n63");
+    }
+    // case: heavy straight-line callees (no loop or self-call) are spawned or change the output instead of staying inline
+    v03_m3d_hostile_worth_it_false_negative_declines_byte_identical => {
+    // WHY: a worth-it FALSE NEGATIVE — heavy-looking straight-line callees with no loop or
+    // self-call, so the loop/recursion-keyed worth-it proxy declines them. A false negative is
+    // only a missed perf opportunity, never a wrong answer: 0 spawns + byte-identical output.
+    // This locks that the proxy is a perf gate, never a correctness gate.
+    m3d_assert_declines_byte_identical(
+        "v0_3_m3d_hostile_worth_it_false_negative_declines.ynz",
+        "82\n177",
+    );
     }
     // case: loop-bearing callees are declined by the worth-it proxy so no parallelism happens
     v03_m3d_worth_it_loop_callee_fires => {
@@ -7652,6 +7876,25 @@ parallel_binding_table_high_case! {
         "parallel number-return must print a:1.5 and b:2.5; stdout:\n{par}"
     );
     }
+    // case: a parallel-group binding of a `float` suspending callee panics the compiler in the f64 arm of the i64-bits path
+    v03_m3b_p4_parallel_float_return_correct_output => {
+    // WHY: Regression lock for corpse-(a) — a parallel let-binding to a `float`
+    // suspending callee must route its FloatValue (f64) through `bind_sm_return_value`,
+    // which allocates an f64 alloca. A hand-rolled `to_i64_bits` path would panic
+    // inside the Float arm and corrupt the value. This test asserts the compile
+    // succeeds and the output is correct.
+    let src = fixture("v0_3_m3b_p4_parallel_float_return.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "parallel float-return build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        par.trim(),
+        "x:3.5\ny:7",
+        "parallel float-return must print x:3.5 and y:7; stdout:\n{par}"
+    );
+    }
     // case: a parallel-group binding of a `string` suspending callee loses its heap pointer
     v03_m3b_p4_parallel_string_return_correct_output => {
     // WHY: Regression lock for corpse-(a) — a parallel let-binding to a `string`
@@ -7782,6 +8025,45 @@ parallel_binding_table_high_case! {
         par.trim(),
         "later\na:10\nb:20",
         "parallel ec-crosses-wait must print later, a:10, b:20; stdout:\n{par}"
+    );
+    }
+    // case: the crossing-local fix changes a parallel-group binding that is used immediately (no `wait` between)
+    v03_m3b_p5_parallel_noncrossing_control_correct_output => {
+    // WHY (P5 regression guard): a parallel-group binding used IMMEDIATELY (no intervening
+    // `wait`) is NOT a crossing local. The crossing-local fix must leave this path unchanged —
+    // `bind_sm_result_and_flush` fresh-allocas in the join block for non-crossing bindings,
+    // which is correct (they never survive a suspension). This guards against the fix
+    // perturbing the common non-crossing case.
+    let src = fixture("v0_3_m3b_p5_parallel_noncrossing_control.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "non-crossing control build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        par.trim(),
+        "a:7\nb:8",
+        "non-crossing control must print a:7, b:8; stdout:\n{par}"
+    );
+    }
+    // case: an inline-poll `number errors` parallel collection (decimal128 + errors-capable, no `wait`) loses its 128-bit value or error slot
+    v03_m3b_p5_parallel_number_ec_inline_collect_correct_output => {
+    // WHY (P5 inline-poll lock): an inline-poll `-> number errors` (decimal128 + errors-capable)
+    // parallel collection with NO intervening `wait` is the already-working non-crossing path.
+    // The parallel-group return load rebuilds the 2-slot EC struct AND carries the full i128
+    // decimal128 value; `bind_sm_result_and_flush` fresh-allocas in the join block. This locks
+    // the non-crossing EC+decimal128 combination so the crossing-local fix does not silently
+    // regress it.
+    let src = fixture("v0_3_m3b_p5_parallel_number_ec_inline_collect.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "inline-poll number+EC collect build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        par.trim(),
+        "a:9999999999.000000001\nb:2.5",
+        "inline-poll number+EC collect must print a:9999999999.000000001, b:2.5; stdout:\n{par}"
     );
     }
     // case: a parallel-group binding does not survive a second `wait` barrier
@@ -8216,6 +8498,13 @@ channel_handle_run_table_high_case! {
     v0_3_m4_p2_r5_composed_suspension_gate => {
     m4_p2_assert_runs_byte_identical_alloc_free("v0_3_m4_channel_composed.ynz", "10\n20\ndone\n");
     }
+    // case: a collected `number errors` child suspended mid-execution on a full-channel send loses its frame or wide result
+    v0_3_m4_p2_r5xr8_suspend_mid_execution_then_collect => {
+    m4_p2_assert_runs_byte_identical_alloc_free(
+        "v0_3_m4_r5xr8_suspend_then_collect.ynz",
+        "15\n9999999999.000000001\n",
+    );
+    }
     // case: a bare channel (no struct wrapper) composed with a suspend/resume loses its value or leaks
     // WHY: the FRAGO 004 relocation proof — the BARE-channel (fire-and-forget spawn, no handle)
     // two-task composed scenario. Proves `emit_channel_suspend_point`'s suspend→persist→resume
@@ -8298,6 +8587,10 @@ channel_handle_run_table_high_case! {
         "v0_3_m4_channel_never_drained.ynz",
         "parent exits while producer stays backpressured\n",
     );
+    }
+    // case: a value sent and received on one channel inside a single task is lost or leaks the channel
+    v0_3_m4_p2_channel_smoke => {
+    m4_p2_assert_runs_byte_identical_alloc_free("v0_3_m4_channel_smoke.ynz", "7\nsmoke done\n");
     }
     // case: a value sent through a handle is lost or garbled on receive
     // WHY: the full handle round-trip — `h.send(v)` feeds the child's first `channel<T>`
@@ -8607,6 +8900,14 @@ spawn_borrowed_argument_refused_table_high_case! {
         "mutates its arguments via `lend`",
     );
     }
+    // case: a generic callee that mutates its arguments via `lend` is accepted at spawn
+    v0_3_m4_p3_reject_lend_generic => {
+    // WHY: R3 silent-skip gap CLOSED — the `lend` twin of the generic-callee gap.
+    m4_p3_assert_rejects(
+        "v0_3_m4_p3_reject_lend_generic.ynz",
+        "mutates its arguments via `lend`",
+    );
+    }
     // case: a generic callee borrowing its arguments is accepted at spawn
     v0_3_m4_p3_reject_share_generic => {
     // WHY: R3 silent-skip gap CLOSED — a `share`-param GENERIC callee lives in the
@@ -8712,6 +9013,24 @@ by_value_element_table_high_case! {
     assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
     assert_eq!(stdout, "4\n10\n40\n-1\n20\n10\n40\ntrue\nfalse\n25\n35\n");
     }
+    // case: a runtime-built `array<Float>` read back by value loses the f64 bits
+    m5_p2_byval_float_runtime => {
+    // WHY: float × runtime-computed elements — behavior-preservation cell.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_float_runtime.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "4\n10\n40\n-5\n20\n10\n40\ntrue\nfalse\n25\n35\n");
+    }
+    // case: a runtime-built `array<Boolean>` read back by value truncates i1 wrongly
+    m5_p2_byval_bool_runtime => {
+    // WHY: boolean × runtime-computed elements — RED-today cell #1 (same
+    // miscompile class as the literal variant; golden hand-derived).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_bool_runtime.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(
+        stdout,
+        "4\ntrue\nfalse\ntrue\nfalse\ntrue\nfalse\ntrue\ntrue\nfalse\n"
+    );
+    }
     // case: an `array<Boolean>` read back by value truncates i1 wrongly
     m5_p2_byval_bool_literal => {
     // WHY: boolean × literal elements — RED-today cell #1: the pointer ABI
@@ -8799,6 +9118,15 @@ by_value_element_table_high_case! {
     assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
     assert_eq!(stdout, "1\n10\n");
     }
+    // case: a `maybe` of a primitive element escaping its read reuses the envelope and reads the last element
+    m5_p2_byval_int_maybe_escape => {
+    // WHY: tripwire (d) — maybe-envelope escape with a PRIMITIVE element type:
+    // the envelope-reuse half of the class is independent of shape payloads.
+    // Unfixed observed 7 (last element); golden asserts the matched 6.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_int_maybe_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "6\n");
+    }
     // case: a `maybe` element escaping its read aliases the array slot
     m5_p2_byval_maybe_escape => {
     // WHY: tripwire (c) — the maybe ENVELOPE itself escapes (get-maybe path):
@@ -8881,6 +9209,15 @@ by_value_element_table_high_case! {
     // LITERAL built inside the loop from the loop variable (Expr::MapLit's
     // marshalling site). Unfixed 3/30.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_map_lit_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n10\n");
+    }
+    // case: a shape stored through a struct literal built as a map (identifier-key path) aliases the source element
+    m5_p2_byval_struct_map_lit_escape => {
+    // WHY: round-2 tripwire (c2) — same literal escape through the
+    // IDENTIFIER-KEY path (`{ pick: p }` with a map annotation — the
+    // StructLit-as-map lowering), the fourth and last map marshalling site.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_struct_map_lit_escape.ynz"));
     assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
     assert_eq!(stdout, "1\n10\n");
     }

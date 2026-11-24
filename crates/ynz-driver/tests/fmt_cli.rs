@@ -27,6 +27,7 @@ macro_rules! fmt_cli_case {
 
 // ── Single file ───────────────────────────────────────────────────────────────
 
+// case: `ynz fmt` rewrites a file that is already canonical
 fmt_cli_case!(single_file_already_canonical_is_not_rewritten => {
     let path = fixture("canonical.ynz");
     let original = std::fs::read_to_string(&path).unwrap();
@@ -37,6 +38,7 @@ fmt_cli_case!(single_file_already_canonical_is_not_rewritten => {
     assert_eq!(original, after, "canonical file must not be rewritten");
 });
 
+// case: `ynz fmt` leaves a non-canonical file unformatted on disk
 fmt_cli_case!(single_file_noncanonical_is_rewritten => {
     // A temp copy keeps the fixture non-canonical for future runs.
     let dir = tempfile::tempdir().unwrap();
@@ -52,6 +54,7 @@ fmt_cli_case!(single_file_noncanonical_is_rewritten => {
     );
 });
 
+// case: a missing file exits 1 or 0 instead of the infra-error code 2
 fmt_cli_case!(single_file_not_found_exits_2 => {
     // A missing file is an infra error (2), not a source error (1).
     ynz()
@@ -62,6 +65,7 @@ fmt_cli_case!(single_file_not_found_exits_2 => {
         .code(2);
 });
 
+// case: a file with a parse error exits 0 or 2 instead of the source-error code 1
 fmt_cli_case!(single_file_parse_error_exits_1 => {
     ynz()
         .arg("fmt")
@@ -73,6 +77,7 @@ fmt_cli_case!(single_file_parse_error_exits_1 => {
 
 // ── --check ───────────────────────────────────────────────────────────────────
 
+// case: `--check` on a canonical file exits non-zero or writes the file
 fmt_cli_case!(check_canonical_exits_0_and_writes_nothing => {
     let path = fixture("canonical.ynz");
     let original = std::fs::read_to_string(&path).unwrap();
@@ -88,6 +93,7 @@ fmt_cli_case!(check_canonical_exits_0_and_writes_nothing => {
     assert_eq!(original, after, "--check must not write anything");
 });
 
+// case: `--check` on a non-canonical file exits 0 or does not name the file it would reformat
 fmt_cli_case!(check_noncanonical_exits_1_and_prints_would_reformat => {
     ynz()
         .arg("fmt")
@@ -101,6 +107,7 @@ fmt_cli_case!(check_noncanonical_exits_1_and_prints_would_reformat => {
 
 // ── --stdin ───────────────────────────────────────────────────────────────────
 
+// case: `--stdin` writes nothing to stdout or does not format the input
 fmt_cli_case!(stdin_formats_to_stdout => {
     let source = "function  f( )  ->  Nothing  { }\n";
     let out = ynz()
@@ -120,6 +127,7 @@ fmt_cli_case!(stdin_formats_to_stdout => {
     );
 });
 
+// case: `--stdin` of broken source exits 0 instead of 1
 fmt_cli_case!(stdin_parse_error_exits_1 => {
     let broken = "function broken() -> Nothing {\n  let x = 1\n";
     ynz()
@@ -133,6 +141,7 @@ fmt_cli_case!(stdin_parse_error_exits_1 => {
 
 // ── --all (project mode) ──────────────────────────────────────────────────────
 
+// case: `--all` outside a `yinz.toml` project exits 0 or 1 instead of the infra-error code 2
 fmt_cli_case!(all_outside_project_exits_2 => {
     // --all requires a yinz.toml project root; no project is an infra error.
     ynz()
@@ -145,6 +154,7 @@ fmt_cli_case!(all_outside_project_exits_2 => {
         .stderr(predicates::str::contains("yinz.toml"));
 });
 
+// case: `--all` skips a non-canonical file of the project
 fmt_cli_case!(all_inside_project_formats_all_files => {
     // A temp copy so the fixture project is not clobbered.
     let dir = tempfile::tempdir().unwrap();
@@ -171,6 +181,7 @@ fmt_cli_case!(all_inside_project_formats_all_files => {
     );
 });
 
+// case: `--all` stops at the first broken file (skipping the rest) or exits 0 despite it
 fmt_cli_case!(all_with_one_broken_file_continues_and_exits_1 => {
     let dir = tempfile::tempdir().unwrap();
     copy_dir(&fixture("project"), dir.path()).unwrap();
