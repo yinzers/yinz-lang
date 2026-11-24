@@ -151,21 +151,34 @@ fn assert_stress_green(tier_args: &[&str], tier_label: &str, lock_ir_backedge: b
     );
 }
 
-#[test]
-fn hot_loop_67m_visits_survives_o0_with_correct_checksum() {
-    // WHY: this is the GENUINE stack-growth lock — the O0 escape hatch is where the
-    // per-iteration alloca growth manifested (SIGSEGV between 262,144 and 524,288
-    // visits pre-fix); 67.1M visits is 16x past the old ~4.19M-visit ledger envelope.
-    // Exit 0 + exact checksum or the bug is back.
-    assert_stress_green(&["--no-optimize"], "O0 escape hatch", false);
+/// One named test per pipeline tier. The legs lock different things (see the header):
+/// the O0 leg is the stack-growth lock, the optimized leg also locks the retained loop in IR.
+macro_rules! hot_loop_stress_case {
+    ($test_name:ident, $tier_args:expr, $tier_label:literal, $lock_ir_backedge:literal) => {
+        // bug: a long plain loop exhausts the stack (SIGSEGV) or corrupts its checksum because per-iteration allocas are not released at the back-edge | tier: High
+        #[test]
+        fn $test_name() {
+            assert_stress_green($tier_args, $tier_label, $lock_ir_backedge);
+        }
+    };
 }
 
-#[test]
-fn hot_loop_67m_visits_survives_optimized_default_with_correct_checksum() {
-    // WHY: the shipped default must hold the same run-level contract, and the
-    // IR-level back-edge lock proves this leg still exercises the retained loop's
-    // stacksave/stackrestore release path (evidence 2026-07-17: default<O2> keeps
-    // the loop + loop-body allocas; opaque runtime calls block closed-form folding)
-    // rather than passing vacuously on a folded constant.
-    assert_stress_green(&[], "default optimized", true);
-}
+// The GENUINE stack-growth lock: at O0 nothing else releases the per-iteration allocas
+// (SIGSEGV between 262,144 and 524,288 visits pre-fix); 67.1M visits is 16x past the old
+// ~4.19M-visit ledger envelope.
+hot_loop_stress_case!(
+    hot_loop_67m_visits_survives_o0_with_correct_checksum,
+    &["--no-optimize"],
+    "O0 escape hatch",
+    false
+);
+
+// The shipped default must hold the same run-level contract; the IR back-edge lock proves
+// this leg still exercises the retained loop's stacksave/stackrestore release path rather
+// than passing vacuously on a folded constant.
+hot_loop_stress_case!(
+    hot_loop_67m_visits_survives_optimized_default_with_correct_checksum,
+    &[],
+    "default optimized",
+    true
+);

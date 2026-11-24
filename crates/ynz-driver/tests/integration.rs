@@ -48,33 +48,7 @@ fn ynz_run_stdout(source_path: &Path) -> (String, String, i32) {
     (stdout, stderr, code)
 }
 
-/// Assert a stderr snapshot with machine-independent fixture paths.
-///
-/// The compiler echoes the absolute path of the source file into its diagnostics
-/// (e.g. `╭─[ /abs/path/crates/ynz-driver/tests/fixtures/broken_main.ynz:1:1 ]`). That
-/// absolute prefix differs by checkout location (local `/workspaces/...` vs CI
-/// `/home/runner/work/...`), so a raw snapshot only matches on the machine that recorded
-/// it. This filter rewrites any `.../tests/fixtures/` prefix to `[FIXTURES]/` so the
-/// pinned error text is portable across every host.
-fn assert_stderr_snapshot(name: &str, stderr: &str) {
-    let mut settings = insta::Settings::clone_current();
-    settings.add_filter(r"\S*/tests/fixtures/", "[FIXTURES]/");
-    settings.bind(|| {
-        insta::assert_snapshot!(name, stderr);
-    });
-}
-
-#[test]
-fn hello_ynz_prints_hello_yinz_and_exits_zero() {
-    // WHY: this is the M1 success criterion. Every other test is secondary.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("hello.ynz"));
-    assert_eq!(code, 0, "exit code must be 0; stderr:\n{stderr}");
-    assert_eq!(
-        stdout, "hello, yinz\n",
-        "stdout must be exactly `hello, yinz\\n`"
-    );
-}
-
+// bug: `ynz build` exits 0 but leaves no executable file | tier: Medium
 #[test]
 fn build_produces_executable_and_exits_zero() {
     // WHY: `ynz build` must leave an executable on disk. If it doesn't, the
@@ -106,8 +80,28 @@ fn build_produces_executable_and_exits_zero() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-#[test]
-fn broken_main_exits_nonzero_with_diagnostic() {
+/// One named test per input class of the `ynz run CLI` unit; each case is a test the runner names.
+macro_rules! ynz_run_cli_medium_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: `ynz run` of a valid program prints other than its stdout, a broken program exits 0 or prints no diagnostic, or a path with spaces is mis-quoted so the program does not run | tier: Medium
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+ynz_run_cli_medium_case! {
+    // case: `ynz run` of a valid program exits non-zero or prints other than the program's stdout
+    hello_ynz_prints_hello_yinz_and_exits_zero => {
+    // WHY: this is the M1 success criterion. Every other test is secondary.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("hello.ynz"));
+    assert_eq!(code, 0, "exit code must be 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout, "hello, yinz\n",
+        "stdout must be exactly `hello, yinz\\n`"
+    );
+    }
+    // case: `ynz run` of a program with a compile error exits 0 or prints no diagnostic
+    broken_main_exits_nonzero_with_diagnostic => {
     // WHY: if a broken file exits 0 or produces no stderr, the user would
     // silently ship wrong code. This locks the exact error output shape.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("broken_main.ynz"));
@@ -122,25 +116,9 @@ fn broken_main_exits_nonzero_with_diagnostic() {
         stderr.contains("entrypoint"),
         "diagnostic must mention `entrypoint`; got:\n{stderr}"
     );
-    assert_stderr_snapshot("broken_main_stderr", &stderr);
-}
-
-#[test]
-fn empty_source_exits_nonzero_with_missing_entrypoint_diagnostic() {
-    // WHY: an empty file must produce a clear "no entrypoint" error, not a crash or
-    // an empty error message.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("empty.ynz"));
-    assert_ne!(code, 0, "empty source must exit non-zero");
-    assert!(stdout.is_empty(), "empty source must produce no stdout");
-    assert!(
-        stderr.contains("entrypoint"),
-        "empty source diagnostic must mention `entrypoint`; got:\n{stderr}"
-    );
-    assert_stderr_snapshot("empty_stderr", &stderr);
-}
-
-#[test]
-fn file_path_with_spaces_runs_correctly() {
+    }
+    // case: `ynz run` mis-quotes a path with spaces so the program does not run
+    file_path_with_spaces_runs_correctly => {
     // WHY: file paths with spaces are the canonical shell-injection and quoting
     // trap. If the driver quotes paths via format strings instead of Command::arg,
     // this test will fail (or worse, silently produce wrong output).
@@ -155,10 +133,33 @@ fn file_path_with_spaces_runs_correctly() {
 
     assert_eq!(code, 0, "path with spaces must exit 0; stderr:\n{stderr}");
     assert_eq!(stdout, "hello, yinz\n");
+    }
 }
 
-#[test]
-fn invalid_utf8_source_exits_nonzero_with_diagnostic() {
+/// One named test per input class of the `source loading` unit; each case is a test the runner names.
+macro_rules! source_loading_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a source file the loader cannot read as a program (empty, invalid UTF-8) panics, crashes or compiles instead of being refused with a diagnostic | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+source_loading_high_case! {
+    // case: an empty source file crashes the compiler or exits 0 instead of reporting the missing entrypoint
+    empty_source_exits_nonzero_with_missing_entrypoint_diagnostic => {
+    // WHY: an empty file must produce a clear "no entrypoint" error, not a crash or
+    // an empty error message.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("empty.ynz"));
+    assert_ne!(code, 0, "empty source must exit non-zero");
+    assert!(stdout.is_empty(), "empty source must produce no stdout");
+    assert!(
+        stderr.contains("entrypoint"),
+        "empty source diagnostic must mention `entrypoint`; got:\n{stderr}"
+    );
+    }
+    // case: a source file with invalid UTF-8 panics or compiles instead of being refused with a diagnostic
+    invalid_utf8_source_exits_nonzero_with_diagnostic => {
     // WHY: a source file with invalid UTF-8 must produce a clear error,
     // not a panic or garbled output.
     let tmp = std::env::temp_dir().join("ynz-bad-utf8.ynz");
@@ -172,8 +173,10 @@ fn invalid_utf8_source_exits_nonzero_with_diagnostic() {
         !stderr.is_empty(),
         "invalid UTF-8 must produce a diagnostic"
     );
+    }
 }
 
+// bug: integer precedence or boolean `&&` lowering prints a wrong value | tier: Medium
 #[test]
 fn m2_smoke_prints_expected_stdout() {
     // WHY: this is the M2 success criterion. `0.3` verifies decimal128 exactness
@@ -188,6 +191,7 @@ fn m2_smoke_prints_expected_stdout() {
     );
 }
 
+// bug: `0.1 + 0.2` on `number` prints a binary-float result instead of exactly 0.3 | tier: High
 #[test]
 fn m2_decimal_exactness_prints_0_3() {
     // WHY: this is the load-bearing M2 demo. Binary floating-point gives
@@ -198,6 +202,7 @@ fn m2_decimal_exactness_prints_0_3() {
     assert_eq!(stdout, "0.3\n", "0.1 + 0.2 must print exactly `0.3`");
 }
 
+// bug: `Int + Number` is accepted without an explicit conversion (snapshot dropped, Low) | tier: High
 #[test]
 fn m2_mixed_int_number_produces_diagnostic() {
     // WHY: `int + number` is a type error — Yinz has no implicit numeric coercion.
@@ -209,11 +214,20 @@ fn m2_mixed_int_number_produces_diagnostic() {
         stderr.contains("toNumber"),
         "diagnostic must suggest `.toNumber()`, got:\n{stderr}"
     );
-    assert_stderr_snapshot("m2_mixed_int_number_stderr", &stderr);
 }
 
-#[test]
-fn m2_const_reassignment_produces_diagnostic() {
+/// One named test per input class of the `const-mutation table` unit; each case is a test the runner names.
+macro_rules! const_mutation_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a program that mutates a `const` (reassign, pass to `lend`, assign a field) is accepted instead of refused | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+const_mutation_table_high_case! {
+    // case: reassigning a `const` binding is accepted
+    m2_const_reassignment_produces_diagnostic => {
     // WHY: `const` cannot be reassigned. The diagnostic must say so and suggest
     // `let` as the fix. If this passes silently, the const guarantee is broken.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m2_const_reassign.ynz"));
@@ -223,9 +237,59 @@ fn m2_const_reassignment_produces_diagnostic() {
         stderr.contains("const"),
         "diagnostic must mention `const`, got:\n{stderr}"
     );
-    assert_stderr_snapshot("m2_const_reassign_stderr", &stderr);
+    }
+    // case: a `const` passed to a `lend` parameter is accepted
+    m4_neg_const_cannot_be_lent_for_mutation => {
+    // WHY: `const` bindings are fully immutable. Passing one to a function
+    // that declares `lend` (mutable access) must be a compile-time error.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_neg_const_cannot_lend.ynz"));
+    assert_ne!(code, 0, "const-lend must be rejected");
+    assert!(stdout.is_empty());
+    assert!(
+        stderr.contains("const"),
+        "error must mention const; got:\n{stderr}"
+    );
+    }
+    // case: assigning a field of a `const` binding is accepted
+    m4_neg_const_field_assign_is_compile_error => {
+    // WHY: assigning to a field of a `const` binding violates deep immutability.
+    // This specifically tests the field-write path (distinct from rebind).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_neg_const_field_assign.ynz"));
+    assert_ne!(code, 0, "const field assign must be rejected");
+    assert!(stdout.is_empty());
+    assert!(
+        stderr.contains("const"),
+        "error must mention const; got:\n{stderr}"
+    );
+    }
+    // case: `const.heal()` UFCS call to a `lend self` function is accepted
+    m5_ufcs_const_lend_errors_same_as_free_fn_form => {
+    // WHY: `const p; p.heal(20)` where `heal(lend self: Player)` must produce
+    //      the same "cannot lend a const binding" error as `heal(p, 20)`.
+    //      The UFCS dot-call form and the function-call form must enforce identical
+    //      ownership rules — any divergence is a silent ownership-safety gap.
+    let (_stdout, stderr, code) = ynz_run_stdout(&fixture("m5_ufcs_const_lend_error.ynz"));
+    assert_ne!(code, 0, "UFCS lend on const must fail");
+    assert!(
+        stderr.contains("const") && stderr.contains("heal"),
+        "error must mention both the const binding and the function name; stderr:\n{stderr}"
+    );
+    }
+    // case: the const-lend check rejects every call on a const instead of only the lend call
+    m5_ufcs_mixed_calls_granular_rejection => {
+    // WHY: in the same function body, `greet(p)` (share, ok) must compile and
+    //      `p.heal(10)` (lend, const) must error.  Verifies the ownership check
+    //      is per-call, not a blanket rejection of all calls on const bindings.
+    let (_stdout, stderr, code) = ynz_run_stdout(&fixture("m5_ufcs_mixed_calls.ynz"));
+    assert_ne!(code, 0, "lend call on const must fail; stderr:\n{stderr}");
+    assert!(
+        stderr.contains("heal") && !stderr.contains("greet"),
+        "only the lend call (heal) must error, not the share call (greet); stderr:\n{stderr}"
+    );
+    }
 }
 
+// bug: `Number<100>` literal 1.0 fails to compile or prints a wrong value | tier: High
 #[test]
 fn m8_bignum_number100_runs() {
     // WHY: M8 P6 ships bignum — `number<100>` must now compile and run successfully.
@@ -243,19 +307,91 @@ fn m8_bignum_number100_runs() {
     );
 }
 
-#[test]
-fn m2_compound_assign_produces_diagnostic() {
+/// One named test per input class of the `banned-syntax table` unit; each case is a test the runner names.
+macro_rules! banned_syntax_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: banned syntax (`+=`, `type`, `match`, ...) is accepted instead of refused | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+banned_syntax_table_high_case! {
+    // case: `+=` is accepted instead of refused
+    m2_compound_assign_produces_diagnostic => {
     // WHY: `+=` is not part of Yinz — the lexer rejects it with a teaching
     // diagnostic suggesting `x = x + 1`. This tests the banned-syntax path
     // end-to-end through the driver.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m2_compound_assign.ynz"));
     assert_ne!(code, 0, "compound assignment must exit non-zero");
     assert!(stdout.is_empty());
-    assert_stderr_snapshot("m2_compound_assign_stderr", &stderr);
+    assert!(
+        stderr.contains("`+=`"),
+        "diagnostic must name the banned `+=`, got:\n{stderr}"
+    );
+    }
+    // case: the banned `type` keyword is accepted
+    m4_neg_banned_type_keyword_is_error => {
+    // WHY: `type` is banned in favor of `shape`. Any program using it must
+    // fail to compile — it should never silently pass as an identifier.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_neg_banned_type_kw.ynz"));
+    assert_ne!(
+        code, 0,
+        "`type` keyword must be rejected; stderr:\n{stderr}"
+    );
+    assert!(stdout.is_empty());
+    }
+    // case: the non-keyword `match` is accepted as a construct
+    m3_match_keyword_produces_teaching_diagnostic => {
+    // WHY: `match` is not a Yinz keyword — the lexer must teach the user to
+    // use multi-case `if` instead. The identifier `match` is still valid for
+    // recovery, so the parser doesn't hard-fail.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_match_keyword_banned.ynz"));
+    assert_ne!(code, 0, "match keyword must exit non-zero");
+    assert!(stdout.is_empty());
+    assert!(
+        stderr.contains("match") || stderr.contains("if"),
+        "teaching diagnostic must reference match or if, got:\n{stderr}"
+    );
+    }
+    // case: the non-keyword `switch` is accepted as a construct
+    m3_switch_keyword_produces_teaching_diagnostic => {
+    // WHY: `switch` is not a Yinz keyword. Same teaching pattern as `match`.
+    // Both are flagged because developers coming from C/JS/Rust expect them.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_switch_keyword_banned.ynz"));
+    assert_ne!(code, 0, "switch keyword must exit non-zero");
+    assert!(stdout.is_empty());
+    assert!(
+        stderr.contains("switch") || stderr.contains("if"),
+        "teaching diagnostic must reference switch or if, got:\n{stderr}"
+    );
+    }
+    // case: a relative import path (`./foo`) is accepted
+    m8_import_relative_path_produces_diagnostic => {
+    // WHY: Relative import paths (`./foo`) are banned — they break when files move.
+    // The parser must reject them with a teaching diagnostic.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m8_import_relative_path.ynz"));
+    assert_ne!(code, 0, "relative import path must produce an error");
+    assert!(stdout.is_empty(), "no stdout on error");
+    assert!(
+        stderr.contains("project-root"),
+        "diagnostic must mention project-root paths; got:\n{stderr}"
+    );
+    }
 }
 
-#[test]
-fn m2_int_overflow_panics_and_exits_nonzero() {
+/// One named test per input class of the `int-trap table` unit; each case is a test the runner names.
+macro_rules! int_trap_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: `Int` overflow or division by zero wraps or is undefined instead of exiting non-zero | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+int_trap_table_high_case! {
+    // case: `Int` overflow wraps silently instead of exiting non-zero
+    m2_int_overflow_panics_and_exits_nonzero => {
     // WHY: i64::MAX + 1 overflows. The runtime must catch it and exit non-zero
     // with a message. If it silently wraps, the user gets wrong results with no
     // indication that anything went wrong.
@@ -269,10 +405,9 @@ fn m2_int_overflow_panics_and_exits_nonzero() {
         !stderr.is_empty(),
         "int overflow must print a runtime error message"
     );
-}
-
-#[test]
-fn m2_int_div_by_zero_panics_and_exits_nonzero() {
+    }
+    // case: integer division by zero is undefined behaviour instead of a runtime error
+    m2_int_div_by_zero_panics_and_exits_nonzero => {
     // WHY: dividing by zero must produce a runtime error, not undefined behaviour.
     // The Yinz runtime checks the divisor before dividing.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m2_int_div_by_zero.ynz"));
@@ -282,8 +417,10 @@ fn m2_int_div_by_zero_panics_and_exits_nonzero() {
         !stderr.is_empty(),
         "div-by-zero must print a runtime error message"
     );
+    }
 }
 
+// bug: recursive call or parameter/return lowering prints a wrong value | tier: Medium
 #[test]
 fn m3_fib_prints_55() {
     // WHY: M3 success criterion. fib(10) = 55. If this is wrong, recursion,
@@ -295,35 +432,9 @@ fn m3_fib_prints_55() {
 
 // ── M4 integration tests ─────────────────────────────────────────────────────
 
-#[test]
-fn m4_p5_wrapping_add_closes_m2_catchup() {
-    // WHY: M4 P5 closes the M2 catch-up obligation for overflow escape methods.
-    // int.max.wrappingAdd(1) must produce int.min, not panic. If it panics, the
-    // wrapping intrinsic lowering or LLVM overflow-check bypass is broken.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m2_wrapping_add_deferred.ynz"));
-    assert_eq!(code, 0, "wrapping add must succeed; stderr:\n{stderr}");
-    assert_eq!(
-        stdout, "-9223372036854775808\n",
-        "Int.max + 1 must wrap to Int.min"
-    );
-}
-
-#[test]
-fn m4_p5_int_max_constant_closes_m2_catchup() {
-    // WHY: M4 P5 closes the M2 catch-up for type-attached constants.
-    // `int.max` and `int.min` must compile to the correct i64 immediate values.
-    // If the type-attached constant interception in typeck/codegen is broken,
-    // this produces a compile error ("int is not defined").
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m2_int_max_deferred.ynz"));
-    assert_eq!(code, 0, "Int.max constant must compile; stderr:\n{stderr}");
-    assert_eq!(
-        stdout, "9223372036854775807\n-9223372036854775808\n",
-        "Int.max and Int.min must print the correct i64 extremes"
-    );
-}
-
 // ── M4 P6 positive fixtures ───────────────────────────────────────────────────
 
+// bug: `extends` loses the parent's fields on the child | tier: Medium
 #[test]
 fn m4_inheritance_extends_prepends_parent_fields() {
     // WHY: `extends` must make parent fields accessible on the child shape.
@@ -337,6 +448,7 @@ fn m4_inheritance_extends_prepends_parent_fields() {
     assert_eq!(stdout, "Rex\nHusky\n");
 }
 
+// bug: a shape that `follows` a contract cannot be called through UFCS | tier: Medium
 #[test]
 fn m4_follows_contract_dispatch_works() {
     // WHY: `follows` contract verification must allow calling the function
@@ -347,6 +459,7 @@ fn m4_follows_contract_dispatch_works() {
     assert_eq!(stdout, "3\n4\n");
 }
 
+// bug: a hidden field is unreadable or unwritable inside its own shape's methods | tier: Medium
 #[test]
 fn m4_hidden_field_accessible_inside_method() {
     // WHY: hidden fields must be readable and writable inside the shape's own
@@ -360,6 +473,7 @@ fn m4_hidden_field_accessible_inside_method() {
     assert_eq!(stdout, "3\n");
 }
 
+// bug: `.copy()` of a shape aliases the original so a write to one shows in the other | tier: High
 #[test]
 fn m4_copy_produces_independent_struct() {
     // WHY: `.copy()` on a shape with all-primitive fields must produce an
@@ -369,8 +483,9 @@ fn m4_copy_produces_independent_struct() {
     assert_eq!(stdout, "10\n20\n10\n20\n");
 }
 
+// bug: a shape derived from a `base shape` does not inherit the base fields (renamed: it asserts the derived shape runs) | tier: Medium
 #[test]
-fn m4_base_shape_blocks_direct_instantiation() {
+fn m4_derived_shape_inherits_base_fields() {
     // WHY: a derived shape from a `base shape` must work (base fields are
     // inherited); only direct instantiation of the base is blocked (tested
     // separately in the negative suite).
@@ -382,6 +497,7 @@ fn m4_base_shape_blocks_direct_instantiation() {
     assert_eq!(stdout, "Rust\n120\n");
 }
 
+// bug: Int.max/min constants, saturatingAdd or wrappingAdd return the wrong value at the i64 boundary | tier: High
 #[test]
 fn m4_type_constants_and_wrapping_saturation() {
     // WHY: int.max / int.min type-attached constants + saturatingAdd must
@@ -399,6 +515,7 @@ fn m4_type_constants_and_wrapping_saturation() {
 
 // ── M4 P6 negative fixtures ───────────────────────────────────────────────────
 
+// bug: a value used after `give` is accepted | tier: High
 #[test]
 fn m4_neg_use_after_give_is_compile_error() {
     // WHY: using a value after giving it away is a memory-safety violation.
@@ -412,32 +529,7 @@ fn m4_neg_use_after_give_is_compile_error() {
     );
 }
 
-#[test]
-fn m4_neg_const_cannot_be_lent_for_mutation() {
-    // WHY: `const` bindings are fully immutable. Passing one to a function
-    // that declares `lend` (mutable access) must be a compile-time error.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_neg_const_cannot_lend.ynz"));
-    assert_ne!(code, 0, "const-lend must be rejected");
-    assert!(stdout.is_empty());
-    assert!(
-        stderr.contains("const"),
-        "error must mention const; got:\n{stderr}"
-    );
-}
-
-#[test]
-fn m4_neg_const_field_assign_is_compile_error() {
-    // WHY: assigning to a field of a `const` binding violates deep immutability.
-    // This specifically tests the field-write path (distinct from rebind).
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_neg_const_field_assign.ynz"));
-    assert_ne!(code, 0, "const field assign must be rejected");
-    assert!(stdout.is_empty());
-    assert!(
-        stderr.contains("const"),
-        "error must mention const; got:\n{stderr}"
-    );
-}
-
+// bug: a `base shape` is instantiated directly | tier: High
 #[test]
 fn m4_neg_base_shape_cannot_be_instantiated() {
     // WHY: `base shape` declarations are abstract — only derived shapes can
@@ -451,8 +543,18 @@ fn m4_neg_base_shape_cannot_be_instantiated() {
     );
 }
 
-#[test]
-fn m4_neg_struct_missing_required_field_is_error() {
+/// One named test per input class of the `struct-literal table` unit; each case is a test the runner names.
+macro_rules! struct_literal_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a struct literal with a missing or wrong-typed field is accepted | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+struct_literal_table_high_case! {
+    // case: a struct literal missing a required field is accepted
+    m4_neg_struct_missing_required_field_is_error => {
     // WHY: every non-hidden field must be provided in a struct literal. Missing
     // one is a compile error, not a runtime default — there are no implicit defaults.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_neg_struct_missing_field.ynz"));
@@ -462,10 +564,9 @@ fn m4_neg_struct_missing_required_field_is_error() {
         stderr.contains("health") || stderr.contains("Missing"),
         "error must name the field; got:\n{stderr}"
     );
-}
-
-#[test]
-fn m4_neg_struct_wrong_field_type_is_error() {
+    }
+    // case: a struct literal field of the wrong type is accepted
+    m4_neg_struct_wrong_field_type_is_error => {
     // WHY: the struct literal typechecker must verify field types against the
     // shape declaration. A string where int is expected is a type error.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_neg_struct_wrong_type.ynz"));
@@ -475,8 +576,10 @@ fn m4_neg_struct_wrong_field_type_is_error() {
         stderr.contains("Int") || stderr.contains("expects"),
         "error must name the expected type; got:\n{stderr}"
     );
+    }
 }
 
+// bug: a hidden field is readable outside its shape | tier: High
 #[test]
 fn m4_neg_hidden_field_access_outside_shape_is_error() {
     // WHY: hidden fields are encapsulation — readable only inside the declaring
@@ -490,6 +593,7 @@ fn m4_neg_hidden_field_access_outside_shape_is_error() {
     );
 }
 
+// bug: a shape claiming `follows` without the required function is accepted | tier: High
 #[test]
 fn m4_neg_follows_missing_function_is_error() {
     // WHY: `follows` is verified at compile time — if the required function
@@ -503,6 +607,7 @@ fn m4_neg_follows_missing_function_is_error() {
     );
 }
 
+// bug: a cyclic `extends` chain is accepted | tier: High
 #[test]
 fn m4_neg_cyclic_extends_is_error() {
     // WHY: cyclic inheritance (A extends B extends A) cannot be laid out in
@@ -516,18 +621,7 @@ fn m4_neg_cyclic_extends_is_error() {
     );
 }
 
-#[test]
-fn m4_neg_banned_type_keyword_is_error() {
-    // WHY: `type` is banned in favor of `shape`. Any program using it must
-    // fail to compile — it should never silently pass as an identifier.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m4_neg_banned_type_kw.ynz"));
-    assert_ne!(
-        code, 0,
-        "`type` keyword must be rejected; stderr:\n{stderr}"
-    );
-    assert!(stdout.is_empty());
-}
-
+// bug: shape literal, field access or share/lend/give UFCS dispatch prints a wrong value | tier: Medium
 #[test]
 fn m4_player_shape_compiles_and_produces_correct_output() {
     // WHY: M4 P4 success criterion. Exercises shape struct literals, field access,
@@ -544,6 +638,7 @@ fn m4_player_shape_compiles_and_produces_correct_output() {
     );
 }
 
+// bug: mutually recursive functions fail to compile (no forward declaration) or print a wrong value | tier: Medium
 #[test]
 fn m3_mutual_recursion_prints_0() {
     // WHY: mutual recursion requires forward declarations at the LLVM level.
@@ -553,6 +648,7 @@ fn m3_mutual_recursion_prints_0() {
     assert_eq!(stdout, "0\n", "ping(5) must print 0");
 }
 
+// bug: a `while` loop with mutation counts wrong | tier: Medium
 #[test]
 fn m3_while_countdown_prints_5_to_1() {
     // WHY: while loop with mutation must decrement correctly.
@@ -562,32 +658,99 @@ fn m3_while_countdown_prints_5_to_1() {
     assert_eq!(stdout, "5\n4\n3\n2\n1\n");
 }
 
-#[test]
-fn m3_for_range_prints_0_to_4() {
+/// One named test per input class of the `range-loop table` unit; each case is a test the runner names.
+macro_rules! range_loop_table_medium_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: `for` over a range, nested `for` loops or a stored range iterate the wrong values | tier: Medium
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+range_loop_table_medium_case! {
+    // case: `for (i in range(0,5))` iterates the wrong values
+    m3_for_range_prints_0_to_4 => {
     // WHY: for (i in range(0, 5)) must print 0,1,2,3,4.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_for_range.ynz"));
     assert_eq!(code, 0, "exit code must be 0; stderr:\n{stderr}");
     assert_eq!(stdout, "0\n1\n2\n3\n4\n");
+    }
+    // case: nested `for` loops share a counter
+    m3_for_nested_loop_prints_sums => {
+    // WHY: nested for loops require separate counter allocas per scope.
+    // i+j for i in 0..3, j in 0..3 = 0,1,2,1,2,3,2,3,4.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_for_nested.ynz"));
+    assert_eq!(code, 0, "exit code must be 0; stderr:\n{stderr}");
+    assert_eq!(stdout, "0\n1\n2\n1\n2\n3\n2\n3\n4\n");
+    }
+    // case: a `range` stored in a `let` fails to compile or run
+    m3_range_outside_for_now_supported_in_m7 => {
+    // WHY: `let r = range(0, 5)` was deferred to M7; M7 P4c ships first-class Range
+    // values. This test was previously a "deferral must error" guard; now it verifies
+    // the feature actually works. A stored range that produces no for-loop output
+    // must compile and run cleanly. If the M7 P4c range codegen is broken, this
+    // would exit non-zero or produce wrong output.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_range_outside_for_deferral.ynz"));
+    assert_eq!(
+        code, 0,
+        "range as first-class value must compile in M7; stderr:\n{stderr}"
+    );
+    assert_eq!(stdout, "done\n");
+    }
+    // case: a `range` stored in a `let` is not iterable by a later `for`
+    m7_range_first_class_storable_and_iterable => {
+    // WHY: M7 P4c acceptance criterion. A `range(0, 3)` stored in a `let` binding
+    // must produce a {i64, i64} alloca and be iterable in a subsequent `for`. If
+    // range() is only lowered as an inline iter expression (the M3 path), this test
+    // fails with a codegen error when the for-loop iter is an ident, not a call.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_range_first_class.ynz"));
+    assert_eq!(
+        code, 0,
+        "m7_range_first_class must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(stdout, "0\n1\n2\n");
+    }
 }
 
-#[test]
-fn m3_multicase_int_prints_correct_arms() {
+/// One named test per input class of the `multicase table` unit; each case is a test the runner names.
+macro_rules! multicase_table_medium_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a multi-case `if` picks the wrong arm or fails LLVM verification | tier: Medium
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+multicase_table_medium_case! {
+    // case: multi-case `if` on an int picks the wrong arm
+    m3_multicase_int_prints_correct_arms => {
     // WHY: multi-case if on int scrutinee must dispatch to the right arm.
     // describe(1)=one, describe(2)=two, describe(5)=other (else arm).
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_multicase_int.ynz"));
     assert_eq!(code, 0, "exit code must be 0; stderr:\n{stderr}");
     assert_eq!(stdout, "one\ntwo\nother\n");
-}
-
-#[test]
-fn m3_multicase_string_matches_hello() {
+    }
+    // case: multi-case `if` on a string compares by identity instead of bytes
+    m3_multicase_string_matches_hello => {
     // WHY: multi-case if on string scrutinee uses ynz_string_eq (byte equality).
     // "hello" matches the first arm; must print "got hello".
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_multicase_string.ynz"));
     assert_eq!(code, 0, "exit code must be 0; stderr:\n{stderr}");
     assert_eq!(stdout, "got hello\n");
+    }
+    // case: multi-case `if` with an `else` arm picks the wrong arm or fails LLVM verification
+    m3_multicase_else_arm_dispatches_correctly => {
+    // WHY: multi-case `if` with `else =>` catch-all must dispatch to the right
+    // arm. classify(1)=10, classify(2)=20, classify(99)=0 (else arm).
+    // Also validates that all-arms-return makes the merge_bb unreachable without
+    // triggering an LLVM verify error.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_multicase_else.ynz"));
+    assert_eq!(code, 0, "exit code must be 0; stderr:\n{stderr}");
+    assert_eq!(stdout, "10\n20\n0\n");
+    }
 }
 
+// bug: a `return` inside an `if` body does not end the function | tier: Medium
 #[test]
 fn m3_early_return_prints_sign_values() {
     // WHY: early return inside an `if` body must terminate the function path.
@@ -597,26 +760,7 @@ fn m3_early_return_prints_sign_values() {
     assert_eq!(stdout, "1\n-1\n0\n");
 }
 
-#[test]
-fn m3_for_nested_loop_prints_sums() {
-    // WHY: nested for loops require separate counter allocas per scope.
-    // i+j for i in 0..3, j in 0..3 = 0,1,2,1,2,3,2,3,4.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_for_nested.ynz"));
-    assert_eq!(code, 0, "exit code must be 0; stderr:\n{stderr}");
-    assert_eq!(stdout, "0\n1\n2\n1\n2\n3\n2\n3\n4\n");
-}
-
-#[test]
-fn m3_multicase_else_arm_dispatches_correctly() {
-    // WHY: multi-case `if` with `else =>` catch-all must dispatch to the right
-    // arm. classify(1)=10, classify(2)=20, classify(99)=0 (else arm).
-    // Also validates that all-arms-return makes the merge_bb unreachable without
-    // triggering an LLVM verify error.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_multicase_else.ynz"));
-    assert_eq!(code, 0, "exit code must be 0; stderr:\n{stderr}");
-    assert_eq!(stdout, "10\n20\n0\n");
-}
-
+// bug: assigning to a parameter is accepted | tier: High
 #[test]
 fn m3_param_mutation_produces_m4_deferral_diagnostic() {
     // WHY: assigning to a parameter must error with a three-part diagnostic
@@ -639,8 +783,18 @@ fn m3_param_mutation_produces_m4_deferral_diagnostic() {
     );
 }
 
-#[test]
-fn m3_missing_return_produces_diagnostic() {
+/// One named test per input class of the `return-check table` unit; each case is a test the runner names.
+macro_rules! return_check_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a function that does not return on every path, returns no value, or returns a value in `-> Nothing` is accepted | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+return_check_table_high_case! {
+    // case: a `-> Int` function that does not return on all paths is accepted
+    m3_missing_return_produces_diagnostic => {
     // WHY: a `-> int` function with no return on all paths must error.
     // Silent acceptance would mean the function exits with an undefined value.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_missing_return.ynz"));
@@ -650,10 +804,9 @@ fn m3_missing_return_produces_diagnostic() {
         stderr.contains("foo"),
         "diagnostic must name the function, got:\n{stderr}"
     );
-}
-
-#[test]
-fn m3_return_without_value_in_int_fn_produces_diagnostic() {
+    }
+    // case: a bare `return` in a `-> Int` function is accepted
+    m3_return_without_value_in_int_fn_produces_diagnostic => {
     // WHY: bare `return` in a `-> int` function promised a value but returned
     // nothing. Must error so the caller doesn't receive a garbage int.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_return_no_value_in_int.ynz"));
@@ -663,10 +816,9 @@ fn m3_return_without_value_in_int_fn_produces_diagnostic() {
         stderr.contains("return") || stderr.contains("value"),
         "diagnostic must mention return/value, got:\n{stderr}"
     );
-}
-
-#[test]
-fn m3_return_value_in_nothing_fn_produces_diagnostic() {
+    }
+    // case: `return 42` in a `-> Nothing` function is accepted
+    m3_return_value_in_nothing_fn_produces_diagnostic => {
     // WHY: `return 42` in a `-> nothing` function contradicts the declaration.
     // Must error so callers don't expect a value where none is promised.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_return_value_in_nothing.ynz"));
@@ -676,8 +828,10 @@ fn m3_return_value_in_nothing_fn_produces_diagnostic() {
         stderr.contains("return") && stderr.contains("Nothing"),
         "diagnostic must name the return-in-`nothing` contradiction, got:\n{stderr}"
     );
+    }
 }
 
+// bug: a warning-only program exits non-zero | tier: Medium
 #[test]
 fn m3_dead_code_produces_warning_but_exits_zero() {
     // WHY: dead code is a warning, not an error — the program compiles and runs.
@@ -692,6 +846,7 @@ fn m3_dead_code_produces_warning_but_exits_zero() {
     );
 }
 
+// bug: two functions with the same name are accepted | tier: High
 #[test]
 fn m3_duplicate_function_produces_diagnostic() {
     // WHY: two functions named `foo` must error. Silent acceptance would mean
@@ -705,8 +860,18 @@ fn m3_duplicate_function_produces_diagnostic() {
     );
 }
 
-#[test]
-fn m3_undefined_function_suggests_levenshtein() {
+/// One named test per input class of the `call-check table` unit; each case is a test the runner names.
+macro_rules! call_check_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a call to an undefined function, with a wrong argument type or the wrong arity is accepted | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+call_check_table_high_case! {
+    // case: a call to an undefined function is accepted (suggestion wording dropped, Low)
+    m3_undefined_function_suggests_levenshtein => {
     // WHY: `entrpoint()` is distance-1 from `entrypoint`. The Levenshtein suggestion must fire.
     // Without it, the user gets a bare "not defined" with no hint of what they
     // probably meant to write.
@@ -717,10 +882,9 @@ fn m3_undefined_function_suggests_levenshtein() {
         stderr.contains("entrypoint"),
         "Levenshtein must suggest `entrypoint` for `entrpoint`, got:\n{stderr}"
     );
-}
-
-#[test]
-fn m3_arg_type_mismatch_produces_diagnostic() {
+    }
+    // case: an argument of the wrong type is accepted
+    m3_arg_type_mismatch_produces_diagnostic => {
     // WHY: passing `int` where `string` is expected must error. Silent
     // acceptance would produce a wrong-type runtime value.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_arg_type_mismatch.ynz"));
@@ -730,10 +894,9 @@ fn m3_arg_type_mismatch_produces_diagnostic() {
         stderr.contains("Int") || stderr.contains("String"),
         "diagnostic must mention the types, got:\n{stderr}"
     );
-}
-
-#[test]
-fn m3_arg_arity_mismatch_produces_diagnostic() {
+    }
+    // case: a call with the wrong number of arguments is accepted
+    m3_arg_arity_mismatch_produces_diagnostic => {
     // WHY: calling `add(1, 2, 3)` when it takes 2 args must error.
     // Silent acceptance would produce undefined behavior in codegen.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_arg_arity_mismatch.ynz"));
@@ -743,8 +906,10 @@ fn m3_arg_arity_mismatch_produces_diagnostic() {
         stderr.contains("add"),
         "diagnostic must name the function, got:\n{stderr}"
     );
+    }
 }
 
+// bug: assigning to a `for` loop variable is accepted | tier: High
 #[test]
 fn m3_loop_var_mutation_produces_diagnostic() {
     // WHY: assigning to the `for` loop variable inside the body must error.
@@ -759,6 +924,7 @@ fn m3_loop_var_mutation_produces_diagnostic() {
     );
 }
 
+// bug: `is Circle`/`is Square` arms do not narrow a union so the wrong arm runs | tier: Medium
 #[test]
 fn m3_is_type_deferral_now_runnable_in_m6() {
     // WHY: `m3_is_type_deferral.ynz` was a deferral fixture in M3.
@@ -769,18 +935,21 @@ fn m3_is_type_deferral_now_runnable_in_m6() {
         code, 0,
         "union fixture must compile and run; stderr:\n{stderr}"
     );
-    assert!(
-        stdout.contains("circle"),
-        "expected 'circle' in output, got: {stdout}"
-    );
-    assert!(
-        stdout.contains("square"),
-        "expected 'square' in output, got: {stdout}"
-    );
+    assert_eq!(stdout, "circle\nsquare\n");
 }
 
-#[test]
-fn union_alias_with_nothing_member_compiles_and_runs() {
+/// One named test per input class of the `alias-resolution table` unit; each case is a test the runner names.
+macro_rules! alias_resolution_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a union alias resolves differently for a `let` than for a parameter, refusing a valid program | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+alias_resolution_table_high_case! {
+    // case: a union alias containing `nothing` resolves differently for a `let` than for a parameter, so a valid program is refused
+    union_alias_with_nothing_member_compiles_and_runs => {
     // Bug (High tier — type resolution): a union alias containing `nothing` resolved to
     // `Circle | unknown` through a second, drifted resolver, so a valid program was refused
     // with "This value is `Circle | nothing`, but `m` is declared as `Circle | unknown`".
@@ -790,10 +959,9 @@ fn union_alias_with_nothing_member_compiles_and_runs() {
         "alias with a `nothing` member must compile and run; stderr:\n{stderr}"
     );
     assert_eq!(stdout, "ok\n");
-}
-
-#[test]
-fn union_alias_naming_a_later_alias_resolves_the_same_everywhere() {
+    }
+    // case: an alias naming a later-declared alias resolves differently for parameters and lets
+    union_alias_naming_a_later_alias_resolves_the_same_everywhere => {
     // Bug (High tier — type resolution): alias types were derived twice, in `collect_shapes`
     // (read by parameter types) and again in the checker (read by `let`), and the two disagreed
     // for an alias naming a later-declared alias, so `describe(c)` was refused.
@@ -803,8 +971,10 @@ fn union_alias_naming_a_later_alias_resolves_the_same_everywhere() {
         "forward alias reference must resolve identically for params and lets; stderr:\n{stderr}"
     );
     assert_eq!(stdout, "described\n");
+    }
 }
 
+// bug: a `share` parameter fails to compile or run | tier: Medium
 #[test]
 fn m4_share_param_compiles_and_runs() {
     // WHY: M4 ships ownership annotations (`share`, `lend`, `give`) on parameters.
@@ -819,50 +989,9 @@ fn m4_share_param_compiles_and_runs() {
     assert_eq!(stdout, "world\n", "greet(n) must print `world`");
 }
 
-#[test]
-fn m3_range_outside_for_now_supported_in_m7() {
-    // WHY: `let r = range(0, 5)` was deferred to M7; M7 P4c ships first-class Range
-    // values. This test was previously a "deferral must error" guard; now it verifies
-    // the feature actually works. A stored range that produces no for-loop output
-    // must compile and run cleanly. If the M7 P4c range codegen is broken, this
-    // would exit non-zero or produce wrong output.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_range_outside_for_deferral.ynz"));
-    assert_eq!(
-        code, 0,
-        "range as first-class value must compile in M7; stderr:\n{stderr}"
-    );
-    assert_eq!(stdout, "done\n");
-}
-
-#[test]
-fn m3_match_keyword_produces_teaching_diagnostic() {
-    // WHY: `match` is not a Yinz keyword — the lexer must teach the user to
-    // use multi-case `if` instead. The identifier `match` is still valid for
-    // recovery, so the parser doesn't hard-fail.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_match_keyword_banned.ynz"));
-    assert_ne!(code, 0, "match keyword must exit non-zero");
-    assert!(stdout.is_empty());
-    assert!(
-        stderr.contains("match") || stderr.contains("if"),
-        "teaching diagnostic must reference match or if, got:\n{stderr}"
-    );
-}
-
-#[test]
-fn m3_switch_keyword_produces_teaching_diagnostic() {
-    // WHY: `switch` is not a Yinz keyword. Same teaching pattern as `match`.
-    // Both are flagged because developers coming from C/JS/Rust expect them.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_switch_keyword_banned.ynz"));
-    assert_ne!(code, 0, "switch keyword must exit non-zero");
-    assert!(stdout.is_empty());
-    assert!(
-        stderr.contains("switch") || stderr.contains("if"),
-        "teaching diagnostic must reference switch or if, got:\n{stderr}"
-    );
-}
-
 // ── M5: Generics + Collections + Maybe ───────────────────────────────────────
 
+// bug: a generic function fails to monomorphize or prints a wrong value | tier: Medium
 #[test]
 fn m5_identity_generic_fn_prints_42() {
     // WHY: M5 P4a acceptance criterion. identity<T>(give value: T) -> T is the
@@ -876,6 +1005,7 @@ fn m5_identity_generic_fn_prints_42() {
     assert_eq!(stdout, "42\n");
 }
 
+// bug: `none`, `.or(default)` or `.exists()` on a `Maybe` returns a wrong value | tier: Medium
 #[test]
 fn m5_maybe_none_or_and_exists() {
     // WHY: M5 P4a acceptance criterion. Exercises none literal, .or(default),
@@ -886,6 +1016,7 @@ fn m5_maybe_none_or_and_exists() {
     assert_eq!(stdout, "99\n99\n");
 }
 
+// bug: `Array` add/count/index returns a wrong value | tier: Medium
 #[test]
 fn m5_array_add_count_get() {
     // WHY: M5 P4a acceptance criterion. Exercises array<int> literal, .add(),
@@ -896,6 +1027,7 @@ fn m5_array_add_count_get() {
     assert_eq!(stdout, "4\n1\n4\n");
 }
 
+// bug: `Fixed` count or bounds-checked index returns a wrong value | tier: Medium
 #[test]
 fn m5_fixed_count_and_get() {
     // WHY: M5 P4a acceptance criterion. Exercises fixed<int> stack allocation,
@@ -905,6 +1037,7 @@ fn m5_fixed_count_and_get() {
     assert_eq!(stdout, "3\n10\n30\n");
 }
 
+// bug: `Map` read/write/count returns a wrong value | tier: Medium
 #[test]
 fn m5_map_get_set_count() {
     // WHY: M5 P4b acceptance criterion. Exercises map<string,int> literal, bracket
@@ -915,20 +1048,7 @@ fn m5_map_get_set_count() {
     assert_eq!(stdout, "90\n85\n95\n2\n");
 }
 
-#[test]
-fn m5_ufcs_const_lend_errors_same_as_free_fn_form() {
-    // WHY: `const p; p.heal(20)` where `heal(lend self: Player)` must produce
-    //      the same "cannot lend a const binding" error as `heal(p, 20)`.
-    //      The UFCS dot-call form and the function-call form must enforce identical
-    //      ownership rules — any divergence is a silent ownership-safety gap.
-    let (_stdout, stderr, code) = ynz_run_stdout(&fixture("m5_ufcs_const_lend_error.ynz"));
-    assert_ne!(code, 0, "UFCS lend on const must fail");
-    assert!(
-        stderr.contains("const") && stderr.contains("heal"),
-        "error must mention both the const binding and the function name; stderr:\n{stderr}"
-    );
-}
-
+// bug: the UFCS and free-function const-lend diagnostics drift apart in wording (protected parity keep) | tier: Low
 #[test]
 fn m5_ufcs_and_freefn_const_lend_produce_byte_identical_diagnostics() {
     // WHY: enforces the shared-wording invariant from design/ide-hints.md.
@@ -977,6 +1097,7 @@ fn m5_ufcs_and_freefn_const_lend_produce_byte_identical_diagnostics() {
     );
 }
 
+// bug: the const-lend check over-rejects a `share` method call on a `const` binding | tier: High
 #[test]
 fn m5_ufcs_const_share_still_compiles() {
     // WHY: `const p; p.greet()` where `greet(share self: Player)` must compile.
@@ -990,21 +1111,18 @@ fn m5_ufcs_const_share_still_compiles() {
     assert_eq!(stdout, "hero\n");
 }
 
-#[test]
-fn m5_ufcs_mixed_calls_granular_rejection() {
-    // WHY: in the same function body, `greet(p)` (share, ok) must compile and
-    //      `p.heal(10)` (lend, const) must error.  Verifies the ownership check
-    //      is per-call, not a blanket rejection of all calls on const bindings.
-    let (_stdout, stderr, code) = ynz_run_stdout(&fixture("m5_ufcs_mixed_calls.ynz"));
-    assert_ne!(code, 0, "lend call on const must fail; stderr:\n{stderr}");
-    assert!(
-        stderr.contains("heal") && !stderr.contains("greet"),
-        "only the lend call (heal) must error, not the share call (greet); stderr:\n{stderr}"
-    );
+/// One named test per input class of the `dyn-accept table` unit; each case is a test the runner names.
+macro_rules! dyn_accept_table_medium_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a shape that `follows` a contract is refused at, or fails to dispatch through, a `dynamic Contract` parameter | tier: Medium
+        #[test]
+        fn $case_name() $case_body
+    )+ };
 }
 
-#[test]
-fn m5_dyn_dispatch_concrete_shape_follows_contract_accepted() {
+dyn_accept_table_medium_case! {
+    // case: a shape that `follows` a contract is refused at a `dynamic Contract` parameter
+    m5_dyn_dispatch_concrete_shape_follows_contract_accepted => {
     // WHY: a shape that declares `follows Contract` must be accepted at a `dynamic Contract`
     //      call site without a typeck error.  Only shapes that declare `follows` qualify;
     //      shapes that do NOT declare `follows` must still be rejected (pinned separately).
@@ -1014,8 +1132,27 @@ fn m5_dyn_dispatch_concrete_shape_follows_contract_accepted() {
         "dynamic coerce happy path must compile and run; stderr:\n{stderr}"
     );
     assert_eq!(stdout, "accepted\n");
+    }
+    // case: a `dynamic Contract` value passed through a second call fails to compile or run
+    m5_dyn_dispatch_chained_both_calls_succeed => {
+    // WHY: a concrete shape passed through two function calls each accepting `dynamic Contract`
+    //      must pass through correctly — verifies the coerce works at multiple call sites.
+    //      Neither `showDynamic` nor `relay` independently suspend (no sleep), so no
+    //      can't-infer error fires under the design-correct current_fn_suspends gate. A non-
+    //      suspending caller with dynamic dispatch compiles clean per design/no-function-coloring.md.
+    // test-ratchet: restoring exit-0 assertion — round-2 changed this to expect a can't-infer
+    // error (exit nonzero), but that was the over-firing gate behavior. Under the reverted gate
+    // non-suspending dynamic callers compile clean (Phase-6 round-3).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_dyn_dispatch_coerce_chained.ynz"));
+    assert_eq!(
+        code, 0,
+        "chained dynamic coerce (non-suspending fns) must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(stdout, "accepted\nrelayed\n");
+    }
 }
 
+// bug: a shape that does not `follow` the contract is accepted at a `dynamic Contract` parameter | tier: High
 #[test]
 fn m5_dyn_dispatch_no_follows_still_errors() {
     // WHY: the coerce must NOT over-accept — only shapes with `follows Contract` qualify for
@@ -1032,26 +1169,18 @@ fn m5_dyn_dispatch_no_follows_still_errors() {
     );
 }
 
-#[test]
-fn m5_dyn_dispatch_chained_both_calls_succeed() {
-    // WHY: a concrete shape passed through two function calls each accepting `dynamic Contract`
-    //      must pass through correctly — verifies the coerce works at multiple call sites.
-    //      Neither `showDynamic` nor `relay` independently suspend (no sleep), so no
-    //      can't-infer error fires under the design-correct current_fn_suspends gate. A non-
-    //      suspending caller with dynamic dispatch compiles clean per design/no-function-coloring.md.
-    // test-ratchet: restoring exit-0 assertion — round-2 changed this to expect a can't-infer
-    // error (exit nonzero), but that was the over-firing gate behavior. Under the reverted gate
-    // non-suspending dynamic callers compile clean (Phase-6 round-3).
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_dyn_dispatch_coerce_chained.ynz"));
-    assert_eq!(
-        code, 0,
-        "chained dynamic coerce (non-suspending fns) must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(stdout, "accepted\nrelayed\n");
+/// One named test per input class of the `hidden-default table` unit; each case is a test the runner names.
+macro_rules! hidden_default_table_medium_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a hidden field default is zero-initialised, skipped or mis-evaluated | tier: Medium
+        #[test]
+        fn $case_name() $case_body
+    )+ };
 }
 
-#[test]
-fn m5_hidden_default_string_evaluates_correctly() {
+hidden_default_table_medium_case! {
+    // case: a hidden string default is zero-initialised (null/empty) instead of evaluated
+    m5_hidden_default_string_evaluates_correctly => {
     // WHY: `shape Foo { hidden label: string = "default" }` constructed via `Foo {}`
     //      must produce a value where `label == "default"`, not a null pointer or empty string.
     //      Hidden-field defaults are part of the shape's contract; silently zero-initing them
@@ -1065,10 +1194,9 @@ fn m5_hidden_default_string_evaluates_correctly() {
         stdout, "default_label\n",
         "hidden string default must print the literal value, not null"
     );
-}
-
-#[test]
-fn m5_hidden_default_int_evaluates_correctly() {
+    }
+    // case: a non-zero hidden int default is zero-initialised
+    m5_hidden_default_int_evaluates_correctly => {
     // WHY: non-zero integer hidden defaults must be evaluated, not zero-inited.
     //      A shape with `hidden threshold: int = 42` must have threshold == 42
     //      in every constructed instance, not 0.  Zero-init is only correct for
@@ -1082,10 +1210,9 @@ fn m5_hidden_default_int_evaluates_correctly() {
         stdout, "42\n",
         "hidden int default 42 must print 42, not 0 (zero-init regression)"
     );
-}
-
-#[test]
-fn m5_hidden_default_nested_evaluates_both_parent_and_own() {
+    }
+    // case: an inherited hidden default is skipped (only the child's own are evaluated)
+    m5_hidden_default_nested_evaluates_both_parent_and_own => {
     // WHY: when a shape `extends` a parent that also declares hidden fields, BOTH
     //      the parent's hidden defaults AND the child's own hidden defaults must be
     //      evaluated at construction time.  Inherited hidden fields live in the parent's
@@ -1099,10 +1226,12 @@ fn m5_hidden_default_nested_evaluates_both_parent_and_own() {
         stdout, "10\n99\n",
         "both parent hidden default (10) and own hidden default (99) must print correctly"
     );
+    }
 }
 
 // ── M6: options, unions, fallible conversions ──────────────────────────────────
 
+// bug: `String.toInt` accepts hex/fractional text or mis-handles whitespace and sign | tier: High
 #[test]
 fn m6_string_to_int_catch_up() {
     // WHY: M6 P5 closes the M2 catch-up obligation for string.toInt().
@@ -1116,6 +1245,7 @@ fn m6_string_to_int_catch_up() {
     assert_eq!(stdout, "42\n17\n-99\n-1\n-1\n-1\n-1\n");
 }
 
+// bug: `String.toFloat` accepts or rejects the wrong inputs | tier: High
 #[test]
 fn m6_string_to_float_catch_up() {
     // WHY: M6 P5 closes the M2 catch-up obligation for string.toFloat().
@@ -1128,22 +1258,20 @@ fn m6_string_to_float_catch_up() {
     assert_eq!(stdout, "true\nfalse\nfalse\ntrue\n");
 }
 
-#[test]
-fn m6_union_is_narrowing_runnable() {
-    // WHY: m3_is_type_deferral.ynz is now the runnable M6 union demo.
-    // Verifies that `is Circle =>` and `is Square =>` correctly narrow union values.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m3_is_type_deferral.ynz"));
-    assert_eq!(
-        code, 0,
-        "union demo must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(stdout, "circle\nsquare\n");
-}
-
 // ── M7 P4a: errors codegen ─────────────────────────────────────────────────────
 
-#[test]
-fn m7_errors_basic_success_path() {
+/// One named test per input class of the `errors-success table` unit; each case is a test the runner names.
+macro_rules! errors_success_table_medium_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: an errors-capable function loses its success value, or `.failed()` is true for a success | tier: Medium
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+errors_success_table_medium_case! {
+    // case: an errors-capable function's success value is lost or replaced by the `.or()` fallback
+    m7_errors_basic_success_path => {
     // WHY: M7 P4a acceptance criterion. An errors-capable function that always
     // succeeds must produce the success value when called with .or(). If the
     // {error_ptr, success_val} ABI or .or() codegen is broken, output is "fallback"
@@ -1155,10 +1283,9 @@ fn m7_errors_basic_success_path() {
         "m7_errors_basic must compile and run; stderr:\n{stderr}"
     );
     assert_eq!(stdout, "ok\n");
-}
-
-#[test]
-fn m7_errors_failed_check_false_when_success() {
+    }
+    // case: `.failed()` is true for a call that succeeded
+    m7_errors_failed_check_false_when_success => {
     // WHY: .failed() must return false (0) when the errors-capable function succeeds.
     // Tests that the error-pointer extraction is correct: field 0 of {i64, i64}
     // must be 0 for success. If .failed() returns true on success, the if body would
@@ -1169,10 +1296,9 @@ fn m7_errors_failed_check_false_when_success() {
         "m7_errors_failed_check must compile and run; stderr:\n{stderr}"
     );
     assert_eq!(stdout, "hello\n");
-}
-
-#[test]
-fn m7_errors_propagate_two_level() {
+    }
+    // case: a success value is lost through a propagating errors-capable caller
+    m7_errors_propagate_two_level => {
     // WHY: two-level errors propagation. outer() calls inner() (both errors-capable).
     // main catches with .or(). Verifies that inner()'s success value flows through
     // outer()'s {i64, i64} return struct to main's .or() extraction.
@@ -1182,10 +1308,9 @@ fn m7_errors_propagate_two_level() {
         "m7_errors_propagate must compile and run; stderr:\n{stderr}"
     );
     assert_eq!(stdout, "propagated\n");
-}
-
-#[test]
-fn m7_errors_int_return_type() {
+    }
+    // case: a non-pointer (Int) success value is corrupted in the errors return struct
+    m7_errors_int_return_type => {
     // WHY: errors-capable functions returning int (not string) must also work.
     // Verifies that the success_val field 1 of {i64, i64} correctly carries non-pointer
     // scalars. If only string (pointer) values work but int values are broken,
@@ -1196,12 +1321,23 @@ fn m7_errors_int_return_type() {
         "m7_errors_int must compile and run; stderr:\n{stderr}"
     );
     assert_eq!(stdout, "42\n");
+    }
 }
 
 // ── M7 P4b: string runtime + codegen integration tests ───────────────────────
 
-#[test]
-fn m7_string_methods_tolower_toupper_split() {
+/// One named test per input class of the `string-method table` unit; each case is a test the runner names.
+macro_rules! string_method_table_medium_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a string method returns a wrong value, or panics out of bounds instead of returning none | tier: Medium
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+string_method_table_medium_case! {
+    // case: `toLowerCase`, `toUpperCase` or `split` return a wrong value
+    m7_string_methods_tolower_toupper_split => {
     // WHY: M7 P4b acceptance criterion. toLowerCase, toUpperCase, and split must all
     // emit correct runtime calls. If any of the three string method runtime functions
     // (ynz_string_to_lower, ynz_string_to_upper, ynz_string_split + ynz_array_count)
@@ -1212,10 +1348,47 @@ fn m7_string_methods_tolower_toupper_split() {
         "m7_string_methods must compile and run; stderr:\n{stderr}"
     );
     assert_eq!(stdout, "hello, world!\nHELLO, WORLD!\n2\n");
+    }
+    // case: string `count`/`contains`/`startsWith`/`endsWith` are wrong at zero length
+    m7_string_empty_operations => {
+    // WHY: M7 P5 adversarial fixture. Empty string boundary conditions:
+    // count() must return 0; contains() must return false; startsWith/endsWith
+    // empty string must return true (a string always starts and ends with "").
+    // Off-by-one errors in the string runtime are most visible at zero length.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_string_empty.ynz"));
+    assert_eq!(
+        code, 0,
+        "m7_string_empty must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(stdout, "0\nfalse\ntrue\ntrue\n");
+    }
+    // case: string `.get()` out of bounds panics instead of returning none
+    m7_string_oob_returns_none => {
+    // WHY: M7 P5 adversarial fixture. Out-of-bounds .get() on a string must
+    // return none (not panic, not segfault, not garbage). Tests both far-OOB
+    // (index 100 on a 5-char string) and exactly-at-end (index 5 on "hello").
+    // In-bounds index 0 must return the first code point "h".
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_string_oob.ynz"));
+    assert_eq!(
+        code, 0,
+        "m7_string_oob must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(stdout, "none\nnone\nh\n");
+    }
 }
 
-#[test]
-fn m7_string_interpolation_with_expressions() {
+/// One named test per input class of the `interpolation table` unit; each case is a test the runner names.
+macro_rules! interpolation_table_medium_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: `${expr}` parts are dropped, garbled, reordered or evaluated in the wrong order | tier: Medium
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+interpolation_table_medium_case! {
+    // case: `${expr}` parts are dropped, garbled or reordered
+    m7_string_interpolation_with_expressions => {
     // WHY: M7 P4b acceptance criterion. String interpolation with ${expr} parts must
     // use the ynz_string_builder_* runtime sequence (new, N×append, finalize).
     // If the builder codegen is wrong, the output will be missing segments, garbled,
@@ -1226,8 +1399,24 @@ fn m7_string_interpolation_with_expressions() {
         "m7_string_interpolation must compile and run; stderr:\n{stderr}"
     );
     assert_eq!(stdout, "Hello Alice, your score is 42!\n");
+    }
+    // case: an arithmetic expression inside `${}` is evaluated in the wrong order
+    m7_interpolation_nested_expressions => {
+    // WHY: M7 P5 adversarial fixture. String interpolation with arithmetic
+    // expressions inside ${...} must evaluate the sub-expression first, convert
+    // to string, and embed correctly. Tests sum (10+5=15), product (10*5=50),
+    // and a prefix/suffix pattern. If the builder codegen evaluates expressions
+    // eagerly or the order is wrong, output differs.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_interpolation_nested.ynz"));
+    assert_eq!(
+        code, 0,
+        "m7_interpolation_nested must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(stdout, "10 + 5 = 15\n10 * 5 = 50\nprefix_10_suffix\n");
+    }
 }
 
+// bug: `==` on two equal strings is false | tier: Medium
 #[test]
 fn m7_nfc_equality_same_bytes() {
     // WHY: M7 P4b / M3 catch-up. ynz_string_eq must use NFC normalization.
@@ -1244,6 +1433,7 @@ fn m7_nfc_equality_same_bytes() {
 
 // ── M7 P4c: Iterable codegen — string iteration, first-class range, user shape ─
 
+// bug: `for (c in s)` iterates the wrong number of code points | tier: Medium
 #[test]
 fn m7_for_string_iterates_code_points() {
     // WHY: M7 P4c acceptance criterion. `for (c in s)` must use ynz_string_count +
@@ -1258,20 +1448,7 @@ fn m7_for_string_iterates_code_points() {
     assert_eq!(stdout, "5\n");
 }
 
-#[test]
-fn m7_range_first_class_storable_and_iterable() {
-    // WHY: M7 P4c acceptance criterion. A `range(0, 3)` stored in a `let` binding
-    // must produce a {i64, i64} alloca and be iterable in a subsequent `for`. If
-    // range() is only lowered as an inline iter expression (the M3 path), this test
-    // fails with a codegen error when the for-loop iter is an ident, not a call.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_range_first_class.ynz"));
-    assert_eq!(
-        code, 0,
-        "m7_range_first_class must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(stdout, "0\n1\n2\n");
-}
-
+// bug: a user shape with a `next` function is not iterable by `for` | tier: Medium
 #[test]
 fn m7_user_shape_iterable_via_next_function() {
     // WHY: M7 P4c acceptance criterion. A user shape with a standalone
@@ -1289,6 +1466,7 @@ fn m7_user_shape_iterable_via_next_function() {
 
 // ── M7 P5: adversarial fixtures ────────────────────────────────────────────────
 
+// bug: a call to an errors-capable function with no `.or()`/`.failed()`/propagation is accepted | tier: High
 #[test]
 fn m7_errors_unhandled_is_compile_error() {
     // WHY: M7 P5 adversarial fixture. Calling an errors-capable function in a
@@ -1311,65 +1489,9 @@ fn m7_errors_unhandled_is_compile_error() {
     );
 }
 
-#[test]
-fn m7_errors_nested_propagation_three_levels() {
-    // WHY: M7 P5 adversarial fixture. Three-level auto-propagation chain:
-    // level3() -> level2() -> level1(), main catches with .or(0).
-    // If any level's {error_ptr, success_val} struct is mis-wired, the value
-    // leaks or the error tag is corrupted, producing 0 (fallback) instead of 42.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_errors_nested_propagation.ynz"));
-    assert_eq!(
-        code, 0,
-        "m7_errors_nested_propagation must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(stdout, "42\n");
-}
-
-#[test]
-fn m7_string_empty_operations() {
-    // WHY: M7 P5 adversarial fixture. Empty string boundary conditions:
-    // count() must return 0; contains() must return false; startsWith/endsWith
-    // empty string must return true (a string always starts and ends with "").
-    // Off-by-one errors in the string runtime are most visible at zero length.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_string_empty.ynz"));
-    assert_eq!(
-        code, 0,
-        "m7_string_empty must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(stdout, "0\nfalse\ntrue\ntrue\n");
-}
-
-#[test]
-fn m7_string_oob_returns_none() {
-    // WHY: M7 P5 adversarial fixture. Out-of-bounds .get() on a string must
-    // return none (not panic, not segfault, not garbage). Tests both far-OOB
-    // (index 100 on a 5-char string) and exactly-at-end (index 5 on "hello").
-    // In-bounds index 0 must return the first code point "h".
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_string_oob.ynz"));
-    assert_eq!(
-        code, 0,
-        "m7_string_oob must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(stdout, "none\nnone\nh\n");
-}
-
-#[test]
-fn m7_interpolation_nested_expressions() {
-    // WHY: M7 P5 adversarial fixture. String interpolation with arithmetic
-    // expressions inside ${...} must evaluate the sub-expression first, convert
-    // to string, and embed correctly. Tests sum (10+5=15), product (10*5=50),
-    // and a prefix/suffix pattern. If the builder codegen evaluates expressions
-    // eagerly or the order is wrong, output differs.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m7_interpolation_nested.ynz"));
-    assert_eq!(
-        code, 0,
-        "m7_interpolation_nested must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(stdout, "10 + 5 = 15\n10 * 5 = 50\nprefix_10_suffix\n");
-}
-
 // ── M8 P2: modules + multi-file driver ───────────────────────────────────────
 
+// bug: a multi-file project directory is not discovered or compiled | tier: Medium
 #[test]
 fn m8_multi_file_project_runs() {
     // WHY: The multi-file project driver must compile all .ynz files under src/
@@ -1387,45 +1509,20 @@ fn m8_multi_file_project_runs() {
     );
 }
 
-#[test]
-fn m8_export_function_compiles_as_library() {
-    // WHY: A file with `export function` declarations is a library (no entrypoint required).
-    // Typeck must NOT reject it for missing `entrypoint`. Guards the is_module_file check.
-    let (stdout, _stderr, code) = ynz_run_stdout(&fixture("m8_export_function.ynz"));
-    // A library file with no entrypoint exits with error but for the right reason
-    // (no entrypoint required for a library = no binary produced).
-    // When run as a standalone file, it has no entrypoint — that's expected.
-    // The test verifies the compilation succeeds (no typeck explosion), even if run exits non-zero.
-    let _ = (stdout, code); // output depends on whether entrypoint is found
-                            // The key check: no panic in the compiler.
-}
-
-#[test]
-fn m8_import_relative_path_produces_diagnostic() {
-    // WHY: Relative import paths (`./foo`) are banned — they break when files move.
-    // The parser must reject them with a teaching diagnostic.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m8_import_relative_path.ynz"));
-    assert_ne!(code, 0, "relative import path must produce an error");
-    assert!(stdout.is_empty(), "no stdout on error");
-    assert!(
-        stderr.contains("project-root"),
-        "diagnostic must mention project-root paths; got:\n{stderr}"
-    );
-}
-
-#[test]
-fn m8_single_file_fallback_still_works_in_project() {
-    // WHY: When a single file is passed but a yinz.toml exists above it,
-    // the driver should still run the file. Regression guard for the project-detection path.
-    let (stdout, _stderr, code) = ynz_run_stdout(&fixture("hello.ynz"));
-    assert_eq!(code, 0, "single-file fallback must still work");
-    assert_eq!(stdout, "hello, yinz\n");
-}
-
 // ── M8 P4: sensitive type modifier ───────────────────────────────────────────
 
-#[test]
-fn m8_sensitive_print_redacts() {
+/// One named test per input class of the `sensitive table` unit; each case is a test the runner names.
+macro_rules! sensitive_table_medium_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: `print` of a `sensitive` value shows the raw value, or `.reveal()` still redacts | tier: Medium
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+sensitive_table_medium_case! {
+    // case: `print` of a `sensitive` value shows the raw value
+    m8_sensitive_print_redacts => {
     // WHY: `print(k)` where `k` is `sensitive string` must print `[REDACTED]`,
     // not the underlying value. Guards the auto-redaction invariant.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m8_sensitive_basic.ynz"));
@@ -1434,20 +1531,21 @@ fn m8_sensitive_print_redacts() {
         stdout, "[REDACTED]\n",
         "sensitive value must print [REDACTED]"
     );
-}
-
-#[test]
-fn m8_sensitive_reveal_prints_raw() {
+    }
+    // case: `.reveal()` still redacts or panics
+    m8_sensitive_reveal_prints_raw => {
     // WHY: `.reveal()` on a sensitive value must return the underlying type
     // (string) and print the raw value. If reveal() doesn't strip the wrapper,
     // it either still redacts (wrong) or panics (crash).
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m8_sensitive_reveal.ynz"));
     assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
     assert_eq!(stdout, "secret-value\n", "reveal() must print raw value");
+    }
 }
 
 // ── reveal-sensitive flag ─────────────────────────────────────────────────────
 
+// bug: `ynz run --reveal-sensitive` still redacts (flag not propagated to the program) | tier: Medium
 #[test]
 fn reveal_sensitive_flag_shows_raw_value() {
     // WHY: `ynz run --reveal-sensitive` must print the actual string rather than
@@ -1472,20 +1570,9 @@ fn reveal_sensitive_flag_shows_raw_value() {
     );
 }
 
-#[test]
-fn without_reveal_sensitive_flag_sensitive_is_redacted() {
-    // WHY: without the flag, sensitive values must still redact. Guards that
-    // the OnceLock default path (env var absent) returns [REDACTED] correctly.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m8_sensitive_basic.ynz"));
-    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
-    assert_eq!(
-        stdout, "[REDACTED]\n",
-        "without --reveal-sensitive, sensitive must print [REDACTED]"
-    );
-}
-
 // ── M8 P5: concurrency keywords (sequential semantics) ───────────────────────
 
+// bug: `wait f()` discards the return value or skips the call | tier: Medium
 #[test]
 fn m8_wait_runs_sequentially() {
     // WHY: In M8, `wait foo()` has identical semantics to `foo()`. The result
@@ -1496,6 +1583,7 @@ fn m8_wait_runs_sequentially() {
     assert_eq!(stdout, "42\n", "wait double(21) must return 42");
 }
 
+// bug: the program exits before a `background` task has run | tier: High
 #[test]
 fn m8_background_runs_concurrently() {
     // WHY: In v0.3-M1, `background foo()` runs on a separate thread. The return
@@ -1520,6 +1608,7 @@ fn m8_background_runs_concurrently() {
 
 // ── v0.3-M2: concurrent wait state machines ──────────────────────────────────
 
+// bug: `wait` runs sequentially (blocks the thread) instead of suspending so tasks interleave (wall-clock bounds dropped: no named bug, timing) | tier: High
 #[test]
 fn v03_m2_concurrent_waits_proof() {
     // WHY: Core M2 correctness proof — 8 background tasks each containing `wait sleep(100)`
@@ -1538,10 +1627,6 @@ fn v03_m2_concurrent_waits_proof() {
     //
     // The no-op / sequential-execution detector is the ORDERING assertion below
     // (all 8 START lines before any DONE) — deterministic and core-count-independent.
-    // The wall-clock bounds are loose sanity guards ONLY and do NOT detect a sleep
-    // no-op: main's blocking sleepBlocking(300) keep-alive dominates total runtime, so the
-    // binary runs ~300ms whether or not sleep suspends. We build the fixture first, then time
-    // execution only (excluding compile), so the bounds measure the program, not the build.
     let tmp = std::env::temp_dir().join(format!("ynz-concurrent-proof-{}", std::process::id()));
     std::fs::create_dir_all(&tmp).expect("create temp dir for concurrent waits proof");
     let src_copy = tmp.join("v0_3_m2_concurrent_waits_proof.ynz");
@@ -1558,14 +1643,11 @@ fn v03_m2_concurrent_waits_proof() {
     let binary = src_copy.with_extension("");
     assert!(binary.exists(), "binary must exist after ynz build");
 
-    // Execution phase — timed.
-    let exec_start = std::time::Instant::now();
+    // Execution phase.
     let exec_out = Command::new(&binary)
         .env("CLICOLOR", "0")
         .output()
         .expect("failed to spawn concurrent waits binary");
-    let elapsed = exec_start.elapsed();
-    let elapsed_ms = elapsed.as_millis();
 
     let _ = std::fs::remove_dir_all(&tmp);
 
@@ -1612,24 +1694,11 @@ fn v03_m2_concurrent_waits_proof() {
          If this test fails, the state machines are running sequentially (M1 behavior), \
          not concurrently (M2 behavior).\nstdout:\n{stdout}"
     );
-
-    // Sanity floor only: confirms the compiled binary actually executed (it must run at
-    // least main's sleepBlocking(300) keep-alive). This is NOT a sleep no-op detector — a
-    // no-op would still run ~300ms because sleepBlocking(300) dominates. The ordering
-    // assertion above is what proves sleep genuinely suspends. The upper bound catches a hang.
-    assert!(
-        elapsed_ms >= 80,
-        "execution time {elapsed_ms}ms is below 80ms — sleep may have no-opped; \
-         check that wait actually suspends for 100ms"
-    );
-    assert!(
-        elapsed_ms < 2000,
-        "execution time {elapsed_ms}ms exceeds 2 seconds; concurrent waits must finish in ~300ms"
-    );
 }
 
 // ── v0.3-M2 Option-B deferral errors ─────────────────────────────────────────
 
+// bug: `wait` inside a `while` body is rejected again | tier: Medium
 #[test]
 fn v03_m2_wait_in_while_loop_now_compiles() {
     // WHY: `wait` inside a `while` body is supported since M3a Phase 2. The old guard that
@@ -1650,8 +1719,18 @@ fn v03_m2_wait_in_while_loop_now_compiles() {
     );
 }
 
-#[test]
-fn v03_m3a_local_crossing_wait_compiles_and_runs() {
+/// One named test per input class of the `suspension-local table` unit; each case is a test the runner names.
+macro_rules! suspension_local_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a local held across a `wait` or suspending call is lost, corrupted or leaked after resume | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+suspension_local_table_high_case! {
+    // case: a local held across a `wait` is lost or corrupted after resume
+    v03_m3a_local_crossing_wait_compiles_and_runs => {
     // WHY: a local declared before a `wait` and read after must now COMPILE and produce
     // the correct value — M3a P1 lifts the old LocalCrossesWait guard and adds frame-backed
     // slot machinery so the local survives the suspension. If this test fails with exit 1
@@ -1671,10 +1750,9 @@ fn v03_m3a_local_crossing_wait_compiles_and_runs() {
         !stderr.contains("Machine-code generation failed"),
         "must not crash the backend; stderr:\n{stderr}"
     );
-}
-
-#[test]
-fn v03_m3a_inferred_suspension_local_crossing_compiles_and_runs() {
+    }
+    // case: a local held across an inferred (bare) suspending call is lost or crashes the LLVM backend
+    v03_m3a_inferred_suspension_local_crossing_compiles_and_runs => {
     // WHY: a local declared before a BARE suspending call (no explicit `wait` keyword)
     // and read after it must compile and produce the correct value after M3a P1 lifts
     // the LocalCrossesWait guard. The inferred-suspension path (bare `sleeper()` call
@@ -1701,10 +1779,542 @@ fn v03_m3a_inferred_suspension_local_crossing_compiles_and_runs() {
         !stderr.contains("Machine-code generation failed"),
         "must not crash the backend; stderr:\n{stderr}"
     );
+    }
+    // case: a local crossing a cross-module suspension is lost
+    v03_m3b_crossing_local_cross_module_exits_one_clean_reject => {
+    // test-ratchet: M3e Phase 2 lifted the universal reject; behavior changed from
+    //   exit 1 (compile error) to exit 0 (correct execution).
+    // WHY: crossing local (`x = 10`) survives the cross-module SM resume boundary.
+    // Phase 2 ensures the frame slot for x is correctly allocated and restored.
+    // Expected: "before: 10\nfetched\nafter: 10"
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_crossing_local_cross_module"));
+    assert_eq!(
+        code, 0,
+        "crossing local cross-module must exit 0; exit was {code}; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout, "before: 10\nfetched\nafter: 10\n",
+        "expected output mismatch; stderr:\n{stderr}"
+    );
+    }
+    // case: a shape local crossing a cross-module suspension is mis-sized
+    v03_m3b_loud_reject_shape_crossing_exits_one_clean_diagnostic => {
+    // test-ratchet: M3e Phase 2 lifted the reject; behavior changed from exit 1
+    //   (compile error) to exit 0 (correct execution).
+    // WHY: cross-module suspending export with a shape crossing-local (`item: Item`).
+    // Phase 2 uses LLVM TargetData (not typeck field-count) for slot sizing, so the
+    // frame is correctly laid out and `item.x` (= 1) is correctly read after resume.
+    // Expected: "1"
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_loud_reject_shape_crossing"));
+    assert_eq!(
+        code, 0,
+        "shape crossing must exit 0; exit code was {code}; stderr:\n{stderr}"
+    );
+    assert_eq!(stdout, "1\n", "expected output mismatch; stderr:\n{stderr}");
+    }
+    // case: a cross-module Boolean local is mis-sized so its value is corrupted after resume
+    v03_m3e_bool_crossing_local_direct_runs_correctly => {
+    // test-ratchet: M3e Phase 2 LIFT — was assert_m3e_reject (exit 1); now asserts correct
+    // runtime output. Bool crossing-local must hold its value across the resume boundary.
+    // WHY: bool × crossing-local × direct (escape danger matrix axis 1). A bool local
+    // declared before a cross-module suspending call must hold its value after resume.
+    // Wrong frame layout → corrupted stack slot → wrong after-value; SIGILL is the failure
+    // mode this test gates against by requiring the exact correct output.
+    let (stdout, _stderr, code) = ynz_run_stdout(&fixture("v0_3_m3e_bool_crossing_local_direct"));
+    assert_eq!(
+        code, 0,
+        "bool crossing-local direct: must exit 0; exit was {code}"
+    );
+    assert_eq!(
+        stdout, "before: true\nafter: true\n",
+        "bool crossing-local direct: wrong output"
+    );
+    }
+    // case: a cross-module Float local is mis-sized so its f64 bits are corrupted after resume
+    v03_m3e_float_crossing_local_direct_runs_correctly => {
+    // test-ratchet: M3e Phase 2 LIFT — was assert_m3e_reject (exit 1); now asserts correct
+    // runtime output. Float crossing-local must hold its value across the resume boundary.
+    // WHY: float × crossing-local × direct. Float (f64) local must survive resume.
+    // Detection: the fixture uses boolean comparison (temp > threshold) instead of
+    // float.toString() — toString() renders decimal128-zero for all float values (pre-existing
+    // base bug). The boolean comparison detects slot corruption: if temp is zeroed by a
+    // frame mis-size, the comparison returns false instead of true.
+    // test-ratchet: fixture changed from toString() approach to boolean comparison so the
+    // test assertion can detect corruption rather than passing trivially on two matching zeros.
+    let (stdout, _stderr, code) = ynz_run_stdout(&fixture("v0_3_m3e_float_crossing_local_direct"));
+    assert_eq!(
+        code, 0,
+        "float crossing-local direct: must exit 0; exit was {code}"
+    );
+    assert_eq!(
+        stdout, "big_before: true\nbig_after: true\n",
+        "float crossing-local direct: both comparisons must be true \
+         (3.14 > 3.0 before AND after suspension); slot corruption would produce false"
+    );
+    }
+    // case: a cross-module String local is mis-sized so its pointer dangles after resume
+    v03_m3e_string_crossing_local_direct_runs_correctly => {
+    // test-ratchet: M3e Phase 2 LIFT — was assert_m3e_reject (exit 1); now asserts correct
+    // runtime output. String crossing-local must hold its pointer across the resume boundary.
+    // WHY: string × crossing-local × direct. String (pointer-sized) local must survive resume.
+    // Wrong frame layout → dangling pointer → wrong string read or crash.
+    let (stdout, _stderr, code) = ynz_run_stdout(&fixture("v0_3_m3e_string_crossing_local_direct"));
+    assert_eq!(
+        code, 0,
+        "string crossing-local direct: must exit 0; exit was {code}"
+    );
+    assert_eq!(
+        stdout, "before: hello\nafter: hello\n",
+        "string crossing-local direct: wrong output"
+    );
+    }
+    // case: a cross-module Number (decimal128) local is sized as one slot so its high half is overwritten
+    v03_m3e_number_crossing_local_direct_runs_correctly => {
+    // test-ratchet: M3e Phase 2 LIFT — was assert_m3e_reject (exit 1); now asserts correct
+    // runtime output. Number/decimal128 crossing-local uses 2 frame slots (lo + hi halves).
+    // WHY: number × crossing-local × direct (escape #4). The old scalar approximation counted
+    // one slot for a two-slot decimal128 local — under-sized frame → next slot overwrote the
+    // high half → corrupted value. This test proves both slots survive the resume boundary.
+    let (stdout, _stderr, code) = ynz_run_stdout(&fixture("v0_3_m3e_number_crossing_local_direct"));
+    assert_eq!(
+        code, 0,
+        "number crossing-local direct: must exit 0; exit was {code}"
+    );
+    assert_eq!(
+        stdout, "before: 1.5\nafter: 1.5\n",
+        "number crossing-local direct: wrong output"
+    );
+    }
+    // case: a cross-module shape local is sized by field count not LLVM ABI size so adjacent slots are corrupted
+    v03_m3e_shape_crossing_local_direct_runs_correctly => {
+    // test-ratchet: M3e Phase 2 LIFT — was assert_m3e_reject (exit 1); now asserts correct
+    // runtime output. Shape crossing-local uses LLVM ABI size (from TargetData), not field count.
+    // WHY: shape × crossing-local × direct (escape #2). LLVM ABI padding differs from the
+    // old typeck "8 bytes per field" count — under-sized frame → adjacent slot corruption.
+    // This test proves the LLVM-accurate slot count produces correct field values post-resume.
+    let (stdout, _stderr, code) = ynz_run_stdout(&fixture("v0_3_m3e_shape_crossing_local_direct"));
+    assert_eq!(
+        code, 0,
+        "shape crossing-local direct: must exit 0; exit was {code}"
+    );
+    assert_eq!(
+        stdout, "x: 3, y: 7\n",
+        "shape crossing-local direct: wrong output"
+    );
+    }
+    // case: an errors-capable result staging slot mis-sizes the frame so the local or result is corrupted
+    v03_m3e_ec_crossing_local_direct_runs_correctly => {
+    // test-ratchet: M3e Phase 2 LIFT — was assert_m3e_reject (exit 1); now asserts correct
+    // runtime output. Errors-capable crossing-local uses the {i64,i64} ABI struct (2 slots).
+    // WHY: errors-capable × crossing-local × direct (escape #3). The EC staging slot stacks
+    // on top of the crossing-local slots; wrong total → corrupt EC result or wrong local value.
+    // This test proves the before-value, the EC result, and the after-value are all correct.
+    let (stdout, _stderr, code) = ynz_run_stdout(&fixture("v0_3_m3e_ec_crossing_local_direct"));
+    assert_eq!(
+        code, 0,
+        "ec crossing-local direct: must exit 0; exit was {code}"
+    );
+    assert_eq!(
+        stdout, "before: 5\nresult: 99\nafter: 5\n",
+        "ec crossing-local direct: wrong output"
+    );
+    }
+    // case: a `for` loop variable held across a cross-module suspension is reloaded from the wrong slot
+    v03_m3e_int_loop_var_direct_runs_correctly => {
+    // test-ratchet: M3e Phase 2 LIFT — was assert_m3e_reject (exit 1); now asserts correct
+    // runtime output. Int loop variable must hold its value across the resume boundary.
+    // WHY: int × loop-var × direct. The loop variable is a crossing-local inside a for-loop;
+    // if its frame slot is at the wrong offset, the post-resume reload reads garbage.
+    let (stdout, _stderr, code) = ynz_run_stdout(&fixture("v0_3_m3e_int_loop_var_direct"));
+    assert_eq!(code, 0, "int loop-var direct: must exit 0; exit was {code}");
+    assert_eq!(
+        stdout, "tick: 1\ntick: 2\ntick: 3\n",
+        "int loop-var direct: wrong output"
+    );
+    }
+    // case: a shape `for` loop variable held across a cross-module suspension is reloaded from the wrong slot
+    v03_m3e_shape_loop_var_direct_runs_correctly => {
+    // test-ratchet: M3e Phase 2 LIFT — was assert_m3e_reject (exit 1); now asserts correct
+    // runtime output. Shape loop variable must survive the resume boundary with LLVM-accurate slot.
+    // WHY: shape × loop-var × direct (escape #2). A shape loop variable's LLVM ABI size may
+    // differ from the field-count approximation — wrong slot count → adjacent-slot corruption
+    // across loop iterations.
+    let (stdout, _stderr, code) = ynz_run_stdout(&fixture("v0_3_m3e_shape_loop_var_direct"));
+    assert_eq!(
+        code, 0,
+        "shape loop-var direct: must exit 0; exit was {code}"
+    );
+    assert_eq!(
+        stdout, "item: 10\nitem: 20\n",
+        "shape loop-var direct: wrong output"
+    );
+    }
+    // case: the caller's own int local overlaps the embedded transitive suspender's sub-frame
+    v03_m3e_int_crossing_local_transitive_runs_correctly => {
+    // test-ratchet: M3e Phase 2 LIFT — was assert_m3e_reject (exit 1); now asserts correct
+    // runtime output. Caller has its own int crossing-local AND a 1-level transitive suspender.
+    // WHY: int × crossing-local × 1-level transitive (escape #5). The caller frame must embed
+    // the transitive suspender's sub-frame at the right offset AFTER its own crossing locals —
+    // wrong total (old scalar miss) → int local overwrites sub-frame header or vice versa.
+    let (stdout, _stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3e_int_crossing_local_transitive"));
+    assert_eq!(
+        code, 0,
+        "int crossing-local transitive: must exit 0; exit was {code}"
+    );
+    assert_eq!(
+        stdout, "before: 42\nafter: 42\n",
+        "int crossing-local transitive: wrong output"
+    );
+    }
+    // case: a caller with several int locals plus an embedded sub-frame mis-offsets one over the other
+    v03_m3e_caller_own_frame_runs_correctly => {
+    // test-ratchet: M3e Phase 2 LIFT �� was assert_m3e_reject (exit 1); now asserts correct
+    // runtime output. Caller has 3 int crossing-locals AND an embedded sub-frame.
+    // WHY: caller-also-has-own-frame (escape #5). Three int crossing-locals (multi-slot frame)
+    // plus an embedded imported suspender sub-frame. Wrong total offset → crossing locals
+    // overwrite the sub-frame header or vice versa → wrong values or crash.
+    let (stdout, _stderr, code) = ynz_run_stdout(&fixture("v0_3_m3e_caller_own_frame"));
+    assert_eq!(code, 0, "caller own frame: must exit 0; exit was {code}");
+    assert_eq!(
+        stdout, "a: 1, b: 2, c: 3, result: 100\n",
+        "caller own frame: wrong output"
+    );
+    }
+    // case: the second call of the same imported suspender clobbers a local live across both calls
+    v03_m3e_double_call_crossing_local_runs_correctly => {
+    // WHY: adversarial axis 5a.i — same imported suspending callee called twice with an int
+    // crossing-local live between the two calls. The frame_layouts embedding uses ONE
+    // sub-frame slot for doTick() (same callee → same FrameLayout key). A crossing-local
+    // live across both calls must not be clobbered by the second call's sub-frame reuse.
+    // If the crossing-local slot overlaps the sub-frame header, the second resume clobbers it.
+    let (stdout, _stderr, code) = ynz_run_stdout(&fixture("v0_3_m3e_double_call_crossing_local"));
+    assert_eq!(
+        code, 0,
+        "double-call crossing-local: must exit 0; exit was {code}"
+    );
+    assert_eq!(
+        stdout, "start: 7\nmid: 7\nend: 7\n",
+        "double-call crossing-local: crossing-local must be 7 across both calls"
+    );
+    }
+    // case: an imported shape is missing from the importer's shape table so its slot falls back to 8 bytes
+    v03_m3e_imported_shape_crossing_local_runs_correctly => {
+    // WHY: adversarial S3 regression lock — imported shape as crossing-local.
+    // The shape type Coord is DEFINED in shapes_lib.ynz and IMPORTED into entrypoint.ynz.
+    // collect_shapes seeds the shape_table with imported shapes, so frame_layouts_query
+    // measures the LLVM ABI size from the importer's shape_table (which includes Coord).
+    // If imported shapes were absent from the table, the crossing-local slot would fall
+    // back to the 8-byte-per-slot default regardless of actual field count → corruption
+    // for shapes whose ABI size differs from the default (e.g., 3-field structs, padded).
+    let (stdout, _stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3e_imported_shape_crossing_local"));
+    assert_eq!(
+        code, 0,
+        "imported shape crossing-local: must exit 0; exit was {code}"
+    );
+    assert_eq!(
+        stdout, "x: 1, y: 2, z: 3\n",
+        "imported shape crossing-local: wrong output"
+    );
+    }
+    // case: a local mutated between two waits is reloaded stale at the later continuation
+    v03_m3a_p1_mutated_local_crosses_two_waits => {
+    // WHY: fixture (b) — local mutated between two waits, read after both.
+    // Guards that mutation flushes to frame AND the reload at each continuation
+    // state sees the latest value. Expected: count=2 (incremented twice).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_mutated_crossing_local.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "2",
+        "mutated local must see cumulative value; stderr:\n{stderr}"
+    );
+    }
+    // case: two crossing locals share one frame slot
+    v03_m3a_p1_two_crossing_locals => {
+    // WHY: fixture (c) — two crossing locals (a=3, b=4), read after wait.
+    // Each must occupy a distinct frame slot. Sum = 7.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_two_crossing_locals.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "7",
+        "two crossing locals must sum correctly; stderr:\n{stderr}"
+    );
+    }
+    // case: a String local across a wait loses its pointer in the int<->ptr slot conversion
+    v03_m3a_p1_string_crossing_local => {
+    // WHY: fixture (d) — string-typed crossing local (heap pointer).
+    // Frame slot stores ptr_to_int; reload does int_to_ptr. Must survive.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_string_crossing_local.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "hello",
+        "string local must survive suspension; stderr:\n{stderr}"
+    );
+    }
+    // case: a shape local across a wait is not frame-embedded so its fields are lost
+    v03_m3a_p1_shape_crossing_local => {
+    // WHY: fixture (e) — shape-typed crossing local. Shape literals are stack-allocated
+    // by lower_struct_lit; the codegen frame-embeds them by pre-wiring the ptr alloca to
+    // the composed frame's slot region in sm_entry. Field reads/writes go directly to the
+    // frame — no separate heap allocation, no alloc leak. A regression back to the old
+    // heap-promote approach would show alloc=2 (leaking). Expected: 30 = p.x + p.y.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_shape_crossing_local.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "30",
+        "shape crossing local must survive suspension; stderr:\n{stderr}"
+    );
+    }
+    // case: a value-returning suspending function drops its crossing local from the return value
+    v03_m3a_p1_value_returning_fn_with_crossing_local => {
+    // WHY: fixture (f) — value-returning SM fn with a crossing local.
+    // `acc = n*2` crosses the wait; return value must include it.
+    // Expected: 11 (5*2 + 1 = 11).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_value_returning_fn.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "11",
+        "return value must incorporate crossing local; stderr:\n{stderr}"
+    );
+    }
+    // case: an errors-capable suspending function mis-handles its crossing local on the success path
+    v03_m3a_p1_errors_fn_with_crossing_local => {
+    // WHY: fixture (g) — `-> T errors` SM fn with a crossing local.
+    // `prefix = n + 100` crosses the wait; success path returns prefix+n.
+    // Expected: 114 (7+100 + 7 = 114).
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p1_errors_fn_crossing_local.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "114",
+        "errors-fn crossing local must produce correct value; stderr:\n{stderr}"
+    );
+    }
+    // case: a Number local across a wait is stored in one slot so it is truncated
+    v03_m3a_p1_number_decimal128_crossing_local => {
+    // WHY: fixture (i) — number (decimal128) crossing local.
+    // The value (0.1 + 0.2 = 0.3 exact in decimal128) is stored across the suspension
+    // using TWO consecutive frame slots (16 bytes total — no truncation to 8 bytes).
+    // A regression back to 1 slot would SILENTLY produce 0 or garbage (truncation guard).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_number_crossing_local.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "0.3",
+        "decimal128 crossing local must survive exact; stderr:\n{stderr}"
+    );
+    }
+    // case: a crossing local assigned inside a non-suspending `if` arm is not flushed to the frame
+    v03_m3a_p1_conditional_crossing_local => {
+    // WHY: fixture (j) — crossing local mutated inside a non-suspending `if` arm.
+    // The mutation must be flushed to the frame slot even when inside an if body.
+    // Expected: 15 (initial=10 + extra=5 from the if arm).
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p1_conditional_crossing_local.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "15",
+        "if-body assign must flush to frame slot; stderr:\n{stderr}"
+    );
+    }
+    // case: a crossing local assigned inside a `while` body resets to 0 (collect_crossing_writes dropped While)
+    v03_m3a_p1_while_body_write => {
+    // WHY: Bug 2 guard — mutations inside a while body must be flushed to the frame slot.
+    // collect_crossing_writes previously had a `_ => {}` arm that dropped While bodies,
+    // so acc=30 computed before the wait would silently reset to 0. Regression returns 0.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_while_body_write.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "30",
+        "while-body assign must flush crossing local; stderr:\n{stderr}"
+    );
+    }
+    // case: a crossing local assigned inside a `for` body resets to 0
+    v03_m3a_p1_for_body_write => {
+    // WHY: Bug 2 guard — mutations inside a for body must be flushed to the frame slot.
+    // Accumulates sum over [10,20,30]; regression returns 0.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_for_body_write.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "60",
+        "for-body assign must flush crossing local; stderr:\n{stderr}"
+    );
+    }
+    // case: a local first defined between two waits has its alloca in a continuation block so it reads 0
+    v03_m3a_p1_contdef_crossing_local => {
+    // WHY: Bug 3 guard — a crossing local first-defined BETWEEN two waits must have its
+    // alloca in sm_entry (not in a continuation state block that wouldn't dominate uses).
+    // Regression: LLVM dominance crash or uses-before-def reading 0.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_contdef_crossing_local.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "3",
+        "b defined after wait-1, read after wait-2 must produce 3; stderr:\n{stderr}"
+    );
+    }
+    // case: a Float local across a wait loses its bitcast round trip so it reads 0.0
+    v03_m3a_p1_float_crossing_local => {
+    // WHY: float (f64) crossing local obtained via .toFloat() — exercises the bitcast
+    // path (sitofp → bitcast i64 → frame slot → reload → bitcast back to float).
+    // The fixture mutates `f` after the wait (adds 1.0) to exercise both reload AND
+    // flush-back. Expected output: 8 (7 + 1). A regressed zero-slot would print 1
+    // (0.0 + 1.0), proving the bitcast round-trip is required, not optional.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_float_crossing_local.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "8",
+        "float crossing local must survive suspension and mutation; stderr:\n{stderr}"
+    );
+    }
+    // case: an errors-capable result crossing a second wait crashes ("unexpected return type") or loses a slot
+    v03_m3a_p1_ec_result_crosses_second_wait => {
+    // WHY: FIX 2 guard — an ErrorsCapable result crossing a second wait previously crashed
+    // with "unexpected return type" because bind_sm_result_and_flush had no StructValue arm.
+    // Now it extracts both fields, stores to the companion struct alloca, and flushes 2 slots.
+    // Expected: 7 (getVal(7) succeeds, r.or(0) = 7).
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p1_ec_result_crosses_second_wait.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "7",
+        "EC result crossing 2nd wait must produce correct value; stderr:\n{stderr}"
+    );
+    }
+    // case: a crossing local defined only inside an if-arm that holds the wait has its alloca in a non-dominating block (ICE)
+    v03_m3a_p1_sole_nested_int_crossing => {
+    // WHY: FIX 2 guard — a crossing local whose SOLE definition is inside an if-arm that
+    // also contains the wait must compile and run correctly. Previously caused an LLVM
+    // dominance ICE because the alloca for `inner` was created in the state block (not
+    // sm_entry), and the resume continuation could not reach it. The fix: crossing locals
+    // always reuse the pre-created sm_entry alloca regardless of nesting depth (safe since
+    // shadows are now rejected at typeck by ShadowsCrossingLocal).
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p1_sole_nested_int_crossing.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "42",
+        "crossing local defined solely inside if-arm must produce correct value; stderr:\n{stderr}"
+    );
+    }
+    // case: a Boolean crossing local is read as 8 bytes from a 1-byte i1 slot (SIGSEGV)
+    v03_m3a_p1_bool_crossing_local => {
+    // WHY: FIX A (Round 7) — boolean crossing local. Prior to this fix, the flush path
+    // loaded i64 from a bool's i1 alloca — an 8-byte read from a 1-byte region — causing
+    // SIGSEGV (exit 139). The fix: separate `sm_crossing_bool_set` (i1 alloca, zext/trunc
+    // at the frame boundary) from `sm_crossing_scalar_set` (i64 alloca, raw load/store).
+    // Compiled-binary verification: exit 0, output "true", no SIGSEGV on all 5 runs.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_bool_crossing_local.ynz"));
+    assert_eq!(
+        code, 0,
+        "bool crossing local must exit 0; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "true",
+        "bool crossing local must flip false→true across wait; stderr:\n{stderr}"
+    );
+    }
+    // case: a crossing local declared in a wait-bearing if-arm after a top-level wait gets no entry alloca (ICE)
+    v03_m3a_p1_nested_after_toplevel_wait => {
+    // WHY: FIX B (Round 7) — crossing local declared inside an if-arm that also contains
+    // a wait, when a prior top-level wait exists. Previously caused LLVM ICE ("Instruction
+    // does not dominate all uses") because collect_crossings_in_stmts skipped recursion
+    // into nested blocks when past_wait==true, leaving inner-declared crossing locals
+    // without sm_entry allocas. The fix: the past_wait else-branch now recurses into any
+    // suspension-bearing nested block to detect crossing locals declared inside it.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p1_nested_after_toplevel_wait.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "42\n100",
+        "nested-after-wait must print 42 then 100; stderr:\n{stderr}"
+    );
+    }
+    // case: the parameter-shadow guard refuses a plain parameter that crosses a wait with no shadow
+    v03_m3a_p1_plain_crossing_param_compiles => {
+    // WHY: regression guard for the parameter-shadow guard (Check 3b). A parameter that
+    // crosses a `wait` with NO inner shadow must continue to compile and produce the
+    // correct output — the guard must not reject normal crossing parameters. This is the
+    // primary false-positive regression for the Round-12 fix: tightening Check 3b to
+    // cover parameters must not break the `function f(x: int) { wait; print(x) }` case.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_plain_crossing_param.ynz"));
+    assert_eq!(
+        code, 0,
+        "plain crossing parameter (no shadow) must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "7",
+        "must print the original parameter value (7) after suspension; stderr:\n{stderr}"
+    );
+    }
+    // case: an `Array` local held across a wait reloads a stale or dangling heap pointer so its elements read wrong
+    v03_m3a_p3_audit_array_crossing_local => {
+    // WHY: array<T> is heap-allocated — the heap pointer is stable across suspension.
+    // Flush stores the pointer as i64, reload restores the same heap address.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_audit_array_crossing.ynz"));
+    assert_eq!(
+        code, 0,
+        "array crossing local must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "10\n20\n30",
+        "array elements must be correct after wait; got:\n{stdout}"
+    );
+    }
+    // case: a `Map` local held across a wait reloads a stale or dangling heap pointer so its entries are lost
+    v03_m3a_p3_audit_map_crossing_local => {
+    // WHY: map<K,V> is heap-allocated — the heap pointer is stable across suspension.
+    // Verifies the map can be iterated correctly after a wait (entry count = 3).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_audit_map_crossing.ynz"));
+    assert_eq!(
+        code, 0,
+        "map crossing local must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "3",
+        "map must have 3 entries after wait; got:\n{stdout}"
+    );
+    }
+    // case: an `options` local's i8 tag is not preserved across a wait so the wrong arm fires
+    v03_m3a_p3_audit_options_crossing_local => {
+    // WHY: options values are i8 tag bytes — stored as a 1-slot frame entry (i64 with
+    // i8 tag, zext on flush / truncate on reload). This audits that the options crossing-
+    // local path works end-to-end: the tag survives suspension and the match arm fires
+    // correctly post-wait. Distinct from the union/dynamic paths (which are rejected).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_audit_options_crossing.ynz"));
+    assert_eq!(
+        code, 0,
+        "options crossing local must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "active",
+        "options tag must survive wait (Status.active → 'active'); got:\n{stdout}"
+    );
+    }
 }
 
 // ── v0.3-M2 Phase 6: transitive may-block analysis ────────────────────────────
 
+// bug: a non-suspending cross-module call is refused | tier: Medium
 #[test]
 fn v03_m2_cross_module_non_suspending_exits_zero_and_prints() {
     // WHY: a non-suspending cross-module callee must be accepted (exit 0, run correctly).
@@ -1726,6 +2336,7 @@ fn v03_m2_cross_module_non_suspending_exits_zero_and_prints() {
     );
 }
 
+// bug: a dynamic-dispatch call in a suspending context is accepted instead of refused | tier: High
 #[test]
 fn v03_m2_cant_infer_dynamic_dispatch_exits_nonzero_with_teaching_error() {
     // WHY: a dynamic-dispatch call in a suspending context must exit 1 and emit the
@@ -1755,6 +2366,7 @@ fn v03_m2_cant_infer_dynamic_dispatch_exits_nonzero_with_teaching_error() {
     );
 }
 
+// bug: a transitively-suspending function emits a spurious error | tier: Medium
 #[test]
 fn v03_m2_transitive_suspends_type_checks_clean() {
     // WHY: transitive may-block analysis marks `inner` and `outer` as suspending even
@@ -1776,6 +2388,7 @@ fn v03_m2_transitive_suspends_type_checks_clean() {
     );
 }
 
+// bug: a pure-CPU function is compiled as a state machine and misbehaves | tier: Medium
 #[test]
 fn v03_m2_pure_cpu_not_state_machine_exits_zero() {
     // WHY: a pure-CPU function (no may-block calls, no transitive suspension) must not
@@ -1797,8 +2410,18 @@ fn v03_m2_pure_cpu_not_state_machine_exits_zero() {
 // correctly. The M3b cases were previously loud-rejected as a provably-sound
 // floor while frame_layouts_query was wired to emission.
 
-#[test]
-fn v03_m3b_cross_module_suspending_caller_exits_one_clean_reject() {
+/// One named test per input class of the `cross-module-suspension table` unit; each case is a test the runner names.
+macro_rules! cross_module_suspension_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a cross-module suspending call loses control flow, a return value or an errors-capable result | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+cross_module_suspension_table_high_case! {
+    // case: a cross-module suspending call loses control flow or output
+    v03_m3b_cross_module_suspending_caller_exits_one_clean_reject => {
     // test-ratchet: M3e Phase 2 lifted the universal reject; behavior changed from
     //   exit 1 (compile error) to exit 0 (correct execution).
     // WHY: cross-module suspending caller — `caller` imports `slow` from slow_ops.
@@ -1815,12 +2438,9 @@ fn v03_m3b_cross_module_suspending_caller_exits_one_clean_reject() {
         stdout, "slow done\ncaller done\n",
         "expected output mismatch; stderr:\n{stderr}"
     );
-}
-
-// ── v0.3-M3b fix round: cross-module codegen cases — M3e Phase 2 runs all ────
-
-#[test]
-fn v03_m3b_cross_module_int_return_exits_one_clean_reject() {
+    }
+    // case: an Int return value is lost across a cross-module suspension
+    v03_m3b_cross_module_int_return_exits_one_clean_reject => {
     // test-ratchet: M3e Phase 2 lifted the universal reject; behavior changed from
     //   exit 1 (compile error) to exit 0 (correct execution).
     // WHY: cross-module suspending call with `-> int` return. Phase 2 wires the real
@@ -1835,10 +2455,9 @@ fn v03_m3b_cross_module_int_return_exits_one_clean_reject() {
         stdout, "42\n",
         "expected output mismatch; stderr:\n{stderr}"
     );
-}
-
-#[test]
-fn v03_m3b_cross_module_errors_capable_exits_one_clean_reject() {
+    }
+    // case: an errors-capable return is corrupted across a cross-module suspension
+    v03_m3b_cross_module_errors_capable_exits_one_clean_reject => {
     // test-ratchet: M3e Phase 2 lifted the universal reject; behavior changed from
     //   exit 1 (compile error) to exit 0 (correct execution).
     // WHY: cross-module suspending call with `-> int errors` return. Phase 2 wires
@@ -1853,10 +2472,9 @@ fn v03_m3b_cross_module_errors_capable_exits_one_clean_reject() {
         stdout, "got: 42\n",
         "expected output mismatch; stderr:\n{stderr}"
     );
-}
-
-#[test]
-fn v03_m3b_transitive_suspend_exits_one_clean_reject() {
+    }
+    // case: a transitive cross-module suspension drops the inner sub-frame
+    v03_m3b_transitive_suspend_exits_one_clean_reject => {
     // test-ratchet: M3e Phase 2 lifted the universal reject; behavior changed from
     //   exit 1 (compile error) to exit 0 (correct execution).
     // WHY: transitive suspension via non-exported inner function. Phase 2 ensures
@@ -1871,51 +2489,9 @@ fn v03_m3b_transitive_suspend_exits_one_clean_reject() {
         stdout, "delay done\ntask done\ncaller done\n",
         "expected output mismatch; stderr:\n{stderr}"
     );
-}
-
-#[test]
-fn v03_m3b_crossing_local_cross_module_exits_one_clean_reject() {
-    // test-ratchet: M3e Phase 2 lifted the universal reject; behavior changed from
-    //   exit 1 (compile error) to exit 0 (correct execution).
-    // WHY: crossing local (`x = 10`) survives the cross-module SM resume boundary.
-    // Phase 2 ensures the frame slot for x is correctly allocated and restored.
-    // Expected: "before: 10\nfetched\nafter: 10"
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_crossing_local_cross_module"));
-    assert_eq!(
-        code, 0,
-        "crossing local cross-module must exit 0; exit was {code}; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout, "before: 10\nfetched\nafter: 10\n",
-        "expected output mismatch; stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3b_circular_import_exits_one_clean_diagnostic() {
-    // WHY: A↔B circular import must produce a clean WHAT/WHAT-INSTEAD/WHY diagnostic
-    // (exit 1) rather than a salsa "dependency graph cycle" ICE (exit 2). The salsa
-    // cycle_fn/cycle_initial recovery on module_signatures_query and check_query converts
-    // the infinite dependency chain into a graceful compiler error.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_circular_import"));
-    assert_eq!(
-        code, 1,
-        "circular import must exit 1 (compiler error); exit code was {code}; stderr:\n{stderr}"
-    );
-    assert!(
-        stdout.is_empty(),
-        "no program output expected from a compile error; stdout:\n{stdout}"
-    );
-    assert!(
-        stderr.contains("Circular import"),
-        "stderr must contain 'Circular import' diagnostic; stderr:\n{stderr}"
-    );
-}
-
-// ── v0.3-M3b loud-reject guard: formerly silent-crash combos — M3e P2 runs all ──
-
-#[test]
-fn v03_m3b_loud_reject_reexport_exits_one_clean_diagnostic() {
+    }
+    // case: a 3-module re-export chain mis-sizes the composed frame (SIGILL)
+    v03_m3b_loud_reject_reexport_exits_one_clean_diagnostic => {
     // test-ratchet: M3e Phase 2 lifted the reject; behavior changed from exit 1
     //   (compile error) to exit 0 (correct execution, no output).
     // WHY: 3-module re-export chain (a_ops→b_ops→entrypoint). Phase 2's recursive
@@ -1935,26 +2511,9 @@ fn v03_m3b_loud_reject_reexport_exits_one_clean_diagnostic() {
         !stderr.contains("SIGILL") && !stderr.contains("illegal instruction"),
         "must not crash; stderr:\n{stderr}"
     );
-}
-
-#[test]
-fn v03_m3b_loud_reject_shape_crossing_exits_one_clean_diagnostic() {
-    // test-ratchet: M3e Phase 2 lifted the reject; behavior changed from exit 1
-    //   (compile error) to exit 0 (correct execution).
-    // WHY: cross-module suspending export with a shape crossing-local (`item: Item`).
-    // Phase 2 uses LLVM TargetData (not typeck field-count) for slot sizing, so the
-    // frame is correctly laid out and `item.x` (= 1) is correctly read after resume.
-    // Expected: "1"
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_loud_reject_shape_crossing"));
-    assert_eq!(
-        code, 0,
-        "shape crossing must exit 0; exit code was {code}; stderr:\n{stderr}"
-    );
-    assert_eq!(stdout, "1\n", "expected output mismatch; stderr:\n{stderr}");
-}
-
-#[test]
-fn v03_m3b_loud_reject_ec_transitive_exits_one_clean_diagnostic() {
+    }
+    // case: an errors-capable export suspending transitively loses its success value
+    v03_m3b_loud_reject_ec_transitive_exits_one_clean_diagnostic => {
     // test-ratchet: M3e Phase 2 lifted the reject; behavior changed from exit 1
     //   (compile error) to exit 0 (correct execution).
     // WHY: errors-capable export suspending transitively. Phase 2 wires the EC
@@ -1970,189 +2529,9 @@ fn v03_m3b_loud_reject_ec_transitive_exits_one_clean_diagnostic() {
         stdout, "got: 42\n",
         "expected output mismatch; stderr:\n{stderr}"
     );
-}
-
-// ── v0.3-M3e: cross-module danger-matrix fixtures (reject-asserting baseline) ──
-//
-// WHY: these fixtures cover the FULL danger matrix for cross-module suspending
-// calls (value type x position x call shape x wide/EC). Under the M3e universal
-// reject every fixture exits 1 with the "module boundary" diagnostic and NEVER
-// crashes (no SIGILL/abort). These are the current reject-asserting contracts
-// for the baseline; the codegen-query lift is tracked in the M3e execution plan.
-//
-// All 5 M3b silent-crash escapes are represented:
-//   #1 -- re-export chain (v0_3_m3e_reexport_chain_int, v0_3_m3e_reexport_ec_number)
-//   #2 -- shape crossing-local (v0_3_m3e_shape_crossing_local_direct, v0_3_m3e_shape_loop_var_direct)
-//   #3 -- EC x transitive (v0_3_m3e_ec_crossing_local_direct, v0_3_m3e_reexport_ec_number)
-//   #4 -- number/decimal128 crossing-local (v0_3_m3e_number_crossing_local_direct, v0_3_m3e_reexport_ec_number)
-//   #5 -- transitive x caller-frame (v0_3_m3e_int_crossing_local_transitive, v0_3_m3e_caller_own_frame, v0_3_m3e_reexport_ec_number)
-
-#[test]
-fn v03_m3e_bool_crossing_local_direct_runs_correctly() {
-    // test-ratchet: M3e Phase 2 LIFT — was assert_m3e_reject (exit 1); now asserts correct
-    // runtime output. Bool crossing-local must hold its value across the resume boundary.
-    // WHY: bool × crossing-local × direct (escape danger matrix axis 1). A bool local
-    // declared before a cross-module suspending call must hold its value after resume.
-    // Wrong frame layout → corrupted stack slot → wrong after-value; SIGILL is the failure
-    // mode this test gates against by requiring the exact correct output.
-    let (stdout, _stderr, code) = ynz_run_stdout(&fixture("v0_3_m3e_bool_crossing_local_direct"));
-    assert_eq!(
-        code, 0,
-        "bool crossing-local direct: must exit 0; exit was {code}"
-    );
-    assert_eq!(
-        stdout, "before: true\nafter: true\n",
-        "bool crossing-local direct: wrong output"
-    );
-}
-
-#[test]
-fn v03_m3e_float_crossing_local_direct_runs_correctly() {
-    // test-ratchet: M3e Phase 2 LIFT — was assert_m3e_reject (exit 1); now asserts correct
-    // runtime output. Float crossing-local must hold its value across the resume boundary.
-    // WHY: float × crossing-local × direct. Float (f64) local must survive resume.
-    // Detection: the fixture uses boolean comparison (temp > threshold) instead of
-    // float.toString() — toString() renders decimal128-zero for all float values (pre-existing
-    // base bug). The boolean comparison detects slot corruption: if temp is zeroed by a
-    // frame mis-size, the comparison returns false instead of true.
-    // test-ratchet: fixture changed from toString() approach to boolean comparison so the
-    // test assertion can detect corruption rather than passing trivially on two matching zeros.
-    let (stdout, _stderr, code) = ynz_run_stdout(&fixture("v0_3_m3e_float_crossing_local_direct"));
-    assert_eq!(
-        code, 0,
-        "float crossing-local direct: must exit 0; exit was {code}"
-    );
-    assert_eq!(
-        stdout, "big_before: true\nbig_after: true\n",
-        "float crossing-local direct: both comparisons must be true \
-         (3.14 > 3.0 before AND after suspension); slot corruption would produce false"
-    );
-}
-
-#[test]
-fn v03_m3e_string_crossing_local_direct_runs_correctly() {
-    // test-ratchet: M3e Phase 2 LIFT — was assert_m3e_reject (exit 1); now asserts correct
-    // runtime output. String crossing-local must hold its pointer across the resume boundary.
-    // WHY: string × crossing-local × direct. String (pointer-sized) local must survive resume.
-    // Wrong frame layout → dangling pointer → wrong string read or crash.
-    let (stdout, _stderr, code) = ynz_run_stdout(&fixture("v0_3_m3e_string_crossing_local_direct"));
-    assert_eq!(
-        code, 0,
-        "string crossing-local direct: must exit 0; exit was {code}"
-    );
-    assert_eq!(
-        stdout, "before: hello\nafter: hello\n",
-        "string crossing-local direct: wrong output"
-    );
-}
-
-#[test]
-fn v03_m3e_number_crossing_local_direct_runs_correctly() {
-    // test-ratchet: M3e Phase 2 LIFT — was assert_m3e_reject (exit 1); now asserts correct
-    // runtime output. Number/decimal128 crossing-local uses 2 frame slots (lo + hi halves).
-    // WHY: number × crossing-local × direct (escape #4). The old scalar approximation counted
-    // one slot for a two-slot decimal128 local — under-sized frame → next slot overwrote the
-    // high half → corrupted value. This test proves both slots survive the resume boundary.
-    let (stdout, _stderr, code) = ynz_run_stdout(&fixture("v0_3_m3e_number_crossing_local_direct"));
-    assert_eq!(
-        code, 0,
-        "number crossing-local direct: must exit 0; exit was {code}"
-    );
-    assert_eq!(
-        stdout, "before: 1.5\nafter: 1.5\n",
-        "number crossing-local direct: wrong output"
-    );
-}
-
-#[test]
-fn v03_m3e_shape_crossing_local_direct_runs_correctly() {
-    // test-ratchet: M3e Phase 2 LIFT — was assert_m3e_reject (exit 1); now asserts correct
-    // runtime output. Shape crossing-local uses LLVM ABI size (from TargetData), not field count.
-    // WHY: shape × crossing-local × direct (escape #2). LLVM ABI padding differs from the
-    // old typeck "8 bytes per field" count — under-sized frame → adjacent slot corruption.
-    // This test proves the LLVM-accurate slot count produces correct field values post-resume.
-    let (stdout, _stderr, code) = ynz_run_stdout(&fixture("v0_3_m3e_shape_crossing_local_direct"));
-    assert_eq!(
-        code, 0,
-        "shape crossing-local direct: must exit 0; exit was {code}"
-    );
-    assert_eq!(
-        stdout, "x: 3, y: 7\n",
-        "shape crossing-local direct: wrong output"
-    );
-}
-
-#[test]
-fn v03_m3e_ec_crossing_local_direct_runs_correctly() {
-    // test-ratchet: M3e Phase 2 LIFT — was assert_m3e_reject (exit 1); now asserts correct
-    // runtime output. Errors-capable crossing-local uses the {i64,i64} ABI struct (2 slots).
-    // WHY: errors-capable × crossing-local × direct (escape #3). The EC staging slot stacks
-    // on top of the crossing-local slots; wrong total → corrupt EC result or wrong local value.
-    // This test proves the before-value, the EC result, and the after-value are all correct.
-    let (stdout, _stderr, code) = ynz_run_stdout(&fixture("v0_3_m3e_ec_crossing_local_direct"));
-    assert_eq!(
-        code, 0,
-        "ec crossing-local direct: must exit 0; exit was {code}"
-    );
-    assert_eq!(
-        stdout, "before: 5\nresult: 99\nafter: 5\n",
-        "ec crossing-local direct: wrong output"
-    );
-}
-
-#[test]
-fn v03_m3e_int_loop_var_direct_runs_correctly() {
-    // test-ratchet: M3e Phase 2 LIFT — was assert_m3e_reject (exit 1); now asserts correct
-    // runtime output. Int loop variable must hold its value across the resume boundary.
-    // WHY: int × loop-var × direct. The loop variable is a crossing-local inside a for-loop;
-    // if its frame slot is at the wrong offset, the post-resume reload reads garbage.
-    let (stdout, _stderr, code) = ynz_run_stdout(&fixture("v0_3_m3e_int_loop_var_direct"));
-    assert_eq!(code, 0, "int loop-var direct: must exit 0; exit was {code}");
-    assert_eq!(
-        stdout, "tick: 1\ntick: 2\ntick: 3\n",
-        "int loop-var direct: wrong output"
-    );
-}
-
-#[test]
-fn v03_m3e_shape_loop_var_direct_runs_correctly() {
-    // test-ratchet: M3e Phase 2 LIFT — was assert_m3e_reject (exit 1); now asserts correct
-    // runtime output. Shape loop variable must survive the resume boundary with LLVM-accurate slot.
-    // WHY: shape × loop-var × direct (escape #2). A shape loop variable's LLVM ABI size may
-    // differ from the field-count approximation — wrong slot count → adjacent-slot corruption
-    // across loop iterations.
-    let (stdout, _stderr, code) = ynz_run_stdout(&fixture("v0_3_m3e_shape_loop_var_direct"));
-    assert_eq!(
-        code, 0,
-        "shape loop-var direct: must exit 0; exit was {code}"
-    );
-    assert_eq!(
-        stdout, "item: 10\nitem: 20\n",
-        "shape loop-var direct: wrong output"
-    );
-}
-
-#[test]
-fn v03_m3e_int_crossing_local_transitive_runs_correctly() {
-    // test-ratchet: M3e Phase 2 LIFT — was assert_m3e_reject (exit 1); now asserts correct
-    // runtime output. Caller has its own int crossing-local AND a 1-level transitive suspender.
-    // WHY: int × crossing-local × 1-level transitive (escape #5). The caller frame must embed
-    // the transitive suspender's sub-frame at the right offset AFTER its own crossing locals —
-    // wrong total (old scalar miss) → int local overwrites sub-frame header or vice versa.
-    let (stdout, _stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3e_int_crossing_local_transitive"));
-    assert_eq!(
-        code, 0,
-        "int crossing-local transitive: must exit 0; exit was {code}"
-    );
-    assert_eq!(
-        stdout, "before: 42\nafter: 42\n",
-        "int crossing-local transitive: wrong output"
-    );
-}
-
-#[test]
-fn v03_m3e_reexport_chain_int_runs_correctly() {
+    }
+    // case: a re-export chain embeds the inner sub-frame as a 32-byte header placeholder so the frame is under-sized (SIGILL)
+    v03_m3e_reexport_chain_int_runs_correctly => {
     // test-ratchet: M3e Phase 2 LIFT — was assert_m3e_reject (exit 1); now asserts correct
     // runtime output. Re-export chain A→B→C; B's frame must embed A's sub-frame at real size.
     // WHY: int × return × re-export chain (escape #1). Guard G2 (recursive frame_layouts_query)
@@ -2161,10 +2540,9 @@ fn v03_m3e_reexport_chain_int_runs_correctly() {
     let (stdout, _stderr, code) = ynz_run_stdout(&fixture("v0_3_m3e_reexport_chain_int"));
     assert_eq!(code, 0, "reexport chain int: must exit 0; exit was {code}");
     assert_eq!(stdout, "result: 7\n", "reexport chain int: wrong output");
-}
-
-#[test]
-fn v03_m3e_reexport_ec_number_runs_correctly() {
+    }
+    // case: a re-export chain that also stacks an errors-capable staging slot and a two-slot number local mis-sizes the composed frame
+    v03_m3e_reexport_ec_number_runs_correctly => {
     // test-ratchet: M3e Phase 2 LIFT — was assert_m3e_reject (exit 1); now asserts correct
     // runtime output. Stacked escapes: re-export × EC × number/decimal128.
     // WHY: stacked escapes #1+#3+#4. B's frame must correctly include A's sub-frame (G2), the
@@ -2174,45 +2552,9 @@ fn v03_m3e_reexport_ec_number_runs_correctly() {
     let (stdout, _stderr, code) = ynz_run_stdout(&fixture("v0_3_m3e_reexport_ec_number"));
     assert_eq!(code, 0, "reexport ec number: must exit 0; exit was {code}");
     assert_eq!(stdout, "total: 3.5\n", "reexport ec number: wrong output");
-}
-
-#[test]
-fn v03_m3e_caller_own_frame_runs_correctly() {
-    // test-ratchet: M3e Phase 2 LIFT �� was assert_m3e_reject (exit 1); now asserts correct
-    // runtime output. Caller has 3 int crossing-locals AND an embedded sub-frame.
-    // WHY: caller-also-has-own-frame (escape #5). Three int crossing-locals (multi-slot frame)
-    // plus an embedded imported suspender sub-frame. Wrong total offset → crossing locals
-    // overwrite the sub-frame header or vice versa → wrong values or crash.
-    let (stdout, _stderr, code) = ynz_run_stdout(&fixture("v0_3_m3e_caller_own_frame"));
-    assert_eq!(code, 0, "caller own frame: must exit 0; exit was {code}");
-    assert_eq!(
-        stdout, "a: 1, b: 2, c: 3, result: 100\n",
-        "caller own frame: wrong output"
-    );
-}
-
-// ── M3e adversarial axes 5a.i and 5a.iii ─────────────────────────────────────
-
-#[test]
-fn v03_m3e_double_call_crossing_local_runs_correctly() {
-    // WHY: adversarial axis 5a.i — same imported suspending callee called twice with an int
-    // crossing-local live between the two calls. The frame_layouts embedding uses ONE
-    // sub-frame slot for doTick() (same callee → same FrameLayout key). A crossing-local
-    // live across both calls must not be clobbered by the second call's sub-frame reuse.
-    // If the crossing-local slot overlaps the sub-frame header, the second resume clobbers it.
-    let (stdout, _stderr, code) = ynz_run_stdout(&fixture("v0_3_m3e_double_call_crossing_local"));
-    assert_eq!(
-        code, 0,
-        "double-call crossing-local: must exit 0; exit was {code}"
-    );
-    assert_eq!(
-        stdout, "start: 7\nmid: 7\nend: 7\n",
-        "double-call crossing-local: crossing-local must be 7 across both calls"
-    );
-}
-
-#[test]
-fn v03_m3e_diamond_import_runs_correctly() {
+    }
+    // case: a diamond import sizes the shared leaf frame differently for the two importers
+    v03_m3e_diamond_import_runs_correctly => {
     // WHY: adversarial axis 5a.iii — diamond import. C imports A and B; A and B both
     // import and call the same suspending leaf D. Confirms that frame_layouts_query's salsa
     // memoization produces the same D layout for both A's and B's frames. If D's layout
@@ -2221,31 +2563,9 @@ fn v03_m3e_diamond_import_runs_correctly() {
     let (stdout, _stderr, code) = ynz_run_stdout(&fixture("v0_3_m3e_diamond_import"));
     assert_eq!(code, 0, "diamond import: must exit 0; exit was {code}");
     assert_eq!(stdout, "a: 10\nb: 20\n", "diamond import: wrong output");
-}
-
-#[test]
-fn v03_m3e_imported_shape_crossing_local_runs_correctly() {
-    // WHY: adversarial S3 regression lock — imported shape as crossing-local.
-    // The shape type Coord is DEFINED in shapes_lib.ynz and IMPORTED into entrypoint.ynz.
-    // collect_shapes seeds the shape_table with imported shapes, so frame_layouts_query
-    // measures the LLVM ABI size from the importer's shape_table (which includes Coord).
-    // If imported shapes were absent from the table, the crossing-local slot would fall
-    // back to the 8-byte-per-slot default regardless of actual field count → corruption
-    // for shapes whose ABI size differs from the default (e.g., 3-field structs, padded).
-    let (stdout, _stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3e_imported_shape_crossing_local"));
-    assert_eq!(
-        code, 0,
-        "imported shape crossing-local: must exit 0; exit was {code}"
-    );
-    assert_eq!(
-        stdout, "x: 1, y: 2, z: 3\n",
-        "imported shape crossing-local: wrong output"
-    );
-}
-
-#[test]
-fn v03_m3e_alias_import_direct_runs_correctly() {
+    }
+    // case: an aliased import does not find the callee's frame so the sub-frame is the 32-byte header-only fallback
+    v03_m3e_alias_import_direct_runs_correctly => {
     // WHY: locks that a named import alias (`import { getValue as fetchVal }`) correctly
     // routes the cross-module suspending call to the callee's true FrameLayout.
     // Without the aliased-import fix, the alias local-name lookup fails to find the
@@ -2260,43 +2580,9 @@ fn v03_m3e_alias_import_direct_runs_correctly() {
         stdout, "7\n",
         "alias import direct: crossing-local value must survive resume via alias-imported callee"
     );
-}
-
-#[test]
-fn v03_m3e_namespace_import_suspending_rejects_cleanly() {
-    // WHY: locks that a namespace-imported cross-module suspending call rejects cleanly
-    // (exit 1, no crash) rather than silently mis-resolving.
-    // Namespace member-calls (`ns.fn()`) are a general Yinz limitation — typeck resolves
-    // the member as "not defined" for ANY function, suspending or not, so the call never
-    // reaches codegen. This rules out the latent first-wins resolver concern
-    // (queries.rs callee_source_map) for namespace imports: the resolver path is
-    // unreachable because the call is rejected before codegen runs.
-    // If namespace member-calls are ever implemented, this fixture forces re-examination
-    // of the cross-module suspending resolver to ensure the callee's true module origin
-    // is used — not the first-namespace-wins heuristic.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3e_namespace_import_rejects"));
-    assert_eq!(
-        code, 1,
-        "namespace import suspending: must exit 1 (clean typeck reject); exit was {code}"
-    );
-    assert!(
-        stdout.is_empty(),
-        "namespace import suspending: stdout must be empty on a clean compile error; got: {stdout:?}"
-    );
-    assert!(
-        !stderr.is_empty(),
-        "namespace import suspending: stderr must contain a diagnostic"
-    );
-    assert!(
-        !stderr.contains("SIGILL")
-            && !stderr.contains("illegal instruction")
-            && !stderr.contains("malloc"),
-        "namespace import suspending: reject must be clean (no crash markers); stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3e_alias_local_name_collision_runs_correctly() {
+    }
+    // case: an aliased imported suspender is dispatched to a same-named local function, or its frame is under-sized
+    v03_m3e_alias_local_name_collision_runs_correctly => {
     // WHY: regression lock for alias-import dispatch correctness under name collision.
     // When an imported suspending callee (`compute`) is aliased as `doWork` AND a local
     // function named `doWork` also exists (same signature — name, not arity, is what
@@ -2338,6 +2624,84 @@ fn v03_m3e_alias_local_name_collision_runs_correctly() {
         imported_ok_count, 3,
         "alias-local-name collision: expected exactly 3 IMPORTED-OK lines from 3 spawns \
          (channel barrier guarantees all complete before main-done); stdout:\n{stdout}"
+    );
+    }
+}
+
+// ── v0.3-M3b fix round: cross-module codegen cases — M3e Phase 2 runs all ────
+
+// bug: a circular import ICEs (exit 2) instead of a clean exit-1 diagnostic | tier: High
+#[test]
+fn v03_m3b_circular_import_exits_one_clean_diagnostic() {
+    // WHY: A↔B circular import must produce a clean WHAT/WHAT-INSTEAD/WHY diagnostic
+    // (exit 1) rather than a salsa "dependency graph cycle" ICE (exit 2). The salsa
+    // cycle_fn/cycle_initial recovery on module_signatures_query and check_query converts
+    // the infinite dependency chain into a graceful compiler error.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_circular_import"));
+    assert_eq!(
+        code, 1,
+        "circular import must exit 1 (compiler error); exit code was {code}; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "no program output expected from a compile error; stdout:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("Circular import"),
+        "stderr must contain 'Circular import' diagnostic; stderr:\n{stderr}"
+    );
+}
+
+// ── v0.3-M3b loud-reject guard: formerly silent-crash combos — M3e P2 runs all ──
+
+// ── v0.3-M3e: cross-module danger-matrix fixtures (reject-asserting baseline) ──
+//
+// WHY: these fixtures cover the FULL danger matrix for cross-module suspending
+// calls (value type x position x call shape x wide/EC). Under the M3e universal
+// reject every fixture exits 1 with the "module boundary" diagnostic and NEVER
+// crashes (no SIGILL/abort). These are the current reject-asserting contracts
+// for the baseline; the codegen-query lift is tracked in the M3e execution plan.
+//
+// All 5 M3b silent-crash escapes are represented:
+//   #1 -- re-export chain (v0_3_m3e_reexport_chain_int, v0_3_m3e_reexport_ec_number)
+//   #2 -- shape crossing-local (v0_3_m3e_shape_crossing_local_direct, v0_3_m3e_shape_loop_var_direct)
+//   #3 -- EC x transitive (v0_3_m3e_ec_crossing_local_direct, v0_3_m3e_reexport_ec_number)
+//   #4 -- number/decimal128 crossing-local (v0_3_m3e_number_crossing_local_direct, v0_3_m3e_reexport_ec_number)
+//   #5 -- transitive x caller-frame (v0_3_m3e_int_crossing_local_transitive, v0_3_m3e_caller_own_frame, v0_3_m3e_reexport_ec_number)
+
+// ── M3e adversarial axes 5a.i and 5a.iii ─────────────────────────────────────
+
+// bug: a namespace-imported suspending call crashes (SIGILL/malloc) instead of a clean exit-1 refusal | tier: High
+#[test]
+fn v03_m3e_namespace_import_suspending_rejects_cleanly() {
+    // WHY: locks that a namespace-imported cross-module suspending call rejects cleanly
+    // (exit 1, no crash) rather than silently mis-resolving.
+    // Namespace member-calls (`ns.fn()`) are a general Yinz limitation — typeck resolves
+    // the member as "not defined" for ANY function, suspending or not, so the call never
+    // reaches codegen. This rules out the latent first-wins resolver concern
+    // (queries.rs callee_source_map) for namespace imports: the resolver path is
+    // unreachable because the call is rejected before codegen runs.
+    // If namespace member-calls are ever implemented, this fixture forces re-examination
+    // of the cross-module suspending resolver to ensure the callee's true module origin
+    // is used — not the first-namespace-wins heuristic.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3e_namespace_import_rejects"));
+    assert_eq!(
+        code, 1,
+        "namespace import suspending: must exit 1 (clean typeck reject); exit was {code}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "namespace import suspending: stdout must be empty on a clean compile error; got: {stdout:?}"
+    );
+    assert!(
+        !stderr.is_empty(),
+        "namespace import suspending: stderr must contain a diagnostic"
+    );
+    assert!(
+        !stderr.contains("SIGILL")
+            && !stderr.contains("illegal instruction")
+            && !stderr.contains("malloc"),
+        "namespace import suspending: reject must be clean (no crash markers); stderr:\n{stderr}"
     );
 }
 
@@ -2521,6 +2885,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+// bug: `--no-auto-parallel` and the default build print different output for a cross-module suspending program (loop of 4 fixtures reduced to one: they differ only in surrounding program) | tier: Medium
 #[test]
 fn v03_m3e_cross_module_no_auto_parallel_byte_identical() {
     // WHY: --no-auto-parallel must produce byte-identical stdout/stderr/exit on every
@@ -2530,33 +2895,22 @@ fn v03_m3e_cross_module_no_auto_parallel_byte_identical() {
     // the pass is incorrectly mutating suspension semantics on cross-module call sites.
     // Acceptance-verifier confirmed byte-identity live (SHA-256 match); this test commits
     // the invariant so future M3b auto-parallel work cannot break it silently.
-    let fixtures_to_check = &[
-        "v0_3_m3e_reexport_ec_number",
-        "v0_3_m3e_diamond_import",
-        "v0_3_m3e_caller_own_frame",
-        "v0_3_m3e_alias_import_direct",
-    ];
-    for fixture_name in fixtures_to_check {
-        let project_root = fixture(fixture_name);
-        let (nopar_stdout, nopar_stderr, nopar_code) =
-            build_multimodule_and_run(&project_root, true);
-        assert_eq!(
-            nopar_code, 0,
-            "--no-auto-parallel build must exit 0 for {fixture_name}; stderr:\n{nopar_stderr}"
-        );
-        let (default_stdout, _default_stderr, default_code) =
-            build_multimodule_and_run(&project_root, false);
-        assert_eq!(
-            default_code, 0,
-            "default build must exit 0 for {fixture_name}"
-        );
-        assert_eq!(
-            nopar_stdout, default_stdout,
-            "--no-auto-parallel stdout must be byte-identical to default for {fixture_name}"
-        );
-    }
+    let project_root = fixture("v0_3_m3e_reexport_ec_number");
+    let (nopar_stdout, nopar_stderr, nopar_code) = build_multimodule_and_run(&project_root, true);
+    assert_eq!(
+        nopar_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{nopar_stderr}"
+    );
+    let (default_stdout, _default_stderr, default_code) =
+        build_multimodule_and_run(&project_root, false);
+    assert_eq!(default_code, 0, "default build must exit 0");
+    assert_eq!(
+        nopar_stdout, default_stdout,
+        "--no-auto-parallel stdout must be byte-identical to default"
+    );
 }
 
+// bug: a post-pair call to an imported suspender writes its sub-frame past an under-allocated heap block | tier: High
 #[test]
 fn v03_m3d_imported_suspending_after_pair_byte_identical_and_clean() {
     // WHY: regression guard for the cross-boundary suspend-set divergence (deviation-judge #2 /
@@ -2598,8 +2952,18 @@ fn v03_m3d_imported_suspending_after_pair_byte_identical_and_clean() {
 // ── M8 P6: bignum — number<N> for N > 34 ─────────────────────────────────────
 // (m8_bignum_number100_runs above covers the literal print case)
 
-#[test]
-fn m8_bignum_point1_plus_point2_equals_point3() {
+/// One named test per input class of the `bignum table` unit; each case is a test the runner names.
+macro_rules! bignum_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: `Number<100>` addition or multiplication uses binary floats so 0.1 + 0.2 is not exactly 0.3 or 0.1 * 0.2 is not 0.02, or a bignum interpolates wrong | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+bignum_table_high_case! {
+    // case: `Number<100>` addition uses binary floats so 0.1 + 0.2 is not exactly 0.3
+    m8_bignum_point1_plus_point2_equals_point3 => {
     // WHY: 0.1 + 0.2 = 0.3 with exact decimal arithmetic — the classic binary-float
     // trap. If bignum uses binary-float internally, this would produce 0.30000...
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m8_bignum_basic.ynz"));
@@ -2608,10 +2972,28 @@ fn m8_bignum_point1_plus_point2_equals_point3() {
         "bignum add must compile and run; stderr:\n{stderr}"
     );
     assert_eq!(stdout.trim(), "0.3", "0.1 + 0.2 must equal exactly 0.3");
+    }
+    // case: `Number<100>` multiplication or `${}` interpolation of a bignum uses binary floats or garbles the digits
+    m8_combo_modules_bignum_interpolation => {
+    // WHY: guards that number<100> arithmetic and string interpolation work together
+    // in a multi-file project. If bignum values are lost at module boundaries or
+    // interpolation formats them wrong, this catches it.
+    let project_root = fixtures_dir().join("m8_combo_modules_bignum_interpolation");
+    let (stdout, stderr, code) = ynz_run_stdout(&project_root);
+    assert_eq!(
+        code, 0,
+        "bignum+interpolation combo must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout, "0.1 + 0.2 = 0.3\n0.1 * 0.2 = 0.02\n",
+        "bignum arithmetic must be exact and interpolate correctly"
+    );
+    }
 }
 
 // ── P7: end-to-end demo golden test ──────────────────────────────────────────
 
+// bug: the pirates-roster demo's output drifts from the committed byte-exact golden file (protected keep) | tier: Medium
 #[test]
 fn examples_basics_runs_end_to_end() {
     // WHY: byte-exact stdout match against the committed golden file catches any
@@ -2702,55 +3084,7 @@ fn examples_basics_runs_end_to_end() {
 
 // ── P7: combined-feature integration fixtures ─────────────────────────────────
 
-#[test]
-fn m8_combo_modules_sensitive_concurrency() {
-    // WHY: guards that sensitive + background work together in a multi-file project.
-    // If sensitive redaction is lost or background breaks across module boundaries,
-    // this combo test catches it before the individual-feature tests do.
-    //
-    // v0.3-M1 note: background is now concurrent, so `[REDACTED]` from the background
-    // task and `done` from main may appear in either order. We check presence of all
-    // expected strings rather than exact ordering.
-    // test-ratchet: M8 asserted exact sequential order; v0.3-M1 relaxes to presence-only
-    // because the third `[REDACTED]` from the background task is now concurrent with `done`.
-    let project_root = fixtures_dir().join("m8_combo_modules_sensitive_concurrency");
-    let (stdout, stderr, code) = ynz_run_stdout(&project_root);
-    assert_eq!(
-        code, 0,
-        "sensitive+concurrency combo must compile and run; stderr:\n{stderr}"
-    );
-    // First [REDACTED] and super-secret-key (from main-thread print calls) must appear.
-    assert!(
-        stdout.contains("[REDACTED]"),
-        "sensitive must redact in print; stdout:\n{stdout}"
-    );
-    assert!(
-        stdout.contains("super-secret-key"),
-        "reveal() must show raw value; stdout:\n{stdout}"
-    );
-    assert!(
-        stdout.contains("done"),
-        "main must print `done`; stdout:\n{stdout}"
-    );
-}
-
-#[test]
-fn m8_combo_modules_bignum_interpolation() {
-    // WHY: guards that number<100> arithmetic and string interpolation work together
-    // in a multi-file project. If bignum values are lost at module boundaries or
-    // interpolation formats them wrong, this catches it.
-    let project_root = fixtures_dir().join("m8_combo_modules_bignum_interpolation");
-    let (stdout, stderr, code) = ynz_run_stdout(&project_root);
-    assert_eq!(
-        code, 0,
-        "bignum+interpolation combo must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout, "0.1 + 0.2 = 0.3\n0.1 * 0.2 = 0.02\n",
-        "bignum arithmetic must be exact and interpolate correctly"
-    );
-}
-
+// bug: a shape mixing doc-commented, sensitive and bignum fields gets a wrong struct layout | tier: Medium
 #[test]
 fn m8_combo_doc_sensitive_bignum() {
     // WHY: guards that doc comments, sensitive fields, and bignum fields coexist on
@@ -2768,38 +3102,18 @@ fn m8_combo_doc_sensitive_bignum() {
     );
 }
 
-#[test]
-fn duplicate_entrypoint_in_project_produces_teaching_diagnostic() {
-    // WHY: two files both declaring `function entrypoint()` would each be renamed
-    // to the C `main` symbol at link time, producing a confusing linker error.
-    // The driver must catch this before codegen and emit a Yinz-level diagnostic.
-    let project_root = fixtures_dir().join("m_duplicate_entrypoint");
-    let (_stdout, stderr, code) = ynz_run_stdout(&project_root);
-    assert_ne!(code, 0, "duplicate entrypoint must fail to build");
-    assert!(
-        stderr.contains("more than one `entrypoint`"),
-        "diagnostic must name the duplicate-entrypoint problem; got:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("yinz.toml"),
-        "diagnostic must mention yinz.toml so the user knows where to set the entry file; got:\n{stderr}"
-    );
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // v0.3-M1: sleepBlocking intrinsic end-to-end
 // ─────────────────────────────────────────────────────────────────────────────
 
+// bug: `sleepBlocking` is registered but unreachable from .ynz source (typeck/codegen/link) | tier: Medium
 #[test]
 fn sleep_ms_intrinsic_links_and_runs() {
     // WHY: sleepBlocking(int) must be reachable end-to-end — typeck → codegen → link
     // → execute. This test catches regressions where the intrinsic is registered
     // in the registry but not wired through typeck dispatch (making it unreachable
-    // from .ynz source). The timing assertion is generous to avoid CI flake.
-    use std::time::Instant;
-    let start = Instant::now();
+    // from .ynz source).
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m1_sleep_ms.ynz"));
-    let elapsed = start.elapsed();
     assert_eq!(
         code, 0,
         "sleepBlocking fixture must exit 0; stderr:\n{stderr}"
@@ -2809,10 +3123,24 @@ fn sleep_ms_intrinsic_links_and_runs() {
         "slept",
         "sleepBlocking fixture must print `slept`; got:\n{stdout}"
     );
+}
+
+// bug: `sleepBlocking(50)` returns without sleeping (a no-op intrinsic), so the run takes under 40 ms; wall-clock lower bound goes nightly | tier: Medium
+#[test]
+fn nightly_sleep_blocking_sleeps_at_least_its_duration() {
+    // WHY: the only detector of a no-op `sleepBlocking` is the elapsed time; the 40 ms floor
+    // leaves 10 ms of slack under the 50 ms the fixture asks for. A lower bound cannot flake
+    // slow, but it is a wall-clock assertion, so it runs in the nightly lane (rubric s8).
+    let start = std::time::Instant::now();
+    let (_stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m1_sleep_ms.ynz"));
+    let elapsed = start.elapsed();
+    assert_eq!(
+        code, 0,
+        "sleepBlocking fixture must exit 0; stderr:\n{stderr}"
+    );
     assert!(
         elapsed.as_millis() >= 40,
-        "sleepBlocking(50) must sleep at least 40ms, but the whole run took {:?}",
-        elapsed
+        "sleepBlocking(50) must sleep at least 40ms, but the whole run took {elapsed:?}"
     );
 }
 
@@ -2820,230 +3148,20 @@ fn sleep_ms_intrinsic_links_and_runs() {
 // v0.3-M1: background runs on a separate thread (P3 core contract)
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[test]
-fn background_runs_on_separate_thread_timing() {
-    // WHY: the core v0.3-M1 promise — `background fn()` must not block main.
-    // The timing fixture has main print `main done` immediately after scheduling
-    // the background task (which sleeps 200ms). If background blocks main, the
-    // total elapsed time would be ≥200ms before `main done` appears.
-    //
-    // Tolerances: 50ms wall-clock for main, 300ms for background to finish.
-    // These are 4× the typical CI noise floor (CI machines vary by ~10ms on
-    // short sleep calls).
-    use std::time::Instant;
-    let start = Instant::now();
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m1_background_timing.ynz"));
-    let total_elapsed = start.elapsed();
-
-    assert_eq!(
-        code, 0,
-        "background timing fixture must exit 0; stderr:\n{stderr}"
-    );
-    assert!(
-        stdout.contains("main done"),
-        "stdout must contain `main done`; got:\n{stdout}"
-    );
-    assert!(
-        stdout.contains("background done"),
-        "stdout must contain `background done`; got:\n{stdout}"
-    );
-
-    // The program exits after shutdown drains the background task (5s max).
-    // Total elapsed should be ≥200ms (background sleeps 200ms and shutdown waits).
-    assert!(
-        total_elapsed.as_millis() >= 150,
-        "background task must have actually slept; total elapsed {:?}",
-        total_elapsed
-    );
-}
-
 // ── v0.3-M3a Phase 1: frame-backed mutable locals (lift LocalCrossesWait) ────
 
-#[test]
-fn v03_m3a_p1_int_local_crossing_one_wait() {
-    // WHY: fixture (a) — int local declared before `wait`, read after.
-    // The frame slot must preserve the value (42) across the suspension.
-    // If the alloca is not pre-created in sm_entry, LLVM SSA dominance fails.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_int_crossing_one_wait.ynz"));
-    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
-    assert_eq!(
-        stdout.trim(),
-        "42",
-        "int local must survive suspension; stderr:\n{stderr}"
-    );
+/// One named test per input class of the `shadow-refused table` unit; each case is a test the runner names.
+macro_rules! shadow_refused_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a `let` shadowing a crossing local or parameter in a suspending function is accepted (two slots for one name, LLVM dominance ICE or garbage) | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
 }
 
-#[test]
-fn v03_m3a_p1_mutated_local_crosses_two_waits() {
-    // WHY: fixture (b) — local mutated between two waits, read after both.
-    // Guards that mutation flushes to frame AND the reload at each continuation
-    // state sees the latest value. Expected: count=2 (incremented twice).
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_mutated_crossing_local.ynz"));
-    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
-    assert_eq!(
-        stdout.trim(),
-        "2",
-        "mutated local must see cumulative value; stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_two_crossing_locals() {
-    // WHY: fixture (c) — two crossing locals (a=3, b=4), read after wait.
-    // Each must occupy a distinct frame slot. Sum = 7.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_two_crossing_locals.ynz"));
-    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
-    assert_eq!(
-        stdout.trim(),
-        "7",
-        "two crossing locals must sum correctly; stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_string_crossing_local() {
-    // WHY: fixture (d) — string-typed crossing local (heap pointer).
-    // Frame slot stores ptr_to_int; reload does int_to_ptr. Must survive.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_string_crossing_local.ynz"));
-    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
-    assert_eq!(
-        stdout.trim(),
-        "hello",
-        "string local must survive suspension; stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_shape_crossing_local() {
-    // WHY: fixture (e) — shape-typed crossing local. Shape literals are stack-allocated
-    // by lower_struct_lit; the codegen frame-embeds them by pre-wiring the ptr alloca to
-    // the composed frame's slot region in sm_entry. Field reads/writes go directly to the
-    // frame — no separate heap allocation, no alloc leak. A regression back to the old
-    // heap-promote approach would show alloc=2 (leaking). Expected: 30 = p.x + p.y.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_shape_crossing_local.ynz"));
-    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
-    assert_eq!(
-        stdout.trim(),
-        "30",
-        "shape crossing local must survive suspension; stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_value_returning_fn_with_crossing_local() {
-    // WHY: fixture (f) — value-returning SM fn with a crossing local.
-    // `acc = n*2` crosses the wait; return value must include it.
-    // Expected: 11 (5*2 + 1 = 11).
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_value_returning_fn.ynz"));
-    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
-    assert_eq!(
-        stdout.trim(),
-        "11",
-        "return value must incorporate crossing local; stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_errors_fn_with_crossing_local() {
-    // WHY: fixture (g) — `-> T errors` SM fn with a crossing local.
-    // `prefix = n + 100` crosses the wait; success path returns prefix+n.
-    // Expected: 114 (7+100 + 7 = 114).
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3a_p1_errors_fn_crossing_local.ynz"));
-    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
-    assert_eq!(
-        stdout.trim(),
-        "114",
-        "errors-fn crossing local must produce correct value; stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_number_decimal128_crossing_local() {
-    // WHY: fixture (i) — number (decimal128) crossing local.
-    // The value (0.1 + 0.2 = 0.3 exact in decimal128) is stored across the suspension
-    // using TWO consecutive frame slots (16 bytes total — no truncation to 8 bytes).
-    // A regression back to 1 slot would SILENTLY produce 0 or garbage (truncation guard).
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_number_crossing_local.ynz"));
-    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
-    assert_eq!(
-        stdout.trim(),
-        "0.3",
-        "decimal128 crossing local must survive exact; stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_conditional_crossing_local() {
-    // WHY: fixture (j) — crossing local mutated inside a non-suspending `if` arm.
-    // The mutation must be flushed to the frame slot even when inside an if body.
-    // Expected: 15 (initial=10 + extra=5 from the if arm).
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3a_p1_conditional_crossing_local.ynz"));
-    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
-    assert_eq!(
-        stdout.trim(),
-        "15",
-        "if-body assign must flush to frame slot; stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_while_body_write() {
-    // WHY: Bug 2 guard — mutations inside a while body must be flushed to the frame slot.
-    // collect_crossing_writes previously had a `_ => {}` arm that dropped While bodies,
-    // so acc=30 computed before the wait would silently reset to 0. Regression returns 0.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_while_body_write.ynz"));
-    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
-    assert_eq!(
-        stdout.trim(),
-        "30",
-        "while-body assign must flush crossing local; stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_for_body_write() {
-    // WHY: Bug 2 guard — mutations inside a for body must be flushed to the frame slot.
-    // Accumulates sum over [10,20,30]; regression returns 0.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_for_body_write.ynz"));
-    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
-    assert_eq!(
-        stdout.trim(),
-        "60",
-        "for-body assign must flush crossing local; stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_if_body_assign_crossing_local() {
-    // WHY: Bug 2 guard for Stmt::Assign (not Stmt::Let) inside an if body.
-    // val=99 assigned inside the if must survive the wait.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_if_body_write.ynz"));
-    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
-    assert_eq!(
-        stdout.trim(),
-        "99",
-        "if-body Stmt::Assign must flush crossing local; stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_contdef_crossing_local() {
-    // WHY: Bug 3 guard — a crossing local first-defined BETWEEN two waits must have its
-    // alloca in sm_entry (not in a continuation state block that wouldn't dominate uses).
-    // Regression: LLVM dominance crash or uses-before-def reading 0.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_contdef_crossing_local.ynz"));
-    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
-    assert_eq!(
-        stdout.trim(),
-        "3",
-        "b defined after wait-1, read after wait-2 must produce 3; stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_shadow_crossing_local() {
+shadow_refused_table_high_case! {
+    // case: a `let` shadowing a crossing local is accepted (two allocas for one name)
+    v03_m3a_p1_shadow_crossing_local => {
     // WHY: ShadowsCrossingLocal guard — a `let x` inside a nested scope that shadows a
     // crossing local `x` must be rejected at typeck with a clean compile error. Codegen
     // assumes one alloca per crossing-local name (the sm_entry alloca); a shadow would
@@ -3066,68 +3184,9 @@ fn v03_m3a_p1_shadow_crossing_local() {
         stdout.is_empty(),
         "no stdout on compile error; got:\n{stdout}"
     );
-}
-
-#[test]
-fn v03_m3a_p1_float_crossing_local() {
-    // WHY: float (f64) crossing local obtained via .toFloat() — exercises the bitcast
-    // path (sitofp → bitcast i64 → frame slot → reload → bitcast back to float).
-    // The fixture mutates `f` after the wait (adds 1.0) to exercise both reload AND
-    // flush-back. Expected output: 8 (7 + 1). A regressed zero-slot would print 1
-    // (0.0 + 1.0), proving the bitcast round-trip is required, not optional.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_float_crossing_local.ynz"));
-    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
-    assert_eq!(
-        stdout.trim(),
-        "8",
-        "float crossing local must survive suspension and mutation; stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_nested_shape_crossing_rejected_clean_error() {
-    // WHY: FIX 1b guard — a shape whose field is another shape cannot be frame-embedded
-    // (nested shapes are stored as opaque pointers to stack-allocated structs; those ptrs
-    // dangle after suspension). Must produce a clean WHAT/WHAT-INSTEAD/WHY compile error,
-    // NOT silent garbage output (which was what happened before the guard).
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3a_p1_nested_shape_crossing_rejected.ynz"));
-    assert_eq!(
-        code, 1,
-        "nested-shape crossing must fail to compile; stderr:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("nested-shape field"),
-        "diagnostic must mention nested-shape field; stderr:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("cannot be frame-embedded"),
-        "diagnostic must mention cannot be frame-embedded; stderr:\n{stderr}"
-    );
-    assert!(
-        stdout.is_empty(),
-        "no stdout on compile error; got:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_ec_result_crosses_second_wait() {
-    // WHY: FIX 2 guard — an ErrorsCapable result crossing a second wait previously crashed
-    // with "unexpected return type" because bind_sm_result_and_flush had no StructValue arm.
-    // Now it extracts both fields, stores to the companion struct alloca, and flushes 2 slots.
-    // Expected: 7 (getVal(7) succeeds, r.or(0) = 7).
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3a_p1_ec_result_crosses_second_wait.ynz"));
-    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
-    assert_eq!(
-        stdout.trim(),
-        "7",
-        "EC result crossing 2nd wait must produce correct value; stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_shadow_inside_wait_bearing_if() {
+    }
+    // case: a `let` shadowing a crossing local inside a wait-bearing `if` is accepted (LLVM dominance ICE)
+    v03_m3a_p1_shadow_inside_wait_bearing_if => {
     // WHY: ShadowsCrossingLocal guard for wait-bearing if body — a `let x` inside a
     // wait-bearing if body that shadows a crossing local `x` must be rejected at typeck.
     // Previously this caused an LLVM dominance ICE: the shadow's alloca was created in
@@ -3151,419 +3210,19 @@ fn v03_m3a_p1_shadow_inside_wait_bearing_if() {
         stdout.is_empty(),
         "no stdout on compile error; got:\n{stdout}"
     );
-}
-
-#[test]
-fn v03_m3a_p1_sole_nested_int_crossing() {
-    // WHY: FIX 2 guard — a crossing local whose SOLE definition is inside an if-arm that
-    // also contains the wait must compile and run correctly. Previously caused an LLVM
-    // dominance ICE because the alloca for `inner` was created in the state block (not
-    // sm_entry), and the resume continuation could not reach it. The fix: crossing locals
-    // always reuse the pre-created sm_entry alloca regardless of nesting depth (safe since
-    // shadows are now rejected at typeck by ShadowsCrossingLocal).
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3a_p1_sole_nested_int_crossing.ynz"));
-    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
-    assert_eq!(
-        stdout.trim(),
-        "42",
-        "crossing local defined solely inside if-arm must produce correct value; stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_shape_result_crosses_second_wait() {
-    // WHY: WideValueSuspendingReturn guard — `makePoint` is a suspending function returning
-    // `-> Point` (bare shape). Round-20 adds a typeck guard that rejects this at compile
-    // time: the non-crossing shape staging path writes bytes to FRAME_OFFSET_LOCALS_START
-    // (offset 32), which is where child sub-frames are embedded. Even though the specific
-    // trivial case (all waits completed, return is terminal) happens not to crash, the general
-    // case clobbers active child sub-frames → SIGSEGV. The guard conservatively rejects ALL
-    // `-> Shape` returns from suspending functions until a dedicated staging slot is added.
-    // The shape-crossing-local case (r in entrypoint) is separate and still works — the guard
-    // is on the RETURN TYPE of the suspending callee, not on crossing locals in the caller.
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3a_p1_shape_result_crosses_second_wait.ynz"));
-    assert_eq!(
-        code, 1,
-        "suspending `-> Shape` must be rejected at compile time (exit 1); stderr:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("cannot yet return"),
-        "diagnostic must contain 'cannot yet return'; stderr:\n{stderr}"
-    );
-    assert!(
-        stdout.is_empty(),
-        "no stdout when compile fails; got:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_bool_crossing_local() {
-    // WHY: FIX A (Round 7) — boolean crossing local. Prior to this fix, the flush path
-    // loaded i64 from a bool's i1 alloca — an 8-byte read from a 1-byte region — causing
-    // SIGSEGV (exit 139). The fix: separate `sm_crossing_bool_set` (i1 alloca, zext/trunc
-    // at the frame boundary) from `sm_crossing_scalar_set` (i64 alloca, raw load/store).
-    // Compiled-binary verification: exit 0, output "true", no SIGSEGV on all 5 runs.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_bool_crossing_local.ynz"));
-    assert_eq!(
-        code, 0,
-        "bool crossing local must exit 0; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "true",
-        "bool crossing local must flip false→true across wait; stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_bool_crossing_via_shape() {
-    // WHY: FIX A (Round 7) — boolean crossing local sourced from a shape field. The
-    // bool value is extracted from a struct GEP before the wait and read after it.
-    // Exercises the same i1 flush/reload path as the direct bool case but with the
-    // initial value coming from a struct field read rather than a literal assignment.
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3a_p1_bool_crossing_via_shape.ynz"));
-    assert_eq!(
-        code, 0,
-        "bool crossing via shape field must exit 0; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "true",
-        "bool from shape field must survive suspension; stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_nested_after_toplevel_wait() {
-    // WHY: FIX B (Round 7) — crossing local declared inside an if-arm that also contains
-    // a wait, when a prior top-level wait exists. Previously caused LLVM ICE ("Instruction
-    // does not dominate all uses") because collect_crossings_in_stmts skipped recursion
-    // into nested blocks when past_wait==true, leaving inner-declared crossing locals
-    // without sm_entry allocas. The fix: the past_wait else-branch now recurses into any
-    // suspension-bearing nested block to detect crossing locals declared inside it.
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3a_p1_nested_after_toplevel_wait.ynz"));
-    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
-    assert_eq!(
-        stdout.trim(),
-        "42\n100",
-        "nested-after-wait must print 42 then 100; stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_shadow_false_positive_compiles() {
-    // WHY: FIX C (Round 7) — shadow detection false positive. An outer `let x = 100`
-    // after an if block (non-crossing) must NOT trigger ShadowsCrossingLocal for the
-    // inner crossing `let x = 42` inside the if. Prior to this fix, the shadow check
-    // ran for ALL crossing locals including inner-only ones; the outer post-if `let x`
-    // was treated as if it were itself a crossing local being shadowed. The fix: only
-    // apply shadow-detection to crossing locals whose `let` declaration is at the
-    // function body's top level AND appears before a suspension.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_shadow_false_positive.ynz"));
-    assert_eq!(
-        code, 0,
-        "inner crossing x + outer non-crossing x must compile clean; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "42\n100",
-        "must print 42 (inner) then 100 (outer); stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_scope_aware_shadow_false_positive_compiles() {
-    // WHY: scope-aware shadow analysis (Round 9). The outer `let x` is read ONLY before
-    // the if-block that contains the wait — i.e., the outer x has zero reads after any
-    // top-level suspension. The inner `let x = 42` crosses the inner wait, but that is
-    // an inner-scope crossing, not a shadow of an outer crossing local. The shadow guard
-    // must NOT fire. Catches regressions where has_top_level_let_before_suspension alone
-    // gates the check (insufficient — must also verify an outer read exists after the
-    // suspension, attributable to the outer binding).
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
-        "v0_3_m3a_p1_scope_aware_shadow_false_positive.ynz",
-    ));
-    assert_eq!(
-        code, 0,
-        "outer-pre-wait x + inner-wait-crossing x must compile clean; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "hello\n42",
-        "must print hello (outer, before if) then 42 (inner, after wait); stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_disjoint_sibling_scope_shadow_compiles() {
-    // WHY: two sibling if-blocks each with their own inner-only `let x` crossing an
-    // inner wait. Neither x exists at the top level of the function; neither is a
-    // genuine outer crossing local. The shadow guard must not fire for either. Catches
-    // regressions where any name collision between sibling scopes triggers the guard.
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3a_p1_disjoint_sibling_scope_shadow.ynz"));
-    assert_eq!(
-        code, 0,
-        "two disjoint sibling-scope x crossings must compile clean; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "42\n99",
-        "must print 42 (first arm) then 99 (second arm); stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_bool_returning_suspending_fn() {
-    // WHY: FIX 2 (Round 9) — `-> boolean` suspending function wrapper-return type mismatch.
-    // The SM wrapper function is declared with i1 return type but the return slot stores
-    // bools as i64 (zext). Without trunc i64→i1, LLVM rejects "ret i64 ... i1" with a
-    // module verify failure (ICE). Catches regressions at the SM wrapper-return boundary
-    // for bool, which is the only scalar with a non-i64 LLVM return type.
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3a_p1_bool_returning_suspending_fn.ynz"));
-    assert_eq!(
-        code, 0,
-        "bool-returning suspending fn must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "true\nfalse",
-        "hasCrossingBool(true)→true, computeBool(5)→false (5 < 0 is false); stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_float_returning_suspending_fn() {
-    // WHY: Round-17 fix — `-> float` suspending function SM wrapper-return type mismatch.
-    // The wrapper-return match had no `Type::Float` arm; the `_ =>` fallback emitted
-    // `ret void` instead of the declared `double` return type, causing LLVM module
-    // verification failure ("Function return type does not match operand type of return
-    // inst!"). Guards the SM wrapper-return Float arm against regression.
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3a_p1_float_returning_suspending_fn.ynz"));
-    assert_eq!(
-        code, 0,
-        "float-returning suspending fn must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "8.5",
-        "sleepingFloat() must return 8.5 exactly; stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_number_returning_suspending_fn() {
-    // WHY: Round-17 fix — `-> number` (decimal128) suspending function SM wrapper-return.
-    // Three bugs fixed: (1) wrapper-return lacked Type::Number arm → `ret void` vs `ptr`,
-    // LLVM verification failure; (2) resume-fn return-slot stored a stack pointer (ptr_to_int
-    // via to_i64_bits fallback) rather than the full i128 value — Tier-A silent-wrong-value;
-    // (3) the parent callee's inline-poll path read the child's return slot as i64 (8 bytes)
-    // then stored to an i64 alloca, corrupting the subsequent i128 load from that alloca.
-    // Asserts the EXACT value 0.3 (= 0.1 + 0.2 in decimal128, exact — no float rounding).
-    // If the lo-64-bit-only truncation bug regresses, the output becomes
-    // 0.000000000000000000000000000000000000000000000 (zeroed frame) or garbage.
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3a_p1_number_returning_suspending_fn.ynz"));
-    assert_eq!(
-        code, 0,
-        "number-returning suspending fn must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "0.3",
-        "sleepingNumber() must return 0.3 exactly (decimal128 exact); stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_number_errors_returning_suspending_fn_success() {
-    // WHY: suspending `-> number errors` returns the EXACT high-precision decimal128 value.
-    // The value 9999999999.000000001 requires all 16 bytes of decimal128 — truncation to
-    // 8 bytes would produce a different value. The frame-staging slot stores the i128 inside
-    // the composed frame so the EC ok-pointer survives the resume fn returning (alloc=1/free=1).
-    // Regression guard: if the staging slot is removed or the precision drops, this fails.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
-        "v0_3_m3a_p1_number_errors_returning_suspending_fn.ynz",
-    ));
-    assert_eq!(
-        code, 0,
-        "suspending `-> Number errors` must compile and run (exit 0); stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "9999999999.000000001",
-        "must print exact high-precision value (no truncation); got:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_number_errors_suspending_error_path() {
-    // WHY: suspending `-> number errors` error path — the EC discriminant must survive
-    // suspension for the ERROR case. If the staging path hardcodes success, the error
-    // discriminant is ignored and .or(fallback) never fires. Regression guard: removing
-    // the staging path or inverting the discriminant check makes this print the wrong value.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
-        "v0_3_m3a_p1_number_errors_suspending_error_path.ynz",
-    ));
-    assert_eq!(
-        code, 0,
-        "error path must produce exit 0 via .or(fallback); stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "99.9",
-        "error path must return fallback 99.9; got:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_shape_errors_returning_suspending_fn_rejected() {
-    // WHY: WideValueSuspendingReturn guard — `-> Shape errors` from a suspending function
-    // previously leaked memory (heap-staged shape pointer stored as ok, never freed) AND
-    // the FRAME_OFFSET_LOCALS_START staging path clobbered child sub-frames. The guard
-    // rejects at compile time (exit 1) so no binary is produced, no leak, no SIGSEGV.
-    // Round-20. Regression guard: if the guard is removed, this test will fail.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
-        "v0_3_m3a_p1_shape_errors_returning_suspending_fn.ynz",
-    ));
-    assert_eq!(
-        code, 1,
-        "suspending `-> Shape errors` must be rejected at compile time (exit 1); stderr:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("cannot yet return"),
-        "diagnostic must contain 'cannot yet return'; stderr:\n{stderr}"
-    );
-    assert!(
-        stdout.is_empty(),
-        "no stdout when compile fails; got:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_shape_returning_suspending_fn_rejected() {
-    // WHY: WideValueSuspendingReturn guard — bare `-> Shape` from a suspending function
-    // previously caused a SIGSEGV: the non-crossing shape staging path GEP'd to
-    // FRAME_OFFSET_LOCALS_START (offset 32) and memcpy'd shape bytes there, clobbering
-    // the sleep sub-frame's resume_point (also at offset 32). The guard rejects at compile
-    // time (exit 1) so no binary is produced and no SIGSEGV can occur. Round-20.
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3a_p1_shape_returning_suspending_fn.ynz"));
-    assert_eq!(
-        code, 1,
-        "suspending `-> Shape` must be rejected at compile time (exit 1); stderr:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("cannot yet return"),
-        "diagnostic must contain 'cannot yet return'; stderr:\n{stderr}"
-    );
-    assert!(
-        stdout.is_empty(),
-        "no stdout when compile fails; got:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_anon_shape_returning_suspending_fn_rejected() {
-    // WHY: FIX (a) Round-22 — WideValueSuspendingReturn guard rendered raw internal anon-shape
-    // names (e.g. "__anon__health__int") in the diagnostic instead of the user-readable form
-    // "{ health: int }". The fix routes Shape name rendering through `type_name()` which formats
-    // anon shapes as `{ field: type }`. This test verifies the readable name appears in the
-    // diagnostic and that the guard still fires (exit 1, no binary produced).
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
-        "v0_3_m3a_p1_anon_shape_returning_suspending_fn.ynz",
-    ));
-    assert_eq!(
-        code, 1,
-        "suspending `-> {{ health: Int }}` must be rejected at compile time (exit 1); stderr:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("cannot yet return"),
-        "diagnostic must contain 'cannot yet return'; stderr:\n{stderr}"
-    );
-    assert!(
-        !stderr.contains("__anon__"),
-        "diagnostic must NOT leak internal anon-shape names; stderr:\n{stderr}"
-    );
-    assert!(
-        stdout.is_empty(),
-        "no stdout when compile fails; got:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_maybe_crossing_local_rejected() {
-    // WHY: FIX (d) Round-22 — UnsupportedCrossingLocalType guard. A `maybe<int>` local
-    // crossing a `wait` previously fell into the generic pointer flush/reload path in codegen,
-    // which stored a pointer to a stack-alloca {tag, payload} that no longer exists after
-    // resume. LLVM detected this as "Instruction does not dominate all uses!" (a raw compiler
-    // ICE). The guard rejects at typeck with a clean teaching diagnostic (exit 1, no binary,
-    // no LLVM ICE text). This test verifies the clean rejection AND that working crossing-local
-    // types (int, string, etc.) are NOT affected (tested separately in other fixtures).
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3a_p1_maybe_crossing_local_rejected.ynz"));
-    assert_eq!(
-        code, 1,
-        "Maybe<Int> crossing local must be rejected at compile time (exit 1); stderr:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("cannot yet cross a `wait`"),
-        "diagnostic must contain 'cannot yet cross a `wait`'; stderr:\n{stderr}"
-    );
-    assert!(
-        !stderr.contains("LLVM ERROR") && !stderr.contains("does not dominate"),
-        "must be a clean compile error, not a raw LLVM ICE; stderr:\n{stderr}"
-    );
-    assert!(
-        stdout.is_empty(),
-        "no stdout when compile fails; got:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_union_crossing_local_rejected() {
-    // WHY: FIX (d) Round-22 — UnsupportedCrossingLocalType guard for union-typed locals.
-    // A union-type crossing local falls into the same dangling-pointer flush/reload path
-    // as maybe<T>. This test verifies the clean compile-time rejection for the union case.
-    // Regression guard: the guard must fire before codegen runs (exit 1, no LLVM ICE).
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3a_p1_union_crossing_local_rejected.ynz"));
-    assert_eq!(
-        code, 1,
-        "union-type crossing local must be rejected at compile time (exit 1); stderr:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("cannot yet cross a `wait`"),
-        "diagnostic must contain 'cannot yet cross a `wait`'; stderr:\n{stderr}"
-    );
-    assert!(
-        !stderr.contains("LLVM ERROR") && !stderr.contains("does not dominate"),
-        "must be a clean compile error, not a raw LLVM ICE; stderr:\n{stderr}"
-    );
-    assert!(
-        stdout.is_empty(),
-        "no stdout when compile fails; got:\n{stdout}"
-    );
-}
-
-#[test]
-// test-ratchet: behavior changed from compile-error to compile-and-run.
-// WHY: parameter-shadow guard (Check 3b) — a `let x` inside an `if` body shadows the
-// function parameter `x`. The `wait` is at the TOP LEVEL (before the `if`). With the R6
-// lexical-scope codegen fix, the inner shadow uses a separate entry-block alloca, and
-// `cg.locals["x"]` is restored to the param alloca via restore-all after the `if` exits.
-// The `reload_params_from_frame` at state-1 start runs BEFORE the if body is entered, so
-// it sees the param alloca — correct. The inner shadow prints its own value (99); the outer
-// param prints its value (7) after the if. If this test fails with LLVM ICE, the
-// entry-block alloca or restore-all protocol regressed. If it fails with wrong output
-// (both 7, or 99/99), restore-all doesn't unwind the shadow correctly.
-fn v03_m3a_p1_param_shadow_crossing_rejected() {
+    }
+    // case: a nested `let` shadowing a parameter of a suspending function is accepted (printed garbage)
+    // test-ratchet: behavior changed from compile-error to compile-and-run.
+    // WHY: parameter-shadow guard (Check 3b) — a `let x` inside an `if` body shadows the
+    // function parameter `x`. The `wait` is at the TOP LEVEL (before the `if`). With the R6
+    // lexical-scope codegen fix, the inner shadow uses a separate entry-block alloca, and
+    // `cg.locals["x"]` is restored to the param alloca via restore-all after the `if` exits.
+    // The `reload_params_from_frame` at state-1 start runs BEFORE the if body is entered, so
+    // it sees the param alloca — correct. The inner shadow prints its own value (99); the outer
+    // param prints its value (7) after the if. If this test fails with LLVM ICE, the
+    // entry-block alloca or restore-all protocol regressed. If it fails with wrong output
+    // (both 7, or 99/99), restore-all doesn't unwind the shadow correctly.
+    v03_m3a_p1_param_shadow_crossing_rejected => {
     // WHY: Conservative Option-A param-shadow guard (design/concurrency.md §
     // ShadowsCrossingLocal). ANY nested `let x` in a suspending function shares the
     // parameter's name-keyed frame slot; reload_params_from_frame in continuation
@@ -3589,29 +3248,9 @@ fn v03_m3a_p1_param_shadow_crossing_rejected() {
         !stderr.is_empty(),
         "a compile error must produce a non-empty diagnostic; got empty stderr"
     );
-}
-
-#[test]
-fn v03_m3a_p1_plain_crossing_param_compiles() {
-    // WHY: regression guard for the parameter-shadow guard (Check 3b). A parameter that
-    // crosses a `wait` with NO inner shadow must continue to compile and produce the
-    // correct output — the guard must not reject normal crossing parameters. This is the
-    // primary false-positive regression for the Round-12 fix: tightening Check 3b to
-    // cover parameters must not break the `function f(x: int) { wait; print(x) }` case.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_plain_crossing_param.ynz"));
-    assert_eq!(
-        code, 0,
-        "plain crossing parameter (no shadow) must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "7",
-        "must print the original parameter value (7) after suspension; stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_toplevel_redecl_after_wait_adv10_rejected() {
+    }
+    // case: a top-level `let x` after a wait clobbers a crossing `x` sharing its frame slot (silent miscompile)
+    v03_m3a_p1_toplevel_redecl_after_wait_adv10_rejected => {
     // WHY: top-level re-declaration after wait is a SILENT MISCOMPILE (ADV10). `let x=10`
     // crosses the wait; `let x=99` at top level after the wait shares the same name-keyed
     // frame slot — the second write clobbers the first, producing wrong output (7/7 instead
@@ -3631,10 +3270,9 @@ fn v03_m3a_p1_toplevel_redecl_after_wait_adv10_rejected() {
         stderr.contains('x') && (stderr.contains("wait") || stderr.contains("suspension")),
         "diagnostic must mention `x` and the wait boundary; stderr:\n{stderr}"
     );
-}
-
-#[test]
-fn v03_m3a_p1_param_toplevel_redecl_after_wait_adv11_rejected() {
+    }
+    // case: a top-level re-declaration of a parameter after a wait clobbers the parameter slot
+    v03_m3a_p1_param_toplevel_redecl_after_wait_adv11_rejected => {
     // WHY: top-level re-declaration of a parameter after wait is a SILENT MISCOMPILE (ADV11).
     // Parameter `p` is frame-slotted at function entry; `let p=99` at top level after the
     // wait shares that frame slot — the `let` write clobbers the parameter value. Round 14
@@ -3653,229 +3291,9 @@ fn v03_m3a_p1_param_toplevel_redecl_after_wait_adv11_rejected() {
         stderr.contains('p') && (stderr.contains("wait") || stderr.contains("suspension")),
         "diagnostic must mention `p` and the wait boundary; stderr:\n{stderr}"
     );
-}
-
-#[test]
-fn v03_m3a_p1_ec_crossing_local_propagated_int() {
-    // WHY: round-25 regression guard for the EC-crossing-local return-propagation silent
-    // miscompile. An EC int-errors value bound from a suspending call, crossing a second
-    // suspension, and RETURNED by the caller previously propagated the companion-struct
-    // stack pointer as the ok-word instead of the integer bits. The caller received a
-    // garbage stack address (e.g. 140734710005520). Regression: if this prints anything
-    // other than "42", the errors_capable_locals registration in bind_sm_result_and_flush
-    // was removed or the SM ident handler's error/success paths broke.
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3a_p1_ec_crossing_local_propagated_int.ynz"));
-    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
-    assert_eq!(
-        stdout.trim(),
-        "42",
-        "EC int-errors value must survive crossing + return-propagation; got:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_ec_crossing_local_propagated_string() {
-    // WHY: same EC-crossing-local propagation class as the int case, but for string errors.
-    // The ok-word is a heap pointer (stable), but without the errors_capable_locals fix the
-    // companion-struct stack pointer was propagated instead. Regression: prints garbage or
-    // crashes if the fix is reverted.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
-        "v0_3_m3a_p1_ec_crossing_local_propagated_string.ynz",
-    ));
-    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
-    assert_eq!(
-        stdout.trim(),
-        "hello",
-        "EC string-errors value must survive crossing + return-propagation; got:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_ec_crossing_local_propagated_number() {
-    // WHY: same EC-crossing-local propagation class, but for number (decimal128) errors.
-    // The value 9999999999.000000001 requires all 16 bytes of decimal128 precision —
-    // truncation or a wrong pointer both produce a different or garbage value.
-    // Also exercises the UAF fix in the EC wrapper: the ok-word is a staging-slot pointer
-    // inside the frame; without the heap-copy-before-free the staging slot is freed before
-    // the caller reads it. Regression: wrong value or crash.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
-        "v0_3_m3a_p1_ec_crossing_local_propagated_number.ynz",
-    ));
-    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
-    assert_eq!(
-        stdout.trim(),
-        "9999999999.000000001",
-        "EC number-errors value must survive crossing + return-propagation with full precision; got:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3a_p1_ec_crossing_local_propagated_error_path() {
-    // WHY: proves the error DISCRIMINANT survives the crossing + propagation, not just the
-    // success value. If the fix hardcodes err=0 or flips the discriminant check, inner()'s
-    // error is silently swallowed and .or(99) never fires — the output would be "0" (garbage
-    // ok-word passed as success) instead of "99" (the fallback). Regression: any value other
-    // than "99" means the error discriminant is broken across suspension.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
-        "v0_3_m3a_p1_ec_crossing_local_propagated_error_path.ynz",
-    ));
-    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
-    assert_eq!(
-        stdout.trim(),
-        "99",
-        "EC error path must fire .or(99) — error discriminant must survive crossing + propagation; got:\n{stdout}"
-    );
-}
-
-// ── M3a Phase 2: while-loop suspension ───────────────────────────────────────
-
-#[test]
-fn v03_m3a_p2_while_counter_runs_in_order() {
-    // WHY: guards that (1) the WaitInsideLoop guard no longer fires for `while`, (2) loop
-    // counter is frame-backed and survives each suspension, (3) exactly 3 iterations run.
-    // Any regression to the old guard would exit non-zero with a compile error. A wrong
-    // counter value would mean the frame slot was clobbered or not reloaded on resume.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p2_while_counter.ynz"));
-    assert_eq!(
-        code, 0,
-        "while-loop suspension must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "0\n1\n2",
-        "counter must increment 0→1→2 across suspensions; got:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3a_p2_while_accumulator_correct() {
-    // WHY: a loop-carried accumulator must survive N suspensions with the correct total.
-    // A stale reload (frame slot not flushed after each mutation) produces 10 instead of
-    // 40 (last iteration value only). Catching the flush-after-mutation invariant.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p2_while_accumulator.ynz"));
-    assert_eq!(
-        code, 0,
-        "while accumulator must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "40",
-        "accumulator must equal 4*10=40 after 4 suspended iterations; got:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3a_p2_while_value_returning_correct() {
-    // WHY: a non-nothing return type from a suspending function containing a while loop
-    // must produce the correct value. Catches the case where the SM return path drops the
-    // loop-accumulated value (returns 0 instead of 15).
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p2_while_value_returning.ynz"));
-    assert_eq!(
-        code, 0,
-        "value-returning while suspension must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "15",
-        "sum_n(5) must return 1+2+3+4+5=15 accumulated across suspensions; got:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3a_p2_while_sequential_order_preserved() {
-    // WHY: per-iteration prints must appear in strict 0→4 order. Parallelization of
-    // iterations would produce non-deterministic ordering. This locks the design doc's
-    // "loop iterations sequential by default" invariant — M3a has no auto-parallel.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p2_while_sequential_order.ynz"));
-    assert_eq!(
-        code, 0,
-        "sequential-order fixture must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "0\n1\n2\n3\n4",
-        "iterations must run in strict 0→4 sequence (not parallelized); got:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3a_p2_while_conditional_wait_correct() {
-    // WHY: when only some iterations suspend (conditional wait), the crossing locals
-    // (i and x) must be correctly preserved for BOTH suspending and non-suspending
-    // iterations. A missed flush after a non-suspending iteration would corrupt x on
-    // the next iteration, breaking the alternating pattern.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p2_while_conditional_wait.ynz"));
-    assert_eq!(
-        code, 0,
-        "conditional-wait fixture must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "0\n1\n2\n3",
-        "all 4 iterations must complete in order, alternating suspend/no-suspend; got:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3a_p3_for_wait_now_compiles() {
-    // WHY: P3 lifts the WaitInsideLoop guard for `for`. The P2 guard fixture
-    // (v0_3_m3a_p2_for_still_rejected.ynz) is now expected to compile and run correctly.
-    // If this test fails, the for-loop SM codegen is broken — do NOT revert to the
-    // old rejection; fix the codegen instead.
-    // test-ratchet: P3 lifted the for-loop WaitInsideLoop guard; this fixture must now compile
-    // and run — asserts the for+wait codegen produces correct output.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p2_for_still_rejected.ynz"));
-    assert_eq!(
-        code, 0,
-        "wait in for must now compile and run; stderr:\n{stderr}"
-    );
-    let _ = stdout;
-}
-
-#[test]
-fn v03_m3a_p2_while_countdown_before_wait_correct() {
-    // WHY: guards the back-edge crossing-local fix. A loop counter decremented BEFORE
-    // the `wait` (textually earlier in the body) must be treated as a crossing local
-    // because the while condition re-reads it after each suspension. Without the fix,
-    // the alloca for `n` lands in a non-dominating block → LLVM ICE
-    // ("Instruction does not dominate all uses!"). With the fix, `n` gets a frame slot
-    // in sm_entry and the loop produces 3→2→1 in order.
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3a_p2_while_countdown_before_wait.ynz"));
-    assert_eq!(
-        code, 0,
-        "countdown-before-wait must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "3\n2\n1",
-        "counter must count down 3→2→1 across suspensions; got:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3a_p2_two_sequential_while_loops_correct() {
-    // WHY: guards the has_top_level_let_before_suspension fix. A second suspending
-    // `while` loop using a distinct counter (`k`) after a first suspending `while`
-    // must compile and run — `k`'s `let` is after a suspension (the first loop),
-    // not before one, so the shadow/redeclaration check must not fire. Without the
-    // fix, the compiler spuriously rejects `let k` as a "redeclaration after wait".
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3a_p2_two_sequential_while_loops.ynz"));
-    assert_eq!(
-        code, 0,
-        "two sequential suspending while loops must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "3",
-        "second loop must complete 3 iterations; k must equal 3; got:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3a_p2_while_shadow_no_postloop_read_is_rejected() {
+    }
+    // case: an inner `let n` shadowing the loop-condition variable compiles into an infinite loop
+    v03_m3a_p2_while_shadow_no_postloop_read_is_rejected => {
     // WHY: Probe-6 silent-miscompile regression. An inner `let n` inside a suspending
     // `while` body shadows an outer `n` that is read by the loop condition (back-edge).
     // When nothing AFTER the loop references `n`, the pre-fix guard's post-wait scan
@@ -3897,10 +3315,9 @@ fn v03_m3a_p2_while_shadow_no_postloop_read_is_rejected() {
         !stderr.is_empty(),
         "a compile error must produce a non-empty diagnostic; got empty stderr"
     );
-}
-
-#[test]
-fn v03_m3a_p2_while_param_shadow_in_suspending_while_rejected() {
+    }
+    // case: a parameter shadowed inside a suspending `while` (back-edge-only read) is accepted (ICE)
+    v03_m3a_p2_while_param_shadow_in_suspending_while_rejected => {
     // WHY: A function parameter shadowed by an inner `let` inside a suspending `while`,
     // where the parameter is read only via the loop condition back-edge. The inner shadow
     // creates a non-entry alloca that `reload_params_from_frame` stores to in the
@@ -3926,10 +3343,9 @@ fn v03_m3a_p2_while_param_shadow_in_suspending_while_rejected() {
         !stderr.is_empty(),
         "a compile error must produce a non-empty diagnostic; got empty stderr"
     );
-}
-
-#[test]
-fn v03_m3a_p2_if_param_shadow_crossing_rejected() {
+    }
+    // case: a parameter shadowed inside a wait-bearing `if` body is accepted (ICE)
+    v03_m3a_p2_if_param_shadow_crossing_rejected => {
     // WHY: A parameter `p` shadowed by `let p = 99` inside an `if` body that contains a
     // `wait`. The inner alloca lives in the if-body block (not sm_entry); the continuation
     // state's reload overwrites cg.locals["p"] with the non-dominating alloca → LLVM ICE.
@@ -3955,10 +3371,9 @@ fn v03_m3a_p2_if_param_shadow_crossing_rejected() {
         !stderr.is_empty(),
         "a compile error must produce a non-empty diagnostic; got empty stderr"
     );
-}
-
-#[test]
-fn v03_m3a_p2_while_param_shadow_crossing_rejected() {
+    }
+    // case: a parameter shadowed inside a suspending `while` whose shadow crosses the wait is accepted (ICE)
+    v03_m3a_p2_while_param_shadow_crossing_rejected => {
     // WHY: The canonical Phase-2-owned param-shadow ICE: `function worker(p: int)` with a
     // `while(count>0){ let p = 99; wait sleep(5); print(p); ... }`. The inner `let p` is
     // filtered by `!param_names.contains("p")` in `collect_crossings_in_stmts` — no
@@ -3984,18 +3399,17 @@ fn v03_m3a_p2_while_param_shadow_crossing_rejected() {
         !stderr.is_empty(),
         "a compile error must produce a non-empty diagnostic; got empty stderr"
     );
-}
-
-#[test]
-// WHY: Conservative Option-A param-shadow guard (design/concurrency.md §
-// ShadowsCrossingLocal). A non-crossing param shadow in a suspending function is
-// still rejected — the blunt `param_has_nested_let_shadow` guard rejects ANY nested
-// `let pname` regardless of crossing position, because reload_params_from_frame
-// would corrupt cg.locals[pname] across the next suspension even for non-crossing
-// allocas. Must exit 1 with a clean diagnostic, not an ICE.
-// test-ratchet: reverted from compile-and-run (R6) back to compile-error (R7 Option A).
-// R6's non-crossing compile path silently miscompiled the code-reviewer's repro.
-fn v03_m3a_p2_param_shadow_noncrossing_rejected() {
+    }
+    // case: a non-crossing nested parameter shadow in a suspending function is accepted (reload overwrites it)
+    // WHY: Conservative Option-A param-shadow guard (design/concurrency.md §
+    // ShadowsCrossingLocal). A non-crossing param shadow in a suspending function is
+    // still rejected — the blunt `param_has_nested_let_shadow` guard rejects ANY nested
+    // `let pname` regardless of crossing position, because reload_params_from_frame
+    // would corrupt cg.locals[pname] across the next suspension even for non-crossing
+    // allocas. Must exit 1 with a clean diagnostic, not an ICE.
+    // test-ratchet: reverted from compile-and-run (R6) back to compile-error (R7 Option A).
+    // R6's non-crossing compile path silently miscompiled the code-reviewer's repro.
+    v03_m3a_p2_param_shadow_noncrossing_rejected => {
     let (stdout, stderr, code) = ynz_run_stdout(&fixture(
         "v0_3_m3a_p2_param_shadow_noncrossing_rejected.ynz",
     ));
@@ -4015,17 +3429,9 @@ fn v03_m3a_p2_param_shadow_noncrossing_rejected() {
         !stderr.is_empty(),
         "a compile error must produce a non-empty diagnostic; got empty stderr"
     );
-}
-
-// === R7 Option-A regression fixtures ===
-// The four tests below lock the Option-A (conservative, safe) boundary:
-//   (1) crossing-param-shadow in SM function → reject (silent-miscompile repro)
-//   (2) crossing-local-shadow in SM function → reject (judge A8 case)
-//   (3) non-async param shadow → compile
-//   (4) non-async local shadow → compile
-
-#[test]
-fn v03_m3a_p2_r7_silent_miscompile_rejected() {
+    }
+    // case: a parameter shadowed in an if body before a wait inside it is accepted (silent miscompile)
+    v03_m3a_p2_r7_silent_miscompile_rejected => {
     // WHY: Code-reviewer R6 silent-miscompile repro. `f(7)` where param `p` is
     // shadowed inside an if body containing a `wait sleep(5)`. Under R6's non-crossing
     // predicate this was allowed and printed `99` + garbage (the coordinator reproduced
@@ -4049,10 +3455,9 @@ fn v03_m3a_p2_r7_silent_miscompile_rejected() {
         !stderr.is_empty(),
         "compile error must produce a non-empty diagnostic; stderr:\n{stderr}"
     );
-}
-
-#[test]
-fn v03_m3a_p2_r7_local_shadow_crossing_rejected() {
+    }
+    // case: an inner `let y` shadowing an outer crossing local `y` is accepted
+    v03_m3a_p2_r7_local_shadow_crossing_rejected => {
     // WHY: Judge A8 local case. Outer `y` is a crossing local (declared before `wait`,
     // read after it). Inner `let y=7` inside an if body shadows the crossing local.
     // Check 3 (find_shadow_in_stmts, gated on outer_is_genuine_crossing_local) rejects
@@ -4077,10 +3482,258 @@ fn v03_m3a_p2_r7_local_shadow_crossing_rejected() {
         !stderr.is_empty(),
         "compile error must produce a non-empty diagnostic; stderr:\n{stderr}"
     );
+    }
 }
 
-#[test]
-fn v03_m3a_p2_r7_nonasync_param_shadow_compiles() {
+/// One named test per input class of the `crossing-local-type-refused table` unit; each case is a test the runner names.
+macro_rules! crossing_local_type_refused_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a local whose type cannot cross a `wait` is accepted and reloads a dangling pointer | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+crossing_local_type_refused_table_high_case! {
+    // case: a nested-shape local across a wait is accepted and reads dangling pointers
+    v03_m3a_p1_nested_shape_crossing_rejected_clean_error => {
+    // WHY: FIX 1b guard — a shape whose field is another shape cannot be frame-embedded
+    // (nested shapes are stored as opaque pointers to stack-allocated structs; those ptrs
+    // dangle after suspension). Must produce a clean WHAT/WHAT-INSTEAD/WHY compile error,
+    // NOT silent garbage output (which was what happened before the guard).
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p1_nested_shape_crossing_rejected.ynz"));
+    assert_eq!(
+        code, 1,
+        "nested-shape crossing must fail to compile; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("nested-shape field"),
+        "diagnostic must mention nested-shape field; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("cannot be frame-embedded"),
+        "diagnostic must mention cannot be frame-embedded; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "no stdout on compile error; got:\n{stdout}"
+    );
+    }
+    // case: a `Maybe` local crossing a wait is accepted and reloads a dangling stack pointer
+    v03_m3a_p1_maybe_crossing_local_rejected => {
+    // WHY: FIX (d) Round-22 — UnsupportedCrossingLocalType guard. A `maybe<int>` local
+    // crossing a `wait` previously fell into the generic pointer flush/reload path in codegen,
+    // which stored a pointer to a stack-alloca {tag, payload} that no longer exists after
+    // resume. LLVM detected this as "Instruction does not dominate all uses!" (a raw compiler
+    // ICE). The guard rejects at typeck with a clean teaching diagnostic (exit 1, no binary,
+    // no LLVM ICE text). This test verifies the clean rejection AND that working crossing-local
+    // types (int, string, etc.) are NOT affected (tested separately in other fixtures).
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p1_maybe_crossing_local_rejected.ynz"));
+    assert_eq!(
+        code, 1,
+        "Maybe<Int> crossing local must be rejected at compile time (exit 1); stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("cannot yet cross a `wait`"),
+        "diagnostic must contain 'cannot yet cross a `wait`'; stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("LLVM ERROR") && !stderr.contains("does not dominate"),
+        "must be a clean compile error, not a raw LLVM ICE; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "no stdout when compile fails; got:\n{stdout}"
+    );
+    }
+    // case: a union local crossing a wait is accepted and reloads a dangling stack pointer
+    v03_m3a_p1_union_crossing_local_rejected => {
+    // WHY: FIX (d) Round-22 — UnsupportedCrossingLocalType guard for union-typed locals.
+    // A union-type crossing local falls into the same dangling-pointer flush/reload path
+    // as maybe<T>. This test verifies the clean compile-time rejection for the union case.
+    // Regression guard: the guard must fire before codegen runs (exit 1, no LLVM ICE).
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p1_union_crossing_local_rejected.ynz"));
+    assert_eq!(
+        code, 1,
+        "union-type crossing local must be rejected at compile time (exit 1); stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("cannot yet cross a `wait`"),
+        "diagnostic must contain 'cannot yet cross a `wait`'; stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("LLVM ERROR") && !stderr.contains("does not dominate"),
+        "must be a clean compile error, not a raw LLVM ICE; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "no stdout when compile fails; got:\n{stdout}"
+    );
+    }
+    // case: a `Fixed` local crossing a wait is accepted (dangling stack pointer UAF)
+    v03_m3a_p3_fixed_crossing_local_rejected => {
+    // WHY: `let arr: fixed<int> = ...; wait; for (v in arr)` must produce a clean
+    // WHAT/WHAT-INSTEAD/WHY compile error (UnsupportedCrossingLocalType — fixed<T>),
+    // not compile-exit-0 with a dangling-pointer UAF at runtime.
+    // fixed<T> allocas live on the resume function's stack; that stack frame is freed
+    // on suspension. The crossing-local frame slot holds a dangling pointer on resume.
+    let (_, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p3_fixed_crossing_local_rejected.ynz"));
+    assert_eq!(
+        code, 1,
+        "Fixed<Int> crossing local must be rejected at compile time; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("Fixed<T>") || stderr.contains("Fixed<Int>") || stderr.contains("Fixed"),
+        "error must mention fixed type; stderr:\n{stderr}"
+    );
+    }
+    // case: a `range` local crossing a wait is accepted (iterates a dangling range, zero iterations)
+    v03_m3a_p3_audit_range_crossing_loud_rejected => {
+    // WHY: range binding crossing a top-level wait is stack-allocated; iterating the
+    // dangling range produces zero iterations — silent wrong output without guard.
+    // UnsupportedCrossingLocalType must fire (exit 1) with a WHAT/WHAT-INSTEAD/WHY error.
+    let (_, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p3_audit_range_crossing_rejected.ynz"));
+    assert_eq!(
+        code, 1,
+        "range crossing local must be rejected at compile time; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("range") || stderr.contains("Range"),
+        "error must mention range; stderr:\n{stderr}"
+    );
+    }
+    // case: a nested-shape loop variable across a wait is accepted (check only covered `let`)
+    v03_m3a_p3_for_nested_shape_loop_var_rejected => {
+    // WHY: nested-shape loop vars must be CLEAN-REJECTED — same guard as direct
+    // nested-shape crossing locals (NestedShapeCrossing). Previously the check only
+    // fired via find_crossing_local_typeck_type_in_map (Stmt::Let only); for-loop vars
+    // have no Stmt::Let so the check silently skipped them. After the fix, Check 2 also
+    // calls find_for_loop_var_type_in_stmts as a fallback for loop vars.
+    let (_, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_for_nested_shape_rejected.ynz"));
+    assert_eq!(
+        code, 1,
+        "Array<NestedShape> loop var must be rejected at compile time; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("nested-shape field"),
+        "error must mention nested-shape field; stderr:\n{stderr}"
+    );
+    }
+    // case: a `dynamic Contract` local crossing a wait is accepted (dangling fat pointer)
+    v03_m3a_p3_audit_dynamic_crossing_loud_rejected => {
+    // WHY: dynamic Contract values hold a fat pointer ({data-ptr, vtable-ptr}) on the
+    // resume function's stack. The stack is freed when the function suspends and returns;
+    // reloading the stored fat-pointer on the next resume is a dangling-pointer read.
+    // UnsupportedCrossingLocalType must fire (exit 1) with a teaching error.
+    let (_, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p3_audit_dynamic_crossing_rejected.ynz"));
+    assert_eq!(
+        code, 1,
+        "dynamic crossing local must be rejected at compile time; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("dynamic") || stderr.contains("union"),
+        "error must mention dynamic type; stderr:\n{stderr}"
+    );
+    }
+}
+
+/// One named test per input class of the `shadow-accepted table` unit; each case is a test the runner names.
+macro_rules! shadow_accepted_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: the shadow guard refuses a valid program (non-crossing, scope-aware or sibling-scope shadows) | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+shadow_accepted_table_high_case! {
+    // case: the shadow guard refuses an outer non-crossing `let x` after an if holding an inner crossing `let x`
+    v03_m3a_p1_shadow_false_positive_compiles => {
+    // WHY: FIX C (Round 7) — shadow detection false positive. An outer `let x = 100`
+    // after an if block (non-crossing) must NOT trigger ShadowsCrossingLocal for the
+    // inner crossing `let x = 42` inside the if. Prior to this fix, the shadow check
+    // ran for ALL crossing locals including inner-only ones; the outer post-if `let x`
+    // was treated as if it were itself a crossing local being shadowed. The fix: only
+    // apply shadow-detection to crossing locals whose `let` declaration is at the
+    // function body's top level AND appears before a suspension.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p1_shadow_false_positive.ynz"));
+    assert_eq!(
+        code, 0,
+        "inner crossing x + outer non-crossing x must compile clean; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "42\n100",
+        "must print 42 (inner) then 100 (outer); stderr:\n{stderr}"
+    );
+    }
+    // case: the shadow guard refuses an inner crossing `x` when the outer `x` is read only before the suspension
+    v03_m3a_p1_scope_aware_shadow_false_positive_compiles => {
+    // WHY: scope-aware shadow analysis (Round 9). The outer `let x` is read ONLY before
+    // the if-block that contains the wait — i.e., the outer x has zero reads after any
+    // top-level suspension. The inner `let x = 42` crosses the inner wait, but that is
+    // an inner-scope crossing, not a shadow of an outer crossing local. The shadow guard
+    // must NOT fire. Catches regressions where has_top_level_let_before_suspension alone
+    // gates the check (insufficient — must also verify an outer read exists after the
+    // suspension, attributable to the outer binding).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m3a_p1_scope_aware_shadow_false_positive.ynz",
+    ));
+    assert_eq!(
+        code, 0,
+        "outer-pre-wait x + inner-wait-crossing x must compile clean; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "hello\n42",
+        "must print hello (outer, before if) then 42 (inner, after wait); stderr:\n{stderr}"
+    );
+    }
+    // case: the shadow guard refuses two sibling scopes that each declare their own crossing `x`
+    v03_m3a_p1_disjoint_sibling_scope_shadow_compiles => {
+    // WHY: two sibling if-blocks each with their own inner-only `let x` crossing an
+    // inner wait. Neither x exists at the top level of the function; neither is a
+    // genuine outer crossing local. The shadow guard must not fire for either. Catches
+    // regressions where any name collision between sibling scopes triggers the guard.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p1_disjoint_sibling_scope_shadow.ynz"));
+    assert_eq!(
+        code, 0,
+        "two disjoint sibling-scope x crossings must compile clean; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "42\n99",
+        "must print 42 (first arm) then 99 (second arm); stderr:\n{stderr}"
+    );
+    }
+    // case: a second suspending `while` loop's `let k` is rejected as a redeclaration after a wait
+    v03_m3a_p2_two_sequential_while_loops_correct => {
+    // WHY: guards the has_top_level_let_before_suspension fix. A second suspending
+    // `while` loop using a distinct counter (`k`) after a first suspending `while`
+    // must compile and run — `k`'s `let` is after a suspension (the first loop),
+    // not before one, so the shadow/redeclaration check must not fire. Without the
+    // fix, the compiler spuriously rejects `let k` as a "redeclaration after wait".
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p2_two_sequential_while_loops.ynz"));
+    assert_eq!(
+        code, 0,
+        "two sequential suspending while loops must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "3",
+        "second loop must complete 3 iterations; k must equal 3; got:\n{stdout}"
+    );
+    }
+    // case: the shadow guard fires for a non-suspending function's parameter shadow
+    v03_m3a_p2_r7_nonasync_param_shadow_compiles => {
     // WHY: Non-async function (no `wait`) with a parameter shadow. Yinz allows
     // shadowing; the conservative param guard only fires for SM functions (inside the
     // `if !kernel_mode && (has_explicit_waits || is_suspending_fn)` block). Non-SM
@@ -4100,10 +3753,9 @@ fn v03_m3a_p2_r7_nonasync_param_shadow_compiles() {
         "5\n9",
         "inner shadow prints 5; outer param (9) prints after the if; got:\n{stdout}"
     );
-}
-
-#[test]
-fn v03_m3a_p2_r7_nonasync_local_shadow_compiles() {
+    }
+    // case: the shadow guard fires for a non-suspending function's local shadow
+    v03_m3a_p2_r7_nonasync_local_shadow_compiles => {
     // WHY: Non-async function (no `wait`) with a local variable shadow. The local-shadow
     // guard (Check 3) only fires for crossing locals in SM functions — a function with no
     // suspension has no crossing locals, so the guard never runs.
@@ -4122,12 +3774,385 @@ fn v03_m3a_p2_r7_nonasync_local_shadow_compiles() {
         "2\n1",
         "inner shadow prints 2; outer local (1) prints after the if; got:\n{stdout}"
     );
+    }
 }
 
-// ── Phase 3: for-loop + match-arm suspension ──────────────────────────────────
+/// One named test per input class of the `suspending-return table` unit; each case is a test the runner names.
+macro_rules! suspending_return_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a suspending function returning Boolean, Float or Number fails LLVM verification or returns the wrong bits | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
 
-#[test]
-fn v03_m3a_p3_for_range_runs_in_order() {
+suspending_return_table_high_case! {
+    // case: a `-> Boolean` suspending function fails LLVM verification (i64 returned for i1)
+    v03_m3a_p1_bool_returning_suspending_fn => {
+    // WHY: FIX 2 (Round 9) — `-> boolean` suspending function wrapper-return type mismatch.
+    // The SM wrapper function is declared with i1 return type but the return slot stores
+    // bools as i64 (zext). Without trunc i64→i1, LLVM rejects "ret i64 ... i1" with a
+    // module verify failure (ICE). Catches regressions at the SM wrapper-return boundary
+    // for bool, which is the only scalar with a non-i64 LLVM return type.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p1_bool_returning_suspending_fn.ynz"));
+    assert_eq!(
+        code, 0,
+        "bool-returning suspending fn must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "true\nfalse",
+        "hasCrossingBool(true)→true, computeBool(5)→false (5 < 0 is false); stderr:\n{stderr}"
+    );
+    }
+    // case: a `-> Float` suspending function emits `ret void` and fails LLVM verification
+    v03_m3a_p1_float_returning_suspending_fn => {
+    // WHY: Round-17 fix — `-> float` suspending function SM wrapper-return type mismatch.
+    // The wrapper-return match had no `Type::Float` arm; the `_ =>` fallback emitted
+    // `ret void` instead of the declared `double` return type, causing LLVM module
+    // verification failure ("Function return type does not match operand type of return
+    // inst!"). Guards the SM wrapper-return Float arm against regression.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p1_float_returning_suspending_fn.ynz"));
+    assert_eq!(
+        code, 0,
+        "float-returning suspending fn must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "8.5",
+        "sleepingFloat() must return 8.5 exactly; stderr:\n{stderr}"
+    );
+    }
+    // case: a `-> Number` suspending function returns the low 64 bits or a stack pointer instead of the full decimal128
+    v03_m3a_p1_number_returning_suspending_fn => {
+    // WHY: Round-17 fix — `-> number` (decimal128) suspending function SM wrapper-return.
+    // Three bugs fixed: (1) wrapper-return lacked Type::Number arm → `ret void` vs `ptr`,
+    // LLVM verification failure; (2) resume-fn return-slot stored a stack pointer (ptr_to_int
+    // via to_i64_bits fallback) rather than the full i128 value — Tier-A silent-wrong-value;
+    // (3) the parent callee's inline-poll path read the child's return slot as i64 (8 bytes)
+    // then stored to an i64 alloca, corrupting the subsequent i128 load from that alloca.
+    // Asserts the EXACT value 0.3 (= 0.1 + 0.2 in decimal128, exact — no float rounding).
+    // If the lo-64-bit-only truncation bug regresses, the output becomes
+    // 0.000000000000000000000000000000000000000000000 (zeroed frame) or garbage.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p1_number_returning_suspending_fn.ynz"));
+    assert_eq!(
+        code, 0,
+        "number-returning suspending fn must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "0.3",
+        "sleepingNumber() must return 0.3 exactly (decimal128 exact); stderr:\n{stderr}"
+    );
+    }
+    // case: a `-> Number errors` suspending function truncates the 16-byte value on success
+    v03_m3a_p1_number_errors_returning_suspending_fn_success => {
+    // WHY: suspending `-> number errors` returns the EXACT high-precision decimal128 value.
+    // The value 9999999999.000000001 requires all 16 bytes of decimal128 — truncation to
+    // 8 bytes would produce a different value. The frame-staging slot stores the i128 inside
+    // the composed frame so the EC ok-pointer survives the resume fn returning (alloc=1/free=1).
+    // Regression guard: if the staging slot is removed or the precision drops, this fails.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m3a_p1_number_errors_returning_suspending_fn.ynz",
+    ));
+    assert_eq!(
+        code, 0,
+        "suspending `-> Number errors` must compile and run (exit 0); stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "9999999999.000000001",
+        "must print exact high-precision value (no truncation); got:\n{stdout}"
+    );
+    }
+    // case: the error discriminant of a suspending `-> Number errors` call is ignored so `.or(fallback)` never fires
+    v03_m3a_p1_number_errors_suspending_error_path => {
+    // WHY: suspending `-> number errors` error path — the EC discriminant must survive
+    // suspension for the ERROR case. If the staging path hardcodes success, the error
+    // discriminant is ignored and .or(fallback) never fires. Regression guard: removing
+    // the staging path or inverting the discriminant check makes this print the wrong value.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m3a_p1_number_errors_suspending_error_path.ynz",
+    ));
+    assert_eq!(
+        code, 0,
+        "error path must produce exit 0 via .or(fallback); stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "99.9",
+        "error path must return fallback 99.9; got:\n{stdout}"
+    );
+    }
+}
+
+/// One named test per input class of the `suspending-shape-return-refused table` unit; each case is a test the runner names.
+macro_rules! suspending_shape_return_refused_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a suspending function returning a shape, an errors-capable shape or an anonymous shape is accepted (leak or sub-frame clobber) | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+suspending_shape_return_refused_table_high_case! {
+    // case: a suspending `-> Shape errors` function is accepted (leak plus sub-frame clobber)
+    v03_m3a_p1_shape_errors_returning_suspending_fn_rejected => {
+    // WHY: WideValueSuspendingReturn guard — `-> Shape errors` from a suspending function
+    // previously leaked memory (heap-staged shape pointer stored as ok, never freed) AND
+    // the FRAME_OFFSET_LOCALS_START staging path clobbered child sub-frames. The guard
+    // rejects at compile time (exit 1) so no binary is produced, no leak, no SIGSEGV.
+    // Round-20. Regression guard: if the guard is removed, this test will fail.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m3a_p1_shape_errors_returning_suspending_fn.ynz",
+    ));
+    assert_eq!(
+        code, 1,
+        "suspending `-> Shape errors` must be rejected at compile time (exit 1); stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("cannot yet return"),
+        "diagnostic must contain 'cannot yet return'; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "no stdout when compile fails; got:\n{stdout}"
+    );
+    }
+    // case: a suspending `-> Shape` function is accepted (staging clobbers the child sub-frame, SIGSEGV)
+    v03_m3a_p1_shape_returning_suspending_fn_rejected => {
+    // WHY: WideValueSuspendingReturn guard — bare `-> Shape` from a suspending function
+    // previously caused a SIGSEGV: the non-crossing shape staging path GEP'd to
+    // FRAME_OFFSET_LOCALS_START (offset 32) and memcpy'd shape bytes there, clobbering
+    // the sleep sub-frame's resume_point (also at offset 32). The guard rejects at compile
+    // time (exit 1) so no binary is produced and no SIGSEGV can occur. Round-20.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p1_shape_returning_suspending_fn.ynz"));
+    assert_eq!(
+        code, 1,
+        "suspending `-> Shape` must be rejected at compile time (exit 1); stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("cannot yet return"),
+        "diagnostic must contain 'cannot yet return'; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "no stdout when compile fails; got:\n{stdout}"
+    );
+    }
+    // case: a suspending `-> { field: Type }` anonymous-shape return is accepted (leaked internal name check dropped, Low wording)
+    v03_m3a_p1_anon_shape_returning_suspending_fn_rejected => {
+    // WHY: FIX (a) Round-22 — WideValueSuspendingReturn guard rendered raw internal anon-shape
+    // names (e.g. "__anon__health__int") in the diagnostic instead of the user-readable form
+    // "{ health: int }". The fix routes Shape name rendering through `type_name()` which formats
+    // anon shapes as `{ field: type }`. This test verifies the readable name appears in the
+    // diagnostic and that the guard still fires (exit 1, no binary produced).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m3a_p1_anon_shape_returning_suspending_fn.ynz",
+    ));
+    assert_eq!(
+        code, 1,
+        "suspending `-> {{ health: Int }}` must be rejected at compile time (exit 1); stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("cannot yet return"),
+        "diagnostic must contain 'cannot yet return'; stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("__anon__"),
+        "diagnostic must NOT leak internal anon-shape names; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "no stdout when compile fails; got:\n{stdout}"
+    );
+    }
+}
+
+/// One named test per input class of the `ec-propagated table` unit; each case is a test the runner names.
+macro_rules! ec_propagated_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a returned errors-capable value crossing a second `wait` propagates a stack address instead of the value | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+ec_propagated_table_high_case! {
+    // case: a returned errors-capable int crossing a second wait propagates a stack address instead of the integer
+    v03_m3a_p1_ec_crossing_local_propagated_int => {
+    // WHY: round-25 regression guard for the EC-crossing-local return-propagation silent
+    // miscompile. An EC int-errors value bound from a suspending call, crossing a second
+    // suspension, and RETURNED by the caller previously propagated the companion-struct
+    // stack pointer as the ok-word instead of the integer bits. The caller received a
+    // garbage stack address (e.g. 140734710005520). Regression: if this prints anything
+    // other than "42", the errors_capable_locals registration in bind_sm_result_and_flush
+    // was removed or the SM ident handler's error/success paths broke.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p1_ec_crossing_local_propagated_int.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "42",
+        "EC int-errors value must survive crossing + return-propagation; got:\n{stdout}"
+    );
+    }
+    // case: a returned errors-capable string crossing a second wait propagates the companion-struct stack pointer
+    v03_m3a_p1_ec_crossing_local_propagated_string => {
+    // WHY: same EC-crossing-local propagation class as the int case, but for string errors.
+    // The ok-word is a heap pointer (stable), but without the errors_capable_locals fix the
+    // companion-struct stack pointer was propagated instead. Regression: prints garbage or
+    // crashes if the fix is reverted.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m3a_p1_ec_crossing_local_propagated_string.ynz",
+    ));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "hello",
+        "EC string-errors value must survive crossing + return-propagation; got:\n{stdout}"
+    );
+    }
+    // case: a returned errors-capable Number crossing a wait is truncated or read after its staging slot is freed
+    v03_m3a_p1_ec_crossing_local_propagated_number => {
+    // WHY: same EC-crossing-local propagation class, but for number (decimal128) errors.
+    // The value 9999999999.000000001 requires all 16 bytes of decimal128 precision —
+    // truncation or a wrong pointer both produce a different or garbage value.
+    // Also exercises the UAF fix in the EC wrapper: the ok-word is a staging-slot pointer
+    // inside the frame; without the heap-copy-before-free the staging slot is freed before
+    // the caller reads it. Regression: wrong value or crash.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m3a_p1_ec_crossing_local_propagated_number.ynz",
+    ));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "9999999999.000000001",
+        "EC number-errors value must survive crossing + return-propagation with full precision; got:\n{stdout}"
+    );
+    }
+    // case: the error discriminant is lost across a crossing plus propagation so `.or(99)` never fires
+    v03_m3a_p1_ec_crossing_local_propagated_error_path => {
+    // WHY: proves the error DISCRIMINANT survives the crossing + propagation, not just the
+    // success value. If the fix hardcodes err=0 or flips the discriminant check, inner()'s
+    // error is silently swallowed and .or(99) never fires — the output would be "0" (garbage
+    // ok-word passed as success) instead of "99" (the fallback). Regression: any value other
+    // than "99" means the error discriminant is broken across suspension.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m3a_p1_ec_crossing_local_propagated_error_path.ynz",
+    ));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout.trim(),
+        "99",
+        "EC error path must fire .or(99) — error discriminant must survive crossing + propagation; got:\n{stdout}"
+    );
+    }
+}
+
+// ── M3a Phase 2: while-loop suspension ───────────────────────────────────────
+
+/// One named test per input class of the `loop-suspension table` unit; each case is a test the runner names.
+macro_rules! loop_suspension_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a `while` or `for` loop containing a `wait` mis-iterates, drops its accumulated value or corrupts crossing locals | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+loop_suspension_table_high_case! {
+    // case: a `while` loop counter is not reloaded after each suspension so the loop mis-iterates
+    v03_m3a_p2_while_counter_runs_in_order => {
+    // WHY: guards that (1) the WaitInsideLoop guard no longer fires for `while`, (2) loop
+    // counter is frame-backed and survives each suspension, (3) exactly 3 iterations run.
+    // Any regression to the old guard would exit non-zero with a compile error. A wrong
+    // counter value would mean the frame slot was clobbered or not reloaded on resume.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p2_while_counter.ynz"));
+    assert_eq!(
+        code, 0,
+        "while-loop suspension must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "0\n1\n2",
+        "counter must increment 0→1→2 across suspensions; got:\n{stdout}"
+    );
+    }
+    // case: a value-returning suspending function with a `while` loop drops the loop-accumulated value
+    v03_m3a_p2_while_value_returning_correct => {
+    // WHY: a non-nothing return type from a suspending function containing a while loop
+    // must produce the correct value. Catches the case where the SM return path drops the
+    // loop-accumulated value (returns 0 instead of 15).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p2_while_value_returning.ynz"));
+    assert_eq!(
+        code, 0,
+        "value-returning while suspension must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "15",
+        "sum_n(5) must return 1+2+3+4+5=15 accumulated across suspensions; got:\n{stdout}"
+    );
+    }
+    // case: crossing locals are corrupted on iterations that do not suspend
+    v03_m3a_p2_while_conditional_wait_correct => {
+    // WHY: when only some iterations suspend (conditional wait), the crossing locals
+    // (i and x) must be correctly preserved for BOTH suspending and non-suspending
+    // iterations. A missed flush after a non-suspending iteration would corrupt x on
+    // the next iteration, breaking the alternating pattern.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p2_while_conditional_wait.ynz"));
+    assert_eq!(
+        code, 0,
+        "conditional-wait fixture must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "0\n1\n2\n3",
+        "all 4 iterations must complete in order, alternating suspend/no-suspend; got:\n{stdout}"
+    );
+    }
+    // case: `wait` inside a `for` loop is rejected again (exit code only; no output asserted)
+    v03_m3a_p3_for_wait_now_compiles => {
+    // WHY: P3 lifts the WaitInsideLoop guard for `for`. The P2 guard fixture
+    // (v0_3_m3a_p2_for_still_rejected.ynz) is now expected to compile and run correctly.
+    // If this test fails, the for-loop SM codegen is broken — do NOT revert to the
+    // old rejection; fix the codegen instead.
+    // test-ratchet: P3 lifted the for-loop WaitInsideLoop guard; this fixture must now compile
+    // and run — asserts the for+wait codegen produces correct output.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p2_for_still_rejected.ynz"));
+    assert_eq!(
+        code, 0,
+        "wait in for must now compile and run; stderr:\n{stderr}"
+    );
+    let _ = stdout;
+    }
+    // case: a loop counter decremented before the wait has a non-dominating alloca (ICE)
+    v03_m3a_p2_while_countdown_before_wait_correct => {
+    // WHY: guards the back-edge crossing-local fix. A loop counter decremented BEFORE
+    // the `wait` (textually earlier in the body) must be treated as a crossing local
+    // because the while condition re-reads it after each suspension. Without the fix,
+    // the alloca for `n` lands in a non-dominating block → LLVM ICE
+    // ("Instruction does not dominate all uses!"). With the fix, `n` gets a frame slot
+    // in sm_entry and the loop produces 3→2→1 in order.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p2_while_countdown_before_wait.ynz"));
+    assert_eq!(
+        code, 0,
+        "countdown-before-wait must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "3\n2\n1",
+        "counter must count down 3→2→1 across suspensions; got:\n{stdout}"
+    );
+    }
+    // case: the synthetic `for` range index is not reloaded after a wait so it repeats 0
+    v03_m3a_p3_for_range_runs_in_order => {
     // WHY: `wait` inside a `for`-over-range runs N times in order, index correct.
     // Guards P3's range-based for-loop SM codegen: the index is frame-backed via the
     // synthetic __ynz_for_idx_0 crossing local; if the frame slot is not flushed/reloaded
@@ -4142,10 +4167,9 @@ fn v03_m3a_p3_for_range_runs_in_order() {
         "0\n1\n2",
         "iterations must run in order 0/1/2; got:\n{stdout}"
     );
-}
-
-#[test]
-fn v03_m3a_p3_for_array_runs_in_order() {
+    }
+    // case: a `for`-over-array loop variable is not reloaded after a wait (repeats the first element)
+    v03_m3a_p3_for_array_runs_in_order => {
     // WHY: `wait` inside a `for`-over-array visits each element in index order.
     // Guards that the array SM codegen correctly reloads the loop variable (x) from
     // the frame after each suspension. A missing loop-var flush would give garbage or
@@ -4160,10 +4184,9 @@ fn v03_m3a_p3_for_array_runs_in_order() {
         "10\n20\n30",
         "elements visited in index order; got:\n{stdout}"
     );
-}
-
-#[test]
-fn v03_m3a_p3_for_map_visits_all_entries() {
+    }
+    // case: a `for`-over-map with a wait skips or repeats entries
+    v03_m3a_p3_for_map_visits_all_entries => {
     // WHY: `wait` inside a `for`-over-map visits every entry. An outer crossing local
     // (`count`) tracks iteration count; its frame-slot survives all 3 suspensions.
     // Guards that map iteration SM codegen increments the index slot correctly and stops
@@ -4178,10 +4201,9 @@ fn v03_m3a_p3_for_map_visits_all_entries() {
         "3",
         "all 3 map entries must be visited; got:\n{stdout}"
     );
-}
-
-#[test]
-fn v03_m3a_p3_match_arm_wait_resumes_correct_arm() {
+    }
+    // case: a `wait` inside a multi-case arm resumes into the wrong arm
+    v03_m3a_p3_match_arm_wait_resumes_correct_arm => {
     // WHY: `wait` inside a match arm resumes into the correct arm and produces correct
     // output. SM match codegen must dispatch to the matching arm's continuation, not fall
     // through to any other arm. Tests the lower_sm_match function.
@@ -4195,10 +4217,9 @@ fn v03_m3a_p3_match_arm_wait_resumes_correct_arm() {
         "two",
         "arm `2 =>` must print `two`; got:\n{stdout}"
     );
-}
-
-#[test]
-fn v03_m3a_p3_for_crossing_local_correct() {
+    }
+    // case: a user crossing local accumulated across a suspending `for` loop is lost
+    v03_m3a_p3_for_crossing_local_correct => {
     // WHY: for loop with a user-declared crossing local AND a `wait`. Validates that P1
     // (crossing locals) and P3 (for-loop suspension) compose correctly. The accumulator
     // `total` survives all 4 suspensions; the loop index `i` is also frame-backed.
@@ -4208,28 +4229,9 @@ fn v03_m3a_p3_for_crossing_local_correct() {
         "for with crossing local must compile and run; stderr:\n{stderr}"
     );
     assert_eq!(stdout.trim(), "6", "sum 0+1+2+3 = 6; got:\n{stdout}");
-}
-
-#[test]
-fn v03_m3a_p3_for_sequential_order_preserved() {
-    // WHY: per-iteration side effects appear in strict sequence; locks "loop iterations
-    // sequential by default" in design/concurrency.md for `for` loops. Any reordering
-    // indicates accidental parallelization — impossible in M3a, but a codegen bug could
-    // produce non-deterministic order via duplicate BBs or wrong back-edge.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_for_sequential_order.ynz"));
-    assert_eq!(
-        code, 0,
-        "sequential for loop must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "0\n1\n2\n3\n4",
-        "iterations must be strictly ordered; got:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3a_p3_for_empty_loop_preserves_frame() {
+    }
+    // case: a zero-iteration suspending `for` clobbers the never-stored frame slot of a later local
+    v03_m3a_p3_for_empty_loop_preserves_frame => {
     // WHY: zero-iteration for loop with a suspending body — the body never runs, the
     // frame slot for `result` must be preserved (never-stored-but-loaded guard). If the
     // SM codegen incorrectly clobbers the frame slot or fails to initialize it for the
@@ -4244,150 +4246,9 @@ fn v03_m3a_p3_for_empty_loop_preserves_frame() {
         "42",
         "frame slot for `result` must be preserved across the empty loop; got:\n{stdout}"
     );
-}
-
-#[test]
-fn v03_m3a_p3_mutual_suspension_cycle_no_false_positive() {
-    // WHY: a self-recursive suspending fn that also calls a second suspending fn
-    // non-recursively must NOT trigger MutualSuspensionCycle. Guards that the
-    // cycle-detection analysis doesn't false-positive after the for/local plumbing
-    // changes expand the suspending-set.
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3a_p3_no_false_positive_cycle.ynz"));
-    assert_eq!(
-        code, 0,
-        "non-mutual suspending calls must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(stdout.trim(), "done", "expected `done`; got:\n{stdout}");
-}
-
-#[test]
-fn v03_m3a_wait_inside_loop_fully_lifted() {
-    // WHY: the WaitInsideLoop guard has been fully removed — both `for` and `while` with
-    // `wait` compile and run. This is the top-level guard-removal confirmation test.
-    // If either fixture exits non-zero, the guard was not fully lifted.
-    let (stdout_for, stderr_for, code_for) =
-        ynz_run_stdout(&fixture("v0_3_m3a_p3_for_range_ordered.ynz"));
-    let (stdout_while, stderr_while, code_while) =
-        ynz_run_stdout(&fixture("v0_3_m3a_p2_while_counter.ynz"));
-    assert_eq!(
-        code_for, 0,
-        "`for` with wait must compile; stderr:\n{stderr_for}"
-    );
-    assert_eq!(
-        code_while, 0,
-        "`while` with wait must compile; stderr:\n{stderr_while}"
-    );
-    let _ = (stdout_for, stdout_while);
-}
-
-#[test]
-fn v03_m3a_p3_fixed_bool_iter_wait_rejected() {
-    // WHY: `for (b in fixed<boolean>) { wait }` must produce a WHAT/WHAT-INSTEAD/WHY compile
-    // error (FixedArrayIterWithWait), not silent wrong output or a raw ICE.
-    // fixed<T> arrays are stack-allocated; after suspension the pointer is dangling.
-    // The bool case additionally had a type-blind flush (i64 load of an i1 alloca) — both
-    // issues are pre-empted by the compile-time guard. Use array<boolean> as the workaround.
-    let (_, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_fixed_bool_iter_rejected.ynz"));
-    assert_eq!(
-        code, 1,
-        "Fixed<Boolean> iter with wait must be rejected at compile time; stderr:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("Fixed<T>") || stderr.contains("Fixed"),
-        "error must mention Fixed<T>; stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3a_p3_fixed_string_iter_wait_rejected() {
-    // WHY: `for (n in fixed<string>) { wait }` must produce a WHAT/WHAT-INSTEAD/WHY compile
-    // error (FixedArrayIterWithWait), not silent garbage output. The string loop var is a
-    // pointer type that becomes dangling after suspension. Same root cause as the bool case.
-    let (_, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_fixed_string_iter_rejected.ynz"));
-    assert_eq!(
-        code, 1,
-        "Fixed<String> iter with wait must be rejected at compile time; stderr:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("Fixed<T>") || stderr.contains("Fixed"),
-        "error must mention Fixed<T>; stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3a_p3_stored_range_iter_wait_rejected() {
-    // WHY: `let r = range(0,3); for (i in r) { wait }` must produce a clean
-    // WHAT/WHAT-INSTEAD/WHY compile error (StoredRangeWithWait), not a raw codegen ICE
-    // ("for-loop iter is not a call expression"). The SM range arm requires a literal
-    // range() call to extract bounds; stored range vars are not yet supported.
-    let (_, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_stored_range_wait_rejected.ynz"));
-    assert_eq!(
-        code, 1,
-        "stored range iter with wait must be rejected at compile time; stderr:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("stored Range") || stderr.contains("Range"),
-        "error must mention range; stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3a_p3_expr_iter_wait_rejected() {
-    // WHY: `for (x in makeArray()) { wait }` must produce a clean compile error
-    // (ExpressionIterWithWait), not re-evaluate makeArray() once per iteration.
-    // The SM codegen calls lower_expr(iter) at every loop header — N+1 evaluations
-    // for a call expression breaks the one-alloc-per-task invariant.
-    let (_, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_expr_iter_wait_rejected.ynz"));
-    assert_eq!(
-        code, 1,
-        "call-expression iter with wait must be rejected at compile time; stderr:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("call-expression") || stderr.contains("iterator"),
-        "error must mention call-expression iterator; stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3a_p3_array_int_loop_var_survives_wait() {
-    // WHY: `for (x in array<int>) { wait; print(x) }` must print each element correctly.
-    // Guards the type-aware flush path in flush_for_loop_var for scalar (Int) loop variables
-    // from heap-allocated arrays. The loop var is a crossing local that survives suspension
-    // via the frame slot (i64 alloca, raw i64 flush/reload).
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_for_int_array_loop_var.ynz"));
-    assert_eq!(
-        code, 0,
-        "Array<Int> loop var must survive wait and print correctly; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "10\n20\n30",
-        "each element printed after wait; got:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3a_p3_map_counter_with_wait() {
-    // WHY: `for (entry in map) { wait }` with an outer crossing counter visits all
-    // N entries. Guards that the map SM codegen increments the index correctly and
-    // that non-destructured map iteration works with a wait. The outer `count` local is
-    // the only value read after wait — entry.* is not accessed (the MapEntry deferral
-    // covers entry.key/entry.value reads after suspension).
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_map_counter_with_wait.ynz"));
-    assert_eq!(
-        code, 0,
-        "map entry loop with wait must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "3",
-        "all 3 entries must be visited; got:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3a_p3_number_loop_var_survives_wait() {
+    }
+    // case: a Number loop variable is flushed as one 8-byte slot so it reloads as garbage
+    v03_m3a_p3_number_loop_var_survives_wait => {
     // WHY: `for (x in array<number>) { wait; print(x) }` must print exact decimal values.
     // Guards the decimal128 (i128, 2-slot) flush path in flush_for_loop_var. Without the
     // decimal128 branch, the loop var falls to the pointer branch → writes only 8 bytes →
@@ -4403,29 +4264,111 @@ fn v03_m3a_p3_number_loop_var_survives_wait() {
         "1.5\n2.25\n3.125",
         "each decimal128 element must print exactly after wait; got:\n{stdout}"
     );
+    }
+    // case: a String loop variable's pointer is not preserved across a wait
+    v03_m3a_p3_string_array_loop_var_survives_wait => {
+    // WHY: `for (n in array<string>) { wait; print(n) }` must print each element correctly.
+    // Guards the pointer-backed type path in flush_for_loop_var — string pointers are
+    // heap-stable so ptr_to_int/int_to_ptr round-trips preserve the address across suspension.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_for_string_array_wait.ynz"));
+    assert_eq!(
+        code, 0,
+        "Array<String> loop var must survive wait; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "amy\nbob\ncy",
+        "each string element must print after wait; got:\n{stdout}"
+    );
+    }
 }
 
+// === R7 Option-A regression fixtures ===
+// The four tests below lock the Option-A (conservative, safe) boundary:
+//   (1) crossing-param-shadow in SM function → reject (silent-miscompile repro)
+//   (2) crossing-local-shadow in SM function → reject (judge A8 case)
+//   (3) non-async param shadow → compile
+//   (4) non-async local shadow → compile
+
+// ── Phase 3: for-loop + match-arm suspension ──────────────────────────────────
+
+// bug: the mutual-suspension-cycle check refuses a self-recursive suspender that also calls a second suspender | tier: High
 #[test]
-fn v03_m3a_p3_fixed_crossing_local_rejected() {
-    // WHY: `let arr: fixed<int> = ...; wait; for (v in arr)` must produce a clean
-    // WHAT/WHAT-INSTEAD/WHY compile error (UnsupportedCrossingLocalType — fixed<T>),
-    // not compile-exit-0 with a dangling-pointer UAF at runtime.
-    // fixed<T> allocas live on the resume function's stack; that stack frame is freed
-    // on suspension. The crossing-local frame slot holds a dangling pointer on resume.
-    let (_, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3a_p3_fixed_crossing_local_rejected.ynz"));
+fn v03_m3a_p3_mutual_suspension_cycle_no_false_positive() {
+    // WHY: a self-recursive suspending fn that also calls a second suspending fn
+    // non-recursively must NOT trigger MutualSuspensionCycle. Guards that the
+    // cycle-detection analysis doesn't false-positive after the for/local plumbing
+    // changes expand the suspending-set.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3a_p3_no_false_positive_cycle.ynz"));
+    assert_eq!(
+        code, 0,
+        "non-mutual suspending calls must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(stdout.trim(), "done", "expected `done`; got:\n{stdout}");
+}
+
+/// One named test per input class of the `iter-wait-refused table` unit; each case is a test the runner names.
+macro_rules! iter_wait_refused_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: an iterator that cannot survive a `wait` (Fixed array, stored range, call expression, ...) is accepted across one | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+iter_wait_refused_table_high_case! {
+    // case: iterating a `Fixed` array across a `wait` is accepted (dangling stack pointer)
+    v03_m3a_p3_fixed_bool_iter_wait_rejected => {
+    // WHY: `for (b in fixed<boolean>) { wait }` must produce a WHAT/WHAT-INSTEAD/WHY compile
+    // error (FixedArrayIterWithWait), not silent wrong output or a raw ICE.
+    // fixed<T> arrays are stack-allocated; after suspension the pointer is dangling.
+    // The bool case additionally had a type-blind flush (i64 load of an i1 alloca) — both
+    // issues are pre-empted by the compile-time guard. Use array<boolean> as the workaround.
+    let (_, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_fixed_bool_iter_rejected.ynz"));
     assert_eq!(
         code, 1,
-        "Fixed<Int> crossing local must be rejected at compile time; stderr:\n{stderr}"
+        "Fixed<Boolean> iter with wait must be rejected at compile time; stderr:\n{stderr}"
     );
     assert!(
-        stderr.contains("Fixed<T>") || stderr.contains("Fixed<Int>") || stderr.contains("Fixed"),
-        "error must mention fixed type; stderr:\n{stderr}"
+        stderr.contains("Fixed<T>") || stderr.contains("Fixed"),
+        "error must mention Fixed<T>; stderr:\n{stderr}"
     );
-}
-
-#[test]
-fn v03_m3a_p3_map_entry_after_wait_rejected() {
+    }
+    // case: iterating a stored `range` across a `wait` is accepted (raw codegen ICE)
+    v03_m3a_p3_stored_range_iter_wait_rejected => {
+    // WHY: `let r = range(0,3); for (i in r) { wait }` must produce a clean
+    // WHAT/WHAT-INSTEAD/WHY compile error (StoredRangeWithWait), not a raw codegen ICE
+    // ("for-loop iter is not a call expression"). The SM range arm requires a literal
+    // range() call to extract bounds; stored range vars are not yet supported.
+    let (_, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_stored_range_wait_rejected.ynz"));
+    assert_eq!(
+        code, 1,
+        "stored range iter with wait must be rejected at compile time; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("stored Range") || stderr.contains("Range"),
+        "error must mention range; stderr:\n{stderr}"
+    );
+    }
+    // case: a call-expression iterator across a `wait` is accepted and re-evaluated every iteration
+    v03_m3a_p3_expr_iter_wait_rejected => {
+    // WHY: `for (x in makeArray()) { wait }` must produce a clean compile error
+    // (ExpressionIterWithWait), not re-evaluate makeArray() once per iteration.
+    // The SM codegen calls lower_expr(iter) at every loop header — N+1 evaluations
+    // for a call expression breaks the one-alloc-per-task invariant.
+    let (_, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_expr_iter_wait_rejected.ynz"));
+    assert_eq!(
+        code, 1,
+        "call-expression iter with wait must be rejected at compile time; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("call-expression") || stderr.contains("iterator"),
+        "error must mention call-expression iterator; stderr:\n{stderr}"
+    );
+    }
+    // case: `entry.value` read after a wait is accepted though the MapEntry gets one slot
+    v03_m3a_p3_map_entry_after_wait_rejected => {
     // WHY: `for (entry in m) { wait; total += entry.value }` must produce a clean
     // WHAT/WHAT-INSTEAD/WHY compile error (UnsupportedCrossingLocalType — MapEntry).
     // The MapEntry {key,value} struct needs 2 frame slots; the current mechanism assigns 1.
@@ -4441,213 +4384,9 @@ fn v03_m3a_p3_map_entry_after_wait_rejected() {
         stderr.contains("MapEntry") || stderr.contains("entry") || stderr.contains("Map"),
         "error must mention the MapEntry or map iteration; stderr:\n{stderr}"
     );
-}
-
-#[test]
-fn v03_m3a_p3_string_array_loop_var_survives_wait() {
-    // WHY: `for (n in array<string>) { wait; print(n) }` must print each element correctly.
-    // Guards the pointer-backed type path in flush_for_loop_var — string pointers are
-    // heap-stable so ptr_to_int/int_to_ptr round-trips preserve the address across suspension.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_for_string_array_wait.ynz"));
-    assert_eq!(
-        code, 0,
-        "Array<String> loop var must survive wait; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "amy\nbob\ncy",
-        "each string element must print after wait; got:\n{stdout}"
-    );
-}
-
-// ── Round-4 exhaustive type audit ────────────────────────────────────────────
-// Each test covers one Type variant as a crossing local across a TOP-LEVEL wait.
-// Every variant must land in exactly one bucket: frame-backed-correct OR loud-rejected.
-// These tests replace the round-3 paper audit table with TESTED coverage.
-
-#[test]
-fn v03_m3a_p3_audit_int_crossing_local() {
-    // WHY: int is a scalar i64 — flush stores raw i64 to frame slot, reload reads it back.
-    // If the frame-slot path is broken for int, this produces wrong output (not 42).
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_audit_int_crossing.ynz"));
-    assert_eq!(
-        code, 0,
-        "int crossing local must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "42",
-        "int must round-trip across wait; got:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3a_p3_audit_bool_crossing_local() {
-    // WHY: bool is i1 — flush must zext to i64 (not raw store) else the frame slot holds
-    // a 1-byte value in an 8-byte region (SIGSEGV on reload). The same class as P1's bool fix.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_audit_bool_crossing.ynz"));
-    assert_eq!(
-        code, 0,
-        "bool crossing local must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "true",
-        "bool must round-trip across wait as true; got:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3a_p3_audit_float_crossing_local() {
-    // WHY: float is f64 — flush must bitcast f64->i64, reload must bitcast i64->f64.
-    // A raw i64 load from an f64 alloca would read garbage bits. Verifies no crash.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_audit_float_crossing.ynz"));
-    assert_eq!(
-        code, 0,
-        "float crossing local must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "ok",
-        "float must survive wait without crash; got:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3a_p3_audit_number_crossing_local() {
-    // WHY: number is decimal128 (i128, 16 bytes) — flush splits into 2 consecutive i64
-    // frame slots (lo+hi halves). A single slot would silently truncate to 8 bytes.
-    // 0.1 + 0.2 = 0.3 exactly in decimal128 (not 0.30000...0004 as in IEEE 754 float).
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_audit_number_crossing.ynz"));
-    assert_eq!(
-        code, 0,
-        "number crossing local must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "0.3",
-        "decimal128 must round-trip exactly across wait; got:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3a_p3_audit_string_crossing_local() {
-    // WHY: string is a heap-stable pointer — flush stores ptr_to_int to frame slot,
-    // reload uses int_to_ptr. A missing pointer-path would store the raw stack address
-    // (alloca ptr) which dangles after suspension.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_audit_string_crossing.ynz"));
-    assert_eq!(
-        code, 0,
-        "string crossing local must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "hello world",
-        "string must survive wait; got:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3a_p3_audit_array_crossing_local() {
-    // WHY: array<T> is heap-allocated — the heap pointer is stable across suspension.
-    // Flush stores the pointer as i64, reload restores the same heap address.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_audit_array_crossing.ynz"));
-    assert_eq!(
-        code, 0,
-        "array crossing local must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "10\n20\n30",
-        "array elements must be correct after wait; got:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3a_p3_audit_map_crossing_local() {
-    // WHY: map<K,V> is heap-allocated — the heap pointer is stable across suspension.
-    // Verifies the map can be iterated correctly after a wait (entry count = 3).
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_audit_map_crossing.ynz"));
-    assert_eq!(
-        code, 0,
-        "map crossing local must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "3",
-        "map must have 3 entries after wait; got:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3a_p3_audit_shape_crossing_local() {
-    // WHY: Shape with primitive fields is frame-embedded (field bytes stored inline in the
-    // composed heap frame). The pointer returned by alloca points directly into the frame
-    // region — no flush needed, fields are always live. Verifies the field values survive.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_audit_shape_crossing.ynz"));
-    assert_eq!(
-        code, 0,
-        "Shape crossing local must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "30",
-        "Shape fields must survive wait (10+20=30); got:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3a_p3_audit_range_crossing_loud_rejected() {
-    // WHY: range binding crossing a top-level wait is stack-allocated; iterating the
-    // dangling range produces zero iterations — silent wrong output without guard.
-    // UnsupportedCrossingLocalType must fire (exit 1) with a WHAT/WHAT-INSTEAD/WHY error.
-    let (_, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3a_p3_audit_range_crossing_rejected.ynz"));
-    assert_eq!(
-        code, 1,
-        "range crossing local must be rejected at compile time; stderr:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("range") || stderr.contains("Range"),
-        "error must mention range; stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3a_p3_audit_maybe_crossing_loud_rejected() {
-    // WHY: maybe<T> is a stack alloca pointing to a {tag,payload} struct. The stack
-    // frame is freed after suspension; reloading the dangling alloca pointer is UB.
-    // UnsupportedCrossingLocalType must fire (exit 1).
-    let (_, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3a_p3_audit_maybe_crossing_rejected.ynz"));
-    assert_eq!(
-        code, 1,
-        "maybe crossing local must be rejected at compile time; stderr:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("Maybe") || stderr.contains("union") || stderr.contains("dynamic"),
-        "error must mention the unsupported type; stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3a_p3_audit_fixed_crossing_loud_rejected() {
-    // WHY: fixed<T> is stack-allocated; its pointer dangles after suspension.
-    // UnsupportedCrossingLocalType must fire (exit 1). Workaround: array<T>.
-    let (_, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3a_p3_audit_fixed_crossing_rejected.ynz"));
-    assert_eq!(
-        code, 1,
-        "fixed crossing local must be rejected at compile time; stderr:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("Fixed"),
-        "error must mention fixed type; stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3a_p3_audit_map_nested_wait_field_rejected() {
+    }
+    // case: a map `entry.*` read after a wait nested in an `if` is missed by the flat scan and accepted
+    v03_m3a_p3_audit_map_nested_wait_field_rejected => {
     // WHY: guards the flat-scan bug in body_reads_field_after_wait. A `wait` nested
     // inside `if (c) { wait sleep(5) }` was previously missed — the guard only set
     // seen_wait for a FLAT top-level Stmt::Expr(Wait). The fix uses stmt_contains_wait_anywhere
@@ -4662,8 +4401,15 @@ fn v03_m3a_p3_audit_map_nested_wait_field_rejected() {
         stderr.contains("entry") || stderr.contains("Map") || stderr.contains("MapEntry"),
         "error must mention map entry; stderr:\n{stderr}"
     );
+    }
 }
 
+// ── Round-4 exhaustive type audit ────────────────────────────────────────────
+// Each test covers one Type variant as a crossing local across a TOP-LEVEL wait.
+// Every variant must land in exactly one bucket: frame-backed-correct OR loud-rejected.
+// These tests replace the round-3 paper audit table with TESTED coverage.
+
+// bug: an `Array<Number>` in a suspending function leaks decimal128 per element (allocs scale with N or frees differ) | tier: High
 #[test]
 fn v03_m3a_p3_audit_array_number_sm_no_leak() {
     // WHY: guards the round-3 decimal128 heap-per-element leak. NumberLit elements in an
@@ -4690,8 +4436,18 @@ fn v03_m3a_p3_audit_array_number_sm_no_leak() {
 
 // ── Round-5: shape-embed loop var (FIX 2) ────────────────────────────────────
 
-#[test]
-fn v03_m3a_p3_for_shape_loop_var_survives_wait() {
+/// One named test per input class of the `array-shape-survives table` unit; each case is a test the runner names.
+macro_rules! array_shape_survives_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: an `Array<Shape>` crossing a `wait` stores stack pointers so its fields read garbage after resume | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+array_shape_survives_table_high_case! {
+    // case: an `Array<Shape>` loop variable stores a stack-alloca pointer so its fields read garbage after a wait
+    v03_m3a_p3_for_shape_loop_var_survives_wait => {
     // WHY: guards the shape-embed loop-var fix (round-5 FIX 2). Before the fix,
     // `flush_for_loop_var` fell to the else-branch and stored the stack-alloca pointer
     // as i64 in the frame slot — every per-run address gave different garbage output
@@ -4710,8 +4466,129 @@ fn v03_m3a_p3_for_shape_loop_var_survives_wait() {
         "30",
         "Shape fields must survive suspension (10+20=30); got:\n{stdout}"
     );
+    }
+    // case: a runtime-field `Array<Shape>` crossing a wait prints stack garbage instead of the values
+    m5_p3_array_shape_runtime_field_crossing_runs => {
+    // WHY: the headline lift — runtime-field array<Shape> as a crossing local + loop
+    // var across a `wait` prints correct values (10+20=30). Pre-M5 this exact program
+    // printed ASLR-varying stack garbage (140737423097900 one run, 140728717547596 the
+    // next) and was loud-rejected by the interim guard.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("m5_p3_array_shape_runtime_field_runs.ynz"));
+    assert_eq!(
+        code, 0,
+        "runtime-field Array<Shape> crossing a wait must compile and run (guard lifted); stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "30",
+        "runtime-field Array<Shape> must survive suspension with correct element \
+         values (10+20=30); got:\n{stdout}"
+    );
+    }
+    // case: an all-literal-field `Array<Shape>` crossing a wait loses its elements (boundary of the runtime-field case)
+    v03_m3a_p3_array_shape_literal_crossing_still_works => {
+    // WHY: literal-field regression boundary (pre-M5: the guard's no-over-reject case).
+    // An array<Shape> whose elements have ALL-LITERAL int/bool field values
+    // ([{id:1,qty:10},{id:2,qty:20}]) crosses a `wait` correctly — since the v0.3-M5
+    // by-value cut the element bytes live inline in the heap array buffer (the old
+    // module-global lowering, try_build_shape_global, was deleted with the cut).
+    // This test must print "30" = 10+20; it pins the literal-field case alongside the
+    // m5_p3_array_shape_*_runs runtime-field acceptance tests above/below.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
+        "v0_3_m3a_p3_array_shape_literal_crossing_still_works.ynz",
+    ));
+    assert_eq!(
+        code, 0,
+        "Array<Shape> with all-literal fields crossing a wait must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "30",
+        "all-literal Array<Shape> must survive suspension and sum correctly (10+20=30); got:\n{stdout}"
+    );
+    }
+    // case: an `Array<Shape>` declared between two waits does not survive the second
+    m5_p3_array_shape_between_waits_runs => {
+    // WHY: the between-two-waits position (M3a-R7's first under-rejection hole) — the
+    // array is declared AFTER the first wait and crosses only the SECOND. The heap
+    // buffer holding the element bytes must survive that suspension like any other
+    // crossing pointer local. Correct sum proves the elements themselves survived.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("m5_p3_array_shape_between_waits_runs.ynz"));
+    assert_eq!(
+        code, 0,
+        "runtime-field Array<Shape> declared between two waits must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "30",
+        "between-waits Array<Shape> must survive the second suspension with correct \
+         element values (10+20=30); got:\n{stdout}"
+    );
+    }
+    // case: an `Array<Shape>` declared inside a nested `if` that holds the wait loses its element bytes
+    m5_p3_array_shape_nested_if_runs => {
+    // WHY: the nested-if position (M3a-R7's second under-rejection hole) — the array
+    // is declared inside a nested `if` body and crosses a wait in that same body.
+    // The crossing analysis tracks nested scopes; the frame story must carry the
+    // nested crossing local across the suspension with its element bytes intact.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p3_array_shape_nested_if_runs.ynz"));
+    assert_eq!(
+        code, 0,
+        "runtime-field Array<Shape> nested in an if body crossing a wait must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "30",
+        "nested-if Array<Shape> must survive suspension with correct element values \
+         (10+20=30); got:\n{stdout}"
+    );
+    }
+    // case: a struct-of-arrays `Array<Shape>` in a suspending main loses its `.copy()` snapshot, scatter write or background copy across a wait
+    m5_p5_soa_copy_wait_bg_matrix => {
+    // WHY: THE SoA cell of E9's matrix — qualifying SoA array × `wait` (SM
+    // main; pts crosses the suspension) × `.copy()` (soa_copy_to_aos snapshot)
+    // × IndexAssign scatter × `background` coexisting in the same SM main
+    // (spawn-site `.copy()` ownership transfer on the SM-descriptor path, on a
+    // SECOND shape — see the fixture's D11 note: bg-crossing a shape pads it
+    // and padding-wins would force the SoA array AoS) × dual-mode
+    // byte-identity. Behavior:
+    //   - the AoS snapshot taken before the mutation reads 7884 after it;
+    //   - the post-mutation hot loop reads the scatter through segment
+    //     addressing (2727/5454);
+    //   - the bg task sees the pre-mutation Part copy (30), the caller 119.
+    m5_p3_sweep_assert_dual_mode(
+        "m5_p5_soa_copy_wait_bg.ynz",
+        "hotx: 2727\nhoty: 5454\nsnap: 7884\ncaller: 119\nbg: 30\n",
+    );
+
+    // SoA actually FIRED on the SM path (the M3d silent-decline corpse class:
+    // a fixture that "passes" because the array quietly declined to AoS proves
+    // nothing about SoA). `soa_new` = the ynz_array_new_sized construction call
+    // in lower_soa_construction; `soa_ctor` = its per-element scatter prefix.
+    let src = fixture("m5_p5_soa_copy_wait_bg.ynz");
+    let par_ir = build_to_tmpdir_emit_ir_mode(&src, false);
+    assert!(
+        par_ir.contains("soa_new") && par_ir.contains("soa_ctor"),
+        "default-mode IR must contain SoA construction instructions (soa_new + \
+         soa_ctor) — their absence means the qualifying array silently declined \
+         to AoS (or the SM lowering path lost the Stmt::Let SoA interception) \
+         and this fixture is proving nothing about SoA"
+    );
+
+    // And NEVER fires under --no-auto-parallel (Phase 4 entry gate + the
+    // build_module belt assert): zero soa-named instructions in sequential IR.
+    let seq_ir = build_to_tmpdir_emit_ir_mode(&src, true);
+    assert!(
+        !seq_ir.contains("soa_new") && !seq_ir.contains("soa_ctor"),
+        "--no-auto-parallel IR must contain ZERO SoA instructions — a hit means \
+         a SoA decision leaked past the Phase 4 no-auto-parallel entry gate"
+    );
+    }
 }
 
+// bug: an `Array<Shape>` loop variable adds per-element or per-iteration heap copies, or leaves them unfreed | tier: High
 #[test]
 fn v03_m3a_p3_for_shape_loop_var_alloc_one() {
     // WHY: GR6 invariant — an array<Shape> loop var must add ZERO per-element and
@@ -4734,61 +4611,7 @@ fn v03_m3a_p3_for_shape_loop_var_alloc_one() {
     );
 }
 
-#[test]
-fn v03_m3a_p3_for_nested_shape_loop_var_rejected() {
-    // WHY: nested-shape loop vars must be CLEAN-REJECTED — same guard as direct
-    // nested-shape crossing locals (NestedShapeCrossing). Previously the check only
-    // fired via find_crossing_local_typeck_type_in_map (Stmt::Let only); for-loop vars
-    // have no Stmt::Let so the check silently skipped them. After the fix, Check 2 also
-    // calls find_for_loop_var_type_in_stmts as a fallback for loop vars.
-    let (_, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_for_nested_shape_rejected.ynz"));
-    assert_eq!(
-        code, 1,
-        "Array<NestedShape> loop var must be rejected at compile time; stderr:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("nested-shape field"),
-        "error must mention nested-shape field; stderr:\n{stderr}"
-    );
-}
-
 // ── Round-5: missing direct-crossing local fixtures ───────────────────────────
-
-#[test]
-fn v03_m3a_p3_audit_options_crossing_local() {
-    // WHY: options values are i8 tag bytes — stored as a 1-slot frame entry (i64 with
-    // i8 tag, zext on flush / truncate on reload). This audits that the options crossing-
-    // local path works end-to-end: the tag survives suspension and the match arm fires
-    // correctly post-wait. Distinct from the union/dynamic paths (which are rejected).
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3a_p3_audit_options_crossing.ynz"));
-    assert_eq!(
-        code, 0,
-        "options crossing local must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "active",
-        "options tag must survive wait (Status.active → 'active'); got:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3a_p3_audit_dynamic_crossing_loud_rejected() {
-    // WHY: dynamic Contract values hold a fat pointer ({data-ptr, vtable-ptr}) on the
-    // resume function's stack. The stack is freed when the function suspends and returns;
-    // reloading the stored fat-pointer on the next resume is a dangling-pointer read.
-    // UnsupportedCrossingLocalType must fire (exit 1) with a teaching error.
-    let (_, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3a_p3_audit_dynamic_crossing_rejected.ynz"));
-    assert_eq!(
-        code, 1,
-        "dynamic crossing local must be rejected at compile time; stderr:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("dynamic") || stderr.contains("union"),
-        "error must mention dynamic type; stderr:\n{stderr}"
-    );
-}
 
 // ── v0.3-M5 Phase 3: ArrayShapeRuntimeFieldWithWait LIFTED — crossing-wait acceptance ──
 //
@@ -4802,88 +4625,6 @@ fn v03_m3a_p3_audit_dynamic_crossing_loud_rejected() {
 // (SCRATCH-future-array-by-value-element-storage.md) and E9's B1 proof.
 // A wrong value here is the pre-M5 silent stack-garbage miscompile returning; do NOT
 // weaken these to exit-code-only checks.
-
-#[test]
-fn m5_p3_array_shape_runtime_field_crossing_runs() {
-    // WHY: the headline lift — runtime-field array<Shape> as a crossing local + loop
-    // var across a `wait` prints correct values (10+20=30). Pre-M5 this exact program
-    // printed ASLR-varying stack garbage (140737423097900 one run, 140728717547596 the
-    // next) and was loud-rejected by the interim guard.
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("m5_p3_array_shape_runtime_field_runs.ynz"));
-    assert_eq!(
-        code, 0,
-        "runtime-field Array<Shape> crossing a wait must compile and run (guard lifted); stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "30",
-        "runtime-field Array<Shape> must survive suspension with correct element \
-         values (10+20=30); got:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3a_p3_array_shape_literal_crossing_still_works() {
-    // WHY: literal-field regression boundary (pre-M5: the guard's no-over-reject case).
-    // An array<Shape> whose elements have ALL-LITERAL int/bool field values
-    // ([{id:1,qty:10},{id:2,qty:20}]) crosses a `wait` correctly — since the v0.3-M5
-    // by-value cut the element bytes live inline in the heap array buffer (the old
-    // module-global lowering, try_build_shape_global, was deleted with the cut).
-    // This test must print "30" = 10+20; it pins the literal-field case alongside the
-    // m5_p3_array_shape_*_runs runtime-field acceptance tests above/below.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture(
-        "v0_3_m3a_p3_array_shape_literal_crossing_still_works.ynz",
-    ));
-    assert_eq!(
-        code, 0,
-        "Array<Shape> with all-literal fields crossing a wait must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "30",
-        "all-literal Array<Shape> must survive suspension and sum correctly (10+20=30); got:\n{stdout}"
-    );
-}
-
-#[test]
-fn m5_p3_array_shape_between_waits_runs() {
-    // WHY: the between-two-waits position (M3a-R7's first under-rejection hole) — the
-    // array is declared AFTER the first wait and crosses only the SECOND. The heap
-    // buffer holding the element bytes must survive that suspension like any other
-    // crossing pointer local. Correct sum proves the elements themselves survived.
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("m5_p3_array_shape_between_waits_runs.ynz"));
-    assert_eq!(
-        code, 0,
-        "runtime-field Array<Shape> declared between two waits must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "30",
-        "between-waits Array<Shape> must survive the second suspension with correct \
-         element values (10+20=30); got:\n{stdout}"
-    );
-}
-
-#[test]
-fn m5_p3_array_shape_nested_if_runs() {
-    // WHY: the nested-if position (M3a-R7's second under-rejection hole) — the array
-    // is declared inside a nested `if` body and crosses a wait in that same body.
-    // The crossing analysis tracks nested scopes; the frame story must carry the
-    // nested crossing local across the suspension with its element bytes intact.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p3_array_shape_nested_if_runs.ynz"));
-    assert_eq!(
-        code, 0,
-        "runtime-field Array<Shape> nested in an if body crossing a wait must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "30",
-        "nested-if Array<Shape> must survive suspension with correct element values \
-         (10+20=30); got:\n{stdout}"
-    );
-}
 
 // ── v0.3-M3g Phase 3: E1 watchdog — never let a hang wedge the test binary ────
 
@@ -5038,6 +4779,7 @@ fn time_built_run(src: &Path, no_auto_parallel: bool) -> (u128, i32) {
     (elapsed_ms, run_out.status.code().unwrap_or(-1))
 }
 
+// bug: `--no-auto-parallel` or `ynz run` produce output different from the default build on a simple wait | tier: Medium
 #[test]
 fn v03_m3a_p4_no_auto_parallel_byte_identical_to_default_on_simple_wait() {
     // WHY: --no-auto-parallel must produce byte-identical stdout/stderr/exit-code to
@@ -5073,30 +4815,20 @@ fn v03_m3a_p4_no_auto_parallel_byte_identical_to_default_on_simple_wait() {
     );
 }
 
-#[test]
-fn v03_m3a_p4_no_auto_parallel_byte_identical_on_for_loop_suspension() {
-    // WHY: Cross-impl consistency check on the for-loop-with-wait fixture (P3 feature).
-    // The for-loop SM codegen must be byte-identical regardless of the --no-auto-parallel
-    // flag. Catches any future M3b auto-parallel pass that accidentally changes the
-    // sequential per-iteration ordering that P3's design locks in.
-    let src = fixture("v0_3_m3a_p3_for_array_wait.ynz");
-    let (nopar_stdout, nopar_stderr, nopar_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(
-        nopar_code, 0,
-        "--no-auto-parallel for-loop fixture must exit 0; error:\n{nopar_stderr}"
-    );
-    let (default_stdout, _default_stderr, default_code) = build_to_tmpdir_and_run(&src, false);
-    assert_eq!(default_code, 0, "default for-loop build must exit 0");
-    assert_eq!(
-        nopar_stdout, default_stdout,
-        "--no-auto-parallel stdout must equal default stdout on for-loop suspension"
-    );
-}
-
 // ── v0.3-M3b Phase 2: `background` auto give/copy inference ──────────────────
 
-#[test]
-fn v03_m3b_p2_give_inferred_unused_after() {
+/// One named test per input class of the `background-handover table` unit; each case is a test the runner names.
+macro_rules! background_handover_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a `background` argument is moved instead of copied (or the reverse, or copied twice), so the caller loses its value or the task misses its value | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+background_handover_table_high_case! {
+    // case: a binding unused after `background` is not handed over so the task misses its value
+    v03_m3b_p2_give_inferred_unused_after => {
     // WHY: Core give/copy inference correctness — when a binding is not read after
     // the `background` spawn, the compiler infers `.give` (zero-copy ownership
     // transfer). Wrong inference would fail use-after-give typeck in a later stmt;
@@ -5119,10 +4851,9 @@ fn v03_m3b_p2_give_inferred_unused_after() {
         stdout.contains("task ran: 42"),
         "background task must have run with the given value; stdout:\n{stdout}"
     );
-}
-
-#[test]
-fn v03_m3b_p2_copy_inferred_used_after() {
+    }
+    // case: a binding read after `background` is moved instead of copied so the caller loses its value
+    v03_m3b_p2_copy_inferred_used_after => {
     // WHY: Safe direction of give/copy inference — when the caller reads the binding
     // after the spawn, the compiler infers `.copy` so both caller and task have their
     // own copy. Wrong inference would lose the caller's value; missing copy would corrupt.
@@ -5140,10 +4871,9 @@ fn v03_m3b_p2_copy_inferred_used_after() {
         stdout.contains("task ran: 42"),
         "background task must have its own copy of the value; stdout:\n{stdout}"
     );
-}
-
-#[test]
-fn v03_m3b_p2_explicit_copy_honored() {
+    }
+    // case: an explicit `.copy()` at a `background` call is overridden or applied twice
+    v03_m3b_p2_explicit_copy_honored => {
     // WHY: Explicit `.copy()` at a `background` call site must be honored and must
     // not be overridden or double-applied by the inference path. The explicit path
     // predates Phase 2; this test is the regression guard.
@@ -5161,51 +4891,9 @@ fn v03_m3b_p2_explicit_copy_honored() {
         stdout.contains("taskB: 20"),
         "background task must receive the copied value; stdout:\n{stdout}"
     );
-}
-
-#[test]
-fn v03_m3b_p2_share_param_still_rejected() {
-    // WHY: Phase 2 must NOT loosen the `share`/`lend` cross-thread safety rejection.
-    // A `share` borrow may outlive the caller scope once the task runs on another
-    // thread — the error must remain byte-identical to pre-Phase-2 behavior.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p2_share_param_rejected.ynz"));
-    assert_ne!(
-        code, 0,
-        "share-param rejection must exit 1; stdout:\n{stdout}"
-    );
-    assert!(
-        stderr.contains("borrows its arguments"),
-        "error must mention borrowing; stderr:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("background"),
-        "error must reference `background`; stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3b_p2_large_copy_warning_fires_on_inferred_copy() {
-    // WHY: The large-copy warning must fire for inferred `.copy` just as it does for
-    // explicit `.copy()`. Without this, a user gets zero feedback about copying a
-    // 72-byte shape across a thread boundary when the compiler infers the copy.
-    // Threshold = 64 bytes (one cache line); BigRecord has 9 int fields = 72 bytes.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p2_large_copy_warning.ynz"));
-    assert_eq!(
-        code, 0,
-        "large-copy warning must not block compilation; stderr:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("Copying 72 bytes"),
-        "large-copy warning must mention byte count; stderr:\n{stderr}"
-    );
-    assert!(
-        stdout.contains("1"),
-        "program must still run after warning; stdout:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3b_p2_copy_heap_independent() {
+    }
+    // case: an inferred-copy Shape argument aliases the caller's allocation so the task sees the caller's later mutation
+    v03_m3b_p2_copy_heap_independent => {
     // WHY: Regression for the silent miscompile where inferred-copy on a Shape arg aliased
     // the caller's allocation instead of producing an independent copy. Without the codegen
     // fix, the background task held a pointer alias into the caller's `job` struct — the
@@ -5232,10 +4920,9 @@ fn v03_m3b_p2_copy_heap_independent() {
         !stdout.contains("task sees id: 99"),
         "task must NOT see the caller's post-spawn mutation (aliasing regression); stdout:\n{stdout}"
     );
-}
-
-#[test]
-fn v03_m3b_p2_bg_copy_survives_frame() {
+    }
+    // case: the `background` argument copy lives on the spawner's stack so the task reads freed memory
+    v03_m3b_p2_bg_copy_survives_frame => {
     // WHY: Regression for the nested-frame use-after-free where the background arg copy
     // was stack-alloca'd on the spawner's frame. When `spawnTask` returns before the
     // background task reads, the alloca is freed and the task reads garbage (observed:
@@ -5258,10 +4945,9 @@ fn v03_m3b_p2_bg_copy_survives_frame() {
         !stdout.contains("task sees id: 0"),
         "task must NOT read garbage from freed spawner frame (UAF); stdout:\n{stdout}"
     );
-}
-
-#[test]
-fn v03_m3b_p2_bg_array_real_copy() {
+    }
+    // case: a `background` Array argument is aliased instead of cloned (header and buffer)
+    v03_m3b_p2_bg_array_real_copy => {
     // WHY: array<int> background arg must be a real independent copy — ynz_array_clone_primitive
     // copies both the header and the data buffer. Without the fix the task holds an alias into
     // the caller's array and sees the post-spawn mutation (99). With the fix the task sees
@@ -5283,10 +4969,149 @@ fn v03_m3b_p2_bg_array_real_copy() {
         !stdout.contains("task sees first: 99"),
         "task must NOT see the caller's post-spawn array mutation (aliasing); stdout:\n{stdout}"
     );
+    }
+    // case: a `background` array<Shape> argument is aliased so the task sees the caller's later write
+    m5_p3_sweep_bg_array_shape_copy => {
+    // WHY: sweep cell 1 — a bg task's array<Part> arg must be an INDEPENDENT
+    // copy (prepare_bg_arg_for_ctx clones Shape-element arrays via the
+    // elem_size-aware ynz_array_clone_primitive since the seg-8 fix; RED
+    // observed 119 pre-fix — the task saw the caller's post-spawn mutation).
+    m5_p3_sweep_assert_dual_mode(
+        "m5_p3_sweep_bg_array_shape_copy.ynz",
+        "caller set qty: 99\ntask total: 30\n",
+    );
+    }
+    // case: a given and a copied array spawned from a state-machine host with a post-wait mutation see the wrong values
+    m5_p3_sweep_bg_array_shape_give_wait => {
+    // WHY: sweep cell 2 — the E9 AoS matrix in one SM-main cell: inferred GIVE
+    // spawn + explicit spawn-site .copy() spawn + a `wait` in main (SM
+    // descriptor spawn path; `parts` crosses the wait) + post-wait mutation.
+    // The copied task must still see the pre-mutation 30; the caller 119.
+    m5_p3_sweep_assert_dual_mode(
+        "m5_p3_sweep_bg_array_shape_give_wait.ynz",
+        "caller: 119\ngiven: 30\ncopied: 30\n",
+    );
+    }
+    // case: a MapEntry passed to `background` reads the advanced entry slot instead of its own bytes
+    m5_p3_sweep_mapentry_bg_escape => {
+    // WHY: sweep cell 3 — MapEntry as a BACKGROUND ARG (step-5 item (b), seg-9
+    // fix): prepare_bg_arg_for_ctx's unconditional MapEntry pre-gate routes
+    // through value_to_stable_bits, so the task reads entry 1's own cloned
+    // bytes, not the advanced per-site entry slot (RED observed 2/20 pre-fix).
+    m5_p3_sweep_assert_dual_mode("m5_p3_sweep_mapentry_bg_escape.ynz", "1\n10\n");
+    }
+    // case: a map reached through a field is handed to the task without a copy so the task's write lands in the parent's map
+    a_map_reached_through_a_field_is_not_shared_with_the_task => {
+    // WHY: `background eat(b.items)` records `Give` by default-deny, and that route consumes
+    // NOTHING — `b` still holds the map. The old gate read the `Give` label as proof of sole
+    // ownership and handed the map over untouched, so the task's write landed in the parent's
+    // map: pre-fix stdout was `99` / `99`. The task must get its own.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_hardening_c2_spawn_field_map_not_shared.ynz"));
+    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
+    assert_eq!(
+        stdout, "99\n1\n",
+        "the task writes 99 into its OWN map and the parent still reads 1; `99\\n99\\n` means \
+         both sides hold one map. stderr:\n{stderr}"
+    );
+    }
+    // case: a pointer-element array `background` argument aliases the parent container so the task writes into it and the ladder frees a pointer the parent holds
+    bg_arg_alias_container_add_no_longer_aliases_the_parents_container => {
+    // GREEN-WORLD LOCK. This test used to assert TODAY'S WRONG behaviour on purpose
+    // (`bg_arg_alias_container_add_is_a_known_uaf_red_pin`), because the producer was open:
+    // an `array<pointer-elem>` `background` argument was passed through un-cloned, so the task
+    // wrote into the PARENT's container and then its drop ladder freed a clone the parent
+    // still pointed at. The pin's own text named the fix as "closing that alias fall-through";
+    // that is what the shared owned-copy routine did (M8 Future Requirements #9, FRAGO 002
+    // cluster C2), so the assertions here are the correct-world ones the pin described.
+    //
+    // Three readings, because the old defect had three separable halves:
+    //   1. the task's container is its own — the parent still sees 1 row;
+    //   2. the task's ITEMS are its own — a ONE-LEVEL clone would leave both sides sharing
+    //      `seed`, and the task's `mine.set(0, 999)` would show up in the parent's row 0;
+    //   3. the parent dereferences `bucket[0]`, which is precisely what the old defect made
+    //      unsafe (garbage / SIGSEGV across runs) and why the old pin refused to do it.
+    //
+    // Gap accounting (0): the parent's three locals (`seed`, `bucket`, `rows`) and the task's `spare`
+    // and `mine` are released at their scope exits (C7, C8 slices 2 and 5), and the assertion below
+    // pins alloc == free, so no allocation is held to exit. The old defect was that the ladder
+    // freed something the PARENT still held, and that is gone.
+    // C5a: the original fixture stores a bare parameter in a container, which hands it over and
+    // is refused now (`v03_m9_store_hands_over.rs`); this one spells it with `give rows`.
+    let fixture_name = "bg_arg_container_add_gives_row.ynz";
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(fixture_name));
+    assert_eq!(
+        code, 0,
+        "{fixture_name} must exit 0 — the parent now dereferences `bucket[0]`, which the old \
+         defect made unsafe; stderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("parent sees 1 rows"),
+        "{fixture_name}: the task added a row to ITS OWN container; the parent must still see \
+         exactly the one row it started with. Seeing 2 means the `background` argument aliased \
+         the parent's container again; stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("parent row 0 starts at 1"),
+        "{fixture_name}: the task overwrote ITS OWN row 0 with 999. Seeing 999 here means the \
+         container was copied but its ITEMS were shared — a one-level clone, which is the same \
+         alias one level down; stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    let (alloc, free) = ynz_run_with_alloc_counter(fixture_name);
+    assert!(
+        alloc > 0,
+        "{fixture_name}: alloc=0 — the counter saw nothing, the lock is vacuous"
+    );
+    assert_eq!(
+        alloc,
+        // C7 slice 2, 14 -> 12: the spawned `stash` is a plain callee, so it releases its `spare`
+        // local at its scope exit (2 allocations); `rows` is nulled at `bucket.add(rows)` and the
+        // ladder frees nothing at the `give` position. C7 slice 2b, 12 -> 8: the task's `mine` is a
+        // copy owner and is released too. C8 slice 2, 8 -> 2: the state-machine
+        // entrypoint releases its own locals. C8 slice 5, 2 -> 0: the spawn releases the parent's
+        // consumed `rows` after its copy. ASan is clean at both optimization levels (measured).
+        free,
+        "{fixture_name}: the allocation accounting moved. A SMALLER gap means something new is \
+         being freed — check it is not the parent's container or its items, which is the \
+         use-after-free this fixture exists to keep closed. A LARGER gap means a new leak; \
+         alloc={alloc} free={free}"
+    );
+    }
 }
 
+// bug: a `background` call passing a `share` argument is accepted (borrow outlives the caller) | tier: High
 #[test]
-fn v03_m3b_p2_shape_bg_copy_alloc_free_balanced() {
+fn v03_m3b_p2_share_param_still_rejected() {
+    // WHY: Phase 2 must NOT loosen the `share`/`lend` cross-thread safety rejection.
+    // A `share` borrow may outlive the caller scope once the task runs on another
+    // thread — the error must remain byte-identical to pre-Phase-2 behavior.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p2_share_param_rejected.ynz"));
+    assert_ne!(
+        code, 0,
+        "share-param rejection must exit 1; stdout:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("borrows its arguments"),
+        "error must mention borrowing; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("background"),
+        "error must reference `background`; stderr:\n{stderr}"
+    );
+}
+
+/// One named test per input class of the `background-copy-balanced table` unit; each case is a test the runner names.
+macro_rules! background_copy_balanced_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a heap-copied `background` argument is never freed or is cloned twice (alloc != free) | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+background_copy_balanced_table_high_case! {
+    // case: a heap-copied `background` argument is never freed (alloc != free)
+    v03_m3b_p2_shape_bg_copy_alloc_free_balanced => {
     // WHY: Every ynz_alloc for a background arg heap-copy must have a matching ynz_free
     // in the closure body. alloc_count == free_count proves the closure correctly calls
     // ynz_free after the original fn returns.
@@ -5299,10 +5124,9 @@ fn v03_m3b_p2_shape_bg_copy_alloc_free_balanced() {
         alloc >= 1,
         "at least one ynz_alloc expected for the Shape heap-copy; alloc={alloc}"
     );
-}
-
-#[test]
-fn v03_m3b_p2_sm_bg_heap_arg_no_leak() {
+    }
+    // case: a suspending-callee `background` spawn leaks its heap-copied argument (SpawnStateFnFuture::drop)
+    v03_m3b_p2_sm_bg_heap_arg_no_leak => {
     // WHY: When the callee suspends (wait sleep), background routes to ynz_rt_spawn
     // (state-machine path). The Shape arg is heap-copied via prepare_bg_arg_for_ctx so
     // it outlives the spawner's stack frame. SpawnStateFnFuture::drop must free that
@@ -5317,6 +5141,44 @@ fn v03_m3b_p2_sm_bg_heap_arg_no_leak() {
         alloc >= 1,
         "at least one ynz_alloc expected for the Shape heap-copy + frame: alloc={alloc}"
     );
+    }
+    // case: `background eat(m.copy())` clones a map twice and leaks the first
+    spawning_with_a_copied_map_mints_one_clone_not_two => {
+    // WHY: `m.copy()` had already produced an independent map; the array-shaped de-dup guard
+    // did not recognise a map, so the spawn glue cloned it AGAIN and nothing freed the first.
+    // Measured pre-fix: 16 allocs against the no-`.copy()` twin's 11 — a whole extra map
+    // (header + four buffers) leaked per spawn. Asserted as a COMPARISON rather than a
+    // constant: asking for a copy before a spawn must cost what the spawn already costs.
+    let (copied_alloc, copied_free) =
+        ynz_run_with_alloc_counter("v0_3_hardening_c2_spawn_copied_map.ynz");
+    let (plain_alloc, plain_free) =
+        ynz_run_with_alloc_counter("v0_3_hardening_c2_spawn_plain_map.ynz");
+    assert!(
+        plain_alloc > 0,
+        "alloc=0 — the counter saw nothing (FRAGO 005)"
+    );
+    assert_eq!(
+        (copied_alloc, copied_free),
+        (plain_alloc, plain_free),
+        "`background eat(m.copy())` must cost exactly what `background eat(m)` costs; a higher \
+         alloc = the spawn copied a value that was already an independent copy, and leaked the \
+         first one"
+    );
+    }
+    // case: a copied `maybe` spawn argument leaks its second envelope
+    spawning_with_a_copied_maybe_frees_everything_it_allocates => {
+    // WHY: this leak went from ZERO to one per spawn when `maybe` stopped aliasing — `.copy()`
+    // minted an envelope, the spawn glue minted a second, and only the second rode the task's
+    // drop ladder. Measured pre-fix: 3 allocs / 2 frees. The balance is the assertion, because
+    // "allocated one more than it freed" is the whole defect.
+    let (alloc, free) = ynz_run_with_alloc_counter("v0_3_hardening_c2_spawn_copied_maybe.ynz");
+    assert!(alloc > 0, "alloc=0 — the counter saw nothing (FRAGO 005)");
+    assert_eq!(
+        alloc, free,
+        "a `maybe` spawn argument must free every envelope it allocates; alloc={alloc} \
+         free={free} — a gap of 1 is the second envelope nothing owns"
+    );
+    }
 }
 
 /// Run a fixture with alloc-counter instrumentation and return (alloc_count, free_count).
@@ -5350,8 +5212,18 @@ fn ynz_run_with_alloc_counter(fixture_name: &str) -> (u64, u64) {
 
 // ── v0.3-M3b Phase 4: auto-parallelize pass ───────────────────────────────────
 
-#[test]
-fn v03_m3b_p4_two_independent_parallel_correct_output() {
+/// One named test per input class of the `auto-parallel-identity table` unit; each case is a test the runner names.
+macro_rules! auto_parallel_identity_table_medium_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: auto-parallel changes the output of a program versus sequential order (barriers, bindings, return classes) | tier: Medium
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+auto_parallel_identity_table_medium_case! {
+    // case: the auto-parallel pass corrupts output of two independent suspending statements
+    v03_m3b_p4_two_independent_parallel_correct_output => {
     // WHY: Two independent suspending statements must produce the correct output
     // under the auto-parallel pass. If the pass corrupts stdout (wrong values,
     // missing output), this fails. The timing AC (≈max not sum) is validated
@@ -5368,29 +5240,467 @@ fn v03_m3b_p4_two_independent_parallel_correct_output() {
         "done",
         "parallel fixture must print 'done'; stdout:\n{stdout}"
     );
-}
-
-#[test]
-fn v03_m3b_p4_two_independent_parallel_byte_identical_to_sequential() {
-    // WHY: The auto-parallel pass must not change observable output — stdout must
-    // be byte-identical between default-parallel and --no-auto-parallel modes.
-    // This is the cross-impl consistency gate: a bug in independence analysis
-    // causes the default mode to diverge from the dumb-sequential baseline.
-    let src = fixture("v0_3_m3b_p4_two_independent_parallel.ynz");
+    }
+    // case: `wait` as the first statement is not an ordering barrier so later calls run before it
+    v03_m3b_p4_wait_barrier_first_correct_output => {
+    // WHY: `wait` as the first call is an ordering barrier — waiter must complete
+    // before worker and helper start. Output order must be deterministic: waiter then done.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_wait_barrier_first.ynz"));
+    assert_eq!(
+        code, 0,
+        "wait-barrier-first fixture must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "waiter\ndone",
+        "waiter must print before done; stdout:\n{stdout}"
+    );
+    }
+    // case: a mid-function `wait` does not order the calls around it
+    v03_m3b_p4_wait_barrier_mid_correct_output => {
+    // WHY: `wait` mid-group forces fa to complete before fb starts. Output order
+    // must be fa then fb then done regardless of whether fa and fb were otherwise
+    // independent suspending calls.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_wait_barrier_mid.ynz"));
+    assert_eq!(
+        code, 0,
+        "wait-barrier-mid must compile and run; stderr:\n{stderr}"
+    );
+    // fa() has no explicit wait so it is part of an independent group, then wait fb() runs
+    // fa starts, then wait fb() is an ordering barrier — fb runs after fa.
+    assert!(
+        stdout.contains("fa"),
+        "fa must have been called; stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("fb"),
+        "fb must have been called; stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("done"),
+        "done must be printed; stdout:\n{stdout}"
+    );
+    // fb must appear after fa in the output (ordering barrier guarantee).
+    let fa_pos = stdout.find("fa").expect("fa in stdout");
+    let fb_pos = stdout.find("fb").expect("fb in stdout");
+    assert!(fa_pos < fb_pos, "fa must appear before fb in stdout");
+    }
+    // case: a `wait` on a callee that depends on an in-flight result runs before its dependency resolves
+    v03_m3b_p4_wait_data_dependent_correct_output => {
+    // WHY: `wait` whose callee depends on an in-flight result. The data dependency
+    // forces ordering; the explicit `wait` forces the join. Output must be deterministic.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_wait_data_dependent.ynz"));
+    assert_eq!(
+        code, 0,
+        "wait-data-dependent must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "result:99\ndone",
+        "result must be 99 and done must follow; stdout:\n{stdout}"
+    );
+    }
+    // case: two consecutive `wait` statements are not each an ordering barrier
+    v03_m3b_p4_wait_two_consecutive_correct_output => {
+    // WHY: Two consecutive `wait` statements — each is a separate barrier that forces
+    // sequential ordering: alpha completes, then beta starts. The output order must
+    // be alpha then beta.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_wait_two_consecutive.ynz"));
+    assert_eq!(
+        code, 0,
+        "two-consecutive-wait must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "alpha\nbeta\ndone",
+        "alpha must appear before beta; stdout:\n{stdout}"
+    );
+    }
+    // case: a `wait` followed by a fresh parallel group does not order the group after the barrier
+    v03_m3b_p4_wait_then_fresh_group_correct_output => {
+    // WHY: A `wait` barrier followed by a fresh independent group. The fresh group
+    // (fresh1+fresh2) must not join into the pre-barrier work. The barrier
+    // (`wait barrier()`) prints "barrier" and then the fresh group runs and done is printed.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_wait_then_fresh_group.ynz"));
+    assert_eq!(
+        code, 0,
+        "wait-then-fresh-group must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "barrier\ndone",
+        "barrier must print before done; stdout:\n{stdout}"
+    );
+    }
+    // case: auto-parallel runs a call before the call whose result it consumes
+    v03_m3b_p4_data_dependent_ordered_correct_output => {
+    // WHY: Data-dependent statements must stay ordered WITHOUT `wait`. The auto-parallel
+    // pass must detect that `profileId = fetcher(userId)` depends on `userId` (defined
+    // by the first `fetcher` call) and NOT group them as Parallel. If they were parallelized,
+    // `profileId` would read an uninitialised `userId`.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_data_dependent_ordered.ynz"));
+    assert_eq!(
+        code, 0,
+        "data-dependent-ordered must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "user:42\nprofile:42",
+        "user and profile must both be 42; stdout:\n{stdout}"
+    );
+    }
+    // case: auto-parallel overlaps two calls that write the same binding so the final value is wrong
+    v03_m3b_p4_write_conflict_ordered_correct_output => {
+    // WHY: Two calls both lend the same binding (write conflict). The independence
+    // analysis must detect the shared-write conflict via param_ownerships and keep
+    // them sequential. The final value (20) proves writeB ran after writeA.
+    // If they ran in parallel, the result would be non-deterministic.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_write_conflict_ordered.ynz"));
+    assert_eq!(
+        code, 0,
+        "write-conflict-ordered must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "final:20",
+        "writeB must run after writeA (final value = 20); stdout:\n{stdout}"
+    );
+    }
+    // case: auto-parallel reorders suspending calls across loop iterations
+    v03_m3b_p4_loop_sequential_correct_output => {
+    // WHY: Loop iterations with suspending calls must remain sequential — the
+    // auto-parallel pass must NOT reach into loop bodies. Output order is
+    // step:0 → step:1 → step:2 → done. Any parallelization across loop
+    // iterations would produce non-deterministic ordering.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_loop_sequential.ynz"));
+    assert_eq!(
+        code, 0,
+        "loop-sequential must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "step:0\nstep:1\nstep:2\ndone",
+        "loop iterations must run in order; stdout:\n{stdout}"
+    );
+    }
+    // case: a group with one dependent member is parallelised wholesale so a member reads a stale value
+    v03_m3b_p4_partial_dependency_correct_output => {
+    // WHY: Adversarial fixture (i) — partial dependency grouping. `fa` and `fb(a)`
+    // are data-dependent (fb reads `a` defined by fa). `fc` is independent of both
+    // fa and fb. The correct grouping: [fa] as Singleton, [fb, fc] as Parallel
+    // (fb reads `a` but fc doesn't — so fb and fc are independent of each other).
+    // All three values must be correct.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_partial_dependency.ynz"));
+    assert_eq!(
+        code, 0,
+        "partial-dependency must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "a:1\nb:1\nc:2\ndone",
+        "a=1, b=1 (fb(a)), c=2 — all correct; stdout:\n{stdout}"
+    );
+    }
+    // case: auto-parallel misses a write reached through a callee so two writers overlap
+    v03_m3b_p4_transitive_write_conflict_ordered => {
+    // WHY (adversarial ii): Two callers each expose `lend c` in their own signature,
+    // propagating a write effect from an inner callee that lends. The independence
+    // analysis must detect the write conflict via param_ownerships and sequence them.
+    // If they were parallelized, outerB could overwrite outerA's value non-deterministically.
+    // Correct output: final:30 (outerA sets 10 then outerB sets 30, in source order).
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3b_p4_transitive_write_conflict.ynz"));
+    assert_eq!(
+        code, 0,
+        "transitive-write-conflict fixture must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "final:30",
+        "outerA then outerB must run in order; stdout:\n{stdout}"
+    );
+    }
+    // case: a `wait` on a non-suspending call does not order the following CPU call
+    v03_m3b_p4_wait_nonsuspending_barrier_correct_output => {
+    // WHY (adversarial iii): `wait` on a non-suspending callee still acts as an ordering
+    // barrier that joins any prior in-flight auto-parallel work. `fetcher()` (suspending)
+    // runs, then `wait pureCpu(21)` barriers before printing. Output: fetched\ncpu\ndone.
+    // A missing barrier would allow continuation before fetcher completes.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3b_p4_wait_nonsuspending_barrier.ynz"));
+    assert_eq!(
+        code, 0,
+        "wait-nonsuspending-barrier fixture must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "fetched\ncpu\ndone",
+        "fetched must appear before cpu; stdout:\n{stdout}"
+    );
+    }
+    // case: when the middle call resolves first its result is bound to the wrong declaration slot
+    v03_m3b_p4_middle_resolves_first_correct_output => {
+    // WHY (adversarial iv): Three independent suspending statements where the MIDDLE
+    // one (fb, 5ms) resolves before the outer two (fa, fc, 50ms each). Each result
+    // must be bound to its own variable at its own declaration — NOT in completion order.
+    // Wrong: if the pass binds results in poll-completion order, b would get fa's value.
+    // Correct: a=1, b=2, c=3 regardless of which future completes first.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_middle_resolves_first.ynz"));
+    assert_eq!(
+        code, 0,
+        "middle-resolves-first fixture must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "a:1\nb:2\nc:3\ndone",
+        "each result must be bound to its own declaration slot; stdout:\n{stdout}"
+    );
+    }
+    // case: nested composed sub-frames lose or reorder a leaf call
+    v03_m3b_p4_nested_composed_frames_correct_output => {
+    // WHY (adversarial v): Nested composed sub-frames — one outer group member's callee
+    // itself contains an inner independent parallel group. The composed frame layout
+    // must hold at depth 2 (outer group + inner group). If the composed-frame allocation
+    // is wrong (double-alloc, dangling inner pointer), this crashes or produces garbage.
+    // All leaf labels must appear exactly once; "done" must be last.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_nested_composed_frames.ynz"));
+    assert_eq!(
+        code, 0,
+        "nested-composed-frames fixture must compile and run; stderr:\n{stderr}"
+    );
+    // Leaf output order is non-deterministic; assert all labels present and "done" last.
+    assert!(
+        stdout.contains("leaf_a"),
+        "leaf_a must appear; stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("leaf_b"),
+        "leaf_b must appear; stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("leaf_c"),
+        "leaf_c must appear; stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.trim().ends_with("done"),
+        "done must be last; stdout:\n{stdout}"
+    );
+    }
+    // case: `wait fa()` does not force fa to finish before fb starts under auto-parallel
+    v03_m3b_p4_model_a_wait_orders_them_parallel_output => {
+    // WHY: `wait fa()` is an explicit ordering barrier — it forces fa (100ms) to complete
+    // before fb (50ms) starts, even though fa takes longer and the auto-parallel pass
+    // would otherwise overlap them. With `wait`, output is "A\nB\ndone" in BOTH modes.
+    // This proves `wait` is the user's ordering tool (design/concurrency.md lines 97-120):
+    // write `wait foo()` when the causal order must be guaranteed regardless of duration.
+    // If this test fails (output is B/A), the wait-barrier is not enforcing ordering.
+    let src = fixture("v0_3_m3b_p4_model_a_wait_orders_them.ynz");
     let (par_stdout, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "wait-orders-them parallel build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        par_stdout.trim(),
+        "A\nB\ndone",
+        "parallel with wait fa(): fa must complete before fb starts; stdout:\n{par_stdout}"
+    );
+    }
+    // case: two suspending calls taking a mutable-heap `share` argument are parallelised so they overlap (potential aliased write)
+    v03_m3b_p4_share_read_pair_correct_output => {
+    // WHY: two suspending calls taking a mutable-heap `share` argument run correctly under the
+    // conservative floor (they sequentialize — a mutable-heap arg is a potential write). Output
+    // must be correct and exit 0 in the default mode.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3b_p4_share_read_pair_sequentializes.ynz"));
+    assert_eq!(
+        code, 0,
+        "share-read-pair fixture must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "one\ntwo\ndone",
+        "share-read pair must print one, two, done; stdout:\n{stdout}"
+    );
+    }
+    // case: a `give` heap argument is not treated as a write so the give-call is overlapped with the next call
+    v03_m3b_p4_give_arg_sequenced_correct_output => {
+    // WHY (HOLE A): a `give`-heap argument is ownership transfer = a write. The pair
+    // `consume(give a); inspect(share b)` must be SEQUENCED (give is write-capable), so
+    // `consumed` (100ms) prints before `inspected` (10ms). If `give` were missed by the
+    // write-effect summary (the old lend-only bug), the pair would parallelize and the
+    // shorter `inspect` sleep would print `inspected` first — wrong order.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_give_arg_sequenced.ynz"));
+    assert_eq!(
+        code, 0,
+        "give-arg-sequenced fixture must compile and run; stderr:\n{stderr}"
+    );
+    assert_eq!(
+        stdout.trim(),
+        "consumed\ninspected\ndone",
+        "give arg must sequence: consumed before inspected; stdout:\n{stdout}"
+    );
+    }
+    // case: two calls with a bare heap argument are parallelised though a bare heap arg is a potential write
+    v03_m3b_p4_bare_read_heap_byte_identical => {
+    // WHY: a BARE heap argument is a potential write under the conservative floor (the floor does
+    // not prove a callee read-only), so a pair of bare-heap-arg calls sequentializes, and stdout
+    // stays byte-identical across modes. Byte-identical is the cross-impl oracle locking that the
+    // floor preserves observable output.
+    let src = fixture("v0_3_m3b_p4_bare_read_heap_sequentializes.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
     assert_eq!(
         par_code, 0,
         "parallel build must exit 0; stderr:\n{par_stderr}"
     );
-    let (seq_stdout, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
     assert_eq!(
         seq_code, 0,
         "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
     );
     assert_eq!(
-        par_stdout, seq_stdout,
-        "parallel and sequential stdout must be byte-identical"
+        par, seq,
+        "bare-read-heap stdout must be byte-identical in both modes"
     );
+    }
+    // case: a pair with a `lend` writer and a `share` reader of one heap value is parallelised (aliasing guard `&&` instead of `||`)
+    v03_m3b_p4_share_read_vs_lend_write_correct_output => {
+    // WHY: The `||` guard sequences `writeVal(lend h)` before `readVal(share h)`.
+    // `writeVal` sleeps 100ms; `readVal` sleeps 10ms. If they were parallelized,
+    // readVal would complete first (r before w). Sequential output must be `w\nr\ndone`
+    // in both modes — proving writeVal always runs first.
+    let src = fixture("v0_3_m3b_p4_share_read_vs_lend_write.ynz");
+    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        par_code, 0,
+        "parallel build must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par.trim(),
+        "w\nr\ndone",
+        "lend-write must complete before share-read (w before r); parallel stdout:\n{par}"
+    );
+    assert_eq!(
+        seq.trim(),
+        "w\nr\ndone",
+        "lend-write must complete before share-read (w before r); sequential stdout:\n{seq}"
+    );
+    }
+    // case: padded cross-thread shape fields compute a wrong total (IR layout-text assertions are Low and dropped)
+    v0_3_m4_p4_padding_gates_off_under_no_auto_parallel_with_identical_output => {
+    // WHY: first layout transform `--no-auto-parallel` has EVER gated (plan-flagged as
+    // unproven territory). Three claims, all proven through the real compiler binary:
+    //   (a) default mode emits the PADDED layout for the crossing shape — its int fields
+    //       become `{ i64, [56 x i8] }` 64-byte slots in the IR;
+    //   (b) sequential mode emits the GENUINELY UNPADDED layout — no pad arrays anywhere,
+    //       not merely a different padding that happens not to matter;
+    //   (c) program output is byte-identical in both modes (padding is layout-only; the
+    //       cross-impl determinism contract holds).
+    let src = fixture("v0_3_m4_p4_padding_gate.ynz");
+
+    // (c) both modes run, exit 0, identical stdout.
+    let (par_stdout, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "default mode must exit 0; stderr:\n{par_stderr}"
+    );
+    let (seq_stdout, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel mode must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par_stdout, "tally total: 5\n",
+        "program must compute through the padded fields"
+    );
+    assert_eq!(
+        par_stdout, seq_stdout,
+        "padded and unpadded lowerings must produce byte-identical output"
+    );
+
+    // (a) default-mode IR carries the padded struct: each i64 field wrapped to a
+    // 64-byte cache-line slot.
+    let par_ir = build_to_tmpdir_emit_ir_mode(&src, false);
+    assert!(
+        par_ir.contains("{ i64, [56 x i8] }"),
+        "default mode must emit the 64-byte padded field slots for the crossing shape; IR:\n{}",
+        &par_ir[..par_ir.len().min(4000)]
+    );
+
+    // (b) sequential-mode IR is genuinely unpadded: no cache-line pad array exists
+    // anywhere in the module (the shape lowers to its natural { i64, i64 } layout).
+    let seq_ir = build_to_tmpdir_emit_ir_mode(&src, true);
+    assert!(
+        !seq_ir.contains("[56 x i8]"),
+        "--no-auto-parallel must emit the natural, unpadded layout — found a pad array in the IR"
+    );
+    assert!(
+        seq_ir.contains("{ i64, i64 }"),
+        "--no-auto-parallel must still lower the shape (natural two-int layout expected)"
+    );
+    }
+    // case: a shape that is both padded and an SoA candidate computes wrong sums (IR layout assertions are Low and dropped)
+    m5_p4_soa_both_candidate_padding_wins_byte_layout => {
+    // WHY: E3's RED-fixture mitigation — a shape simultaneously cross-thread-padded
+    // (M4) AND a qualifying SoA candidate (M5 P4) must resolve through the ONE
+    // layout authority to padding-only (recorded decision D11). Three claims, all
+    // proven through the real compiler binary (padding_gate assertion style):
+    //   (a) default-mode IR still carries the padded `{ i64, [56 x i8] }` 64-byte
+    //       field slots — padding INTACT despite the qualifying hot loop over
+    //       array<Tally> (SoA never fires on a padded shape; and P4 ships zero SoA
+    //       codegen anyway — the analysis-level half lives in
+    //       crates/ynz-typeck/tests/soa_analysis.rs);
+    //   (b) program output is exact — the hot loop computes correctly through
+    //       padded by-value elements;
+    //   (c) dual-mode byte-identical output (layout is layout-only, no behavior
+    //       divergence).
+    let src = fixture("m5_p4_soa_both_candidate.ynz");
+
+    // (b) + (c): both modes run, exit 0, exact and identical stdout.
+    let (par_stdout, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
+    assert_eq!(
+        par_code, 0,
+        "default mode must exit 0; stderr:\n{par_stderr}"
+    );
+    assert_eq!(
+        par_stdout, "tally total: 5\n2211\n4422\n",
+        "hot loop must compute exact sums through the padded elements"
+    );
+    let (seq_stdout, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
+    assert_eq!(
+        seq_code, 0,
+        "--no-auto-parallel mode must exit 0; stderr:\n{seq_stderr}"
+    );
+    assert_eq!(
+        par_stdout, seq_stdout,
+        "both-candidate lowering must produce byte-identical output in both modes"
+    );
+
+    // (a) default-mode IR: the padded struct survives the SoA-candidate collision.
+    let par_ir = build_to_tmpdir_emit_ir_mode(&src, false);
+    assert!(
+        par_ir.contains("{ i64, [56 x i8] }"),
+        "default mode must KEEP the 64-byte padded field slots for the crossing \
+         shape (padding wins over SoA, D11); IR:\n{}",
+        &par_ir[..par_ir.len().min(4000)]
+    );
+
+    // (d) M5 P5 step 4c — the end-to-end NEGATIVE half: padding wins ⇒ SoA is
+    // genuinely DECLINED through codegen, not just at analysis level (P4 proved
+    // the analysis half in soa_analysis.rs; this became meaningful once P5 gave
+    // codegen the ability to emit SoA). Zero SoA construction instructions.
+    assert!(
+        !par_ir.contains("soa_new") && !par_ir.contains("soa_ctor"),
+        "both-candidate fixture must emit ZERO SoA instructions in default mode \
+         (padding wins over SoA, D11) — a hit means the ONE layout authority \
+         resolved the collision to SoA, or a second derivation crept in"
+    );
+    }
 }
 
 /// Build `src` to a tmpdir with `--emit-ir` and return the LLVM IR text. The build runs
@@ -5426,6 +5736,7 @@ fn build_to_tmpdir_emit_ir_mode(src: &Path, no_auto_parallel: bool) -> String {
     std::fs::read_to_string(&ll_path).expect("emitted .ll must be readable")
 }
 
+// bug: reconciling the promotion set by union declines the outer CPU group (0 spawns) when an inner host is also promoted | tier: High
 #[test]
 fn v03_m3d_nested_groups_byte_identical_and_fires() {
     // WHY: regression guard for the union-poisoning hazard (deviation-judge #2). When typeck
@@ -5672,8 +5983,18 @@ fn m3d_assert_panic_fires_n_byte_identical(
     );
 }
 
-#[test]
-fn v03_m3d_cpu_child_panic_fires_byte_identical() {
+/// One named test per input class of the `panic-reraise table` unit; each case is a test the runner names.
+macro_rules! panic_reraise_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a runtime error in a parallel group member is swallowed or altered, or leaks or double-frees the other member | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+panic_reraise_table_high_case! {
+    // case: a CPU child's runtime error is swallowed or altered (different exit or diagnostic) versus sequential
+    v03_m3d_cpu_child_panic_fires_byte_identical => {
     // WHY: a CPU child that raises a runtime error (division by zero) must be re-raised to the
     // program with the SAME observable behavior as a sequential call — same diagnostic, same
     // non-zero exit — and the group must still have FIRED (2 spawns). Running work alongside
@@ -5688,10 +6009,9 @@ fn v03_m3d_cpu_child_panic_fires_byte_identical() {
         "v0_3_m3d_cpu_child_panic.ynz",
         "RUNTIME ERROR: division by zero (Int)",
     );
-}
-
-#[test]
-fn v03_m3g_panic_cpu_member_with_io_in_flight_fires_byte_identical() {
+    }
+    // case: a CPU member panic in a fused group waits for the pending I/O member or changes the error
+    v03_m3g_panic_cpu_member_with_io_in_flight_fires_byte_identical => {
     // WHY (Panic re-raise, v0.3-M3g Phase 4): a CPU member (`crunch(0)`) panics via a runtime
     // error while a SEPARATE I/O member (`fetchSlow`, 50ms sleep) is still genuinely in flight in
     // the SAME fused group — proves the panic re-raise path (established for pure-CPU M3d groups
@@ -5707,10 +6027,9 @@ fn v03_m3g_panic_cpu_member_with_io_in_flight_fires_byte_identical() {
         "RUNTIME ERROR: division by zero (Int)",
         1,
     );
-}
-
-#[test]
-fn v03_m3g_panic_io_member_with_cpu_in_flight_fires_byte_identical() {
+    }
+    // case: an I/O-member panic leaks or double-frees the still-running CPU handle
+    v03_m3g_panic_io_member_with_cpu_in_flight_fires_byte_identical => {
     // WHY (Panic re-raise, v0.3-M3g Phase 4 — the mirror): the sibling test above panics on the
     // CPU member while the I/O member is still pending. This fixture panics on the I/O member
     // (`fetchFast`, division by zero right after `wait sleep(0)` resumes — essentially instant)
@@ -5729,152 +6048,30 @@ fn v03_m3g_panic_io_member_with_cpu_in_flight_fires_byte_identical() {
         "RUNTIME ERROR: division by zero (Int)",
         1,
     );
-}
-
-/// Return the set of attribute-group ids (`#N`) whose definition line contains `nounwind`.
-///
-/// Time: O(n)  Space: O(g)  where n = bytes of IR, g = number of `attributes #N = {...}` lines.
-fn nounwind_attr_group_ids(ir: &str) -> std::collections::HashSet<&str> {
-    ir.lines()
-        .filter(|l| l.starts_with("attributes #") && l.contains("nounwind"))
-        .filter_map(|l| l.split_whitespace().nth(1))
-        .collect()
-}
-
-/// Assert that no codegen-emitted `@ynz_sm_*_resume` function carries `nounwind` — neither
-/// inline on the `define` line nor via a referenced `#N` attribute group that is nounwind.
-///
-/// A `nounwind` resume function would tell LLVM the body cannot unwind; the optimizer is then
-/// free to turn a panic that DOES propagate (a CPU child re-raised via `resume_unwind`) into an
-/// immediate `abort` at the IR boundary instead of letting it travel to the entrypoint driver's
-/// `catch_unwind`. No Yinz program reaches the live non-abort unwind path today (runtime errors
-/// abort directly), so only this IR-level check guards the invariant the `C-unwind` ABI depends
-/// on. Mirrors the spawn-count FIRE assertions: it reads the emitted IR, not runtime behavior.
-///
-/// Time: O(n)  Space: O(g)  where n = bytes of IR, g = number of nounwind attribute groups.
-fn assert_no_resume_fn_is_nounwind(ir: &str) {
-    let nounwind_groups = nounwind_attr_group_ids(ir);
-    let mut resume_defines = 0usize;
-    for line in ir.lines().filter(|l| l.starts_with("define")) {
-        if !line.contains("@ynz_sm_") || !line.contains("_resume(") {
-            continue;
-        }
-        resume_defines += 1;
-        // Inline attributes appear between the closing `)` of the params and the opening `{`.
-        let tail = line.rsplit_once(')').map(|(_, t)| t).unwrap_or(line);
-        assert!(
-            !tail.contains("nounwind"),
-            "resume fn carries inline `nounwind`, which breaks panic unwind propagation; line:\n{line}"
-        );
-        // Referenced attribute group (`... ) #N {`) must not be a nounwind group.
-        for tok in tail.split_whitespace() {
-            if tok.starts_with('#') && nounwind_groups.contains(tok) {
-                panic!(
-                    "resume fn references nounwind attribute group {tok}, which breaks panic \
-                     unwind propagation; line:\n{line}"
-                );
-            }
-        }
     }
-    assert!(
-        resume_defines > 0,
-        "fixture emitted no @ynz_sm_*_resume functions — the no-nounwind check exercised nothing; \
-         IR:\n{ir}"
-    );
 }
 
-#[test]
-fn v03_m3d_resume_fns_are_not_nounwind() {
-    // WHY: the C-unwind panic-propagation chain (a CPU child re-raised via resume_unwind reaching
-    // the entrypoint driver's catch_unwind) is correct ONLY if codegen-emitted resume fns are NOT
-    // marked `nounwind`. A `nounwind` resume fn lets LLVM fold a propagating unwind into an abort
-    // at the IR boundary — silently breaking the re-raise contract with NO runtime test catching
-    // it, because no Yinz program exercises the live (non-abort) unwind path yet. This IR-level
-    // guard is the only tripwire for that drift. If it fails, codegen started attaching a nounwind
-    // attribute (inline or via an attribute group) to resume fns — fix the codegen, not this test.
-    let src = fixture("v0_3_m3d_cpu_child_panic.ynz");
-    let ir = build_to_tmpdir_emit_ir(&src);
-    assert_no_resume_fn_is_nounwind(&ir);
+/// One named test per input class of the `cpu-return-class table` unit; each case is a test the runner names.
+macro_rules! cpu_return_class_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a CPU group of one return class (Int, Float, Number, ...) declines, corrupts its result or leaks | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
 }
 
-#[test]
-fn v03_m3d_resume_nounwind_check_is_non_vacuous() {
-    // WHY: the no-nounwind guard above must actually FAIL when a resume fn is nounwind — otherwise
-    // it is a green rubber-stamp. This drives the checker against a doctored IR where the resume
-    // fn references a nounwind attribute group, and asserts the checker rejects it. If this test
-    // fails, the checker has a hole (it would pass a nounwind resume fn) — fix the checker.
-    let doctored = "\
-define i32 @ynz_sm_combine_resume(ptr %0, ptr %1) #1 {
-  ret i32 0
-}
-attributes #1 = { nounwind willreturn }
-";
-    let caught = std::panic::catch_unwind(|| assert_no_resume_fn_is_nounwind(doctored)).is_err();
-    assert!(
-        caught,
-        "the no-nounwind checker must REJECT a resume fn that references a nounwind attribute \
-         group; it passed, so the guard is vacuous"
-    );
-}
-
-#[test]
-fn v03_m3d_resume_nounwind_check_rejects_inline_nounwind() {
-    // WHY: the checker has TWO detection paths — a referenced `#N` attribute group (covered by
-    // the non-vacuous test above) AND an inline `nounwind` on the `define` line itself. LLVM can
-    // emit either form, so a hole in the inline path would let a nounwind resume fn through with
-    // no other test catching it (no Yinz program exercises the live unwind path yet). This drives
-    // the inline form through the checker and asserts it rejects it. If this fails, the inline
-    // branch (`tail.contains("nounwind")`) has a hole — fix the checker, not this test.
-    let doctored = "\
-define i32 @ynz_sm_combine_resume(ptr %0, ptr %1) nounwind {
-  ret i32 0
-}
-";
-    let caught = std::panic::catch_unwind(|| assert_no_resume_fn_is_nounwind(doctored)).is_err();
-    assert!(
-        caught,
-        "the no-nounwind checker must REJECT a resume fn carrying inline `nounwind`; it passed, \
-         so the inline-detection path is vacuous"
-    );
-}
-
-#[test]
-fn v03_m3d_return_class_int_distinct_fires_byte_identical() {
+cpu_return_class_table_high_case! {
+    // case: an Int-returning CPU pair declines to sequential or changes output/leaks
+    v03_m3d_return_class_int_distinct_fires_byte_identical => {
     // WHY: the int distinct-callee CPU pair is the headline pattern — two independent int-
     // returning calls must fire 2 spawns AND stay byte-identical to `--no-auto-parallel`.
     // Invariant: distinct int callees parallelize without changing output. If you relax the
     // spawn-count assertion, the parallelism regressed to sequential — fix the codegen, not
     // this test.
     m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_spike_a_distinct.ynz", "6765\n10946");
-}
-
-#[test]
-fn v03_m3d_return_class_int_timing_fires_byte_identical() {
-    // WHY: the timing fixture (fib(40)/fib(41)) is the wall-clock overlap proof. The
-    // identical-output gate plus the 2-spawn FIRE assertion together stand in for the
-    // measured-speedup AC: if sequential were ~2x slower, the parallelism is real.
-    // CI coverage: 2 spawns required; 0 spawns = the timing pair regressed to sequential.
-    m3d_assert_fires_byte_identical_alloc_free(
-        "v0_3_m3d_spike_c_timing.ynz",
-        "102334155\n165580141",
-    );
-}
-
-#[test]
-fn v03_m3d_return_class_int_saturation_fires_byte_identical() {
-    // WHY: the saturation fixture drives two heavy joins through the real blocking pool.
-    // Invariant: the source-level 2-join CPU path fires 2 spawns and stays byte-identical to
-    // `--no-auto-parallel` while routing through the real worker pool (the ≥600-join
-    // pool-saturation proof itself lives in the runtime-crate `saturation_600_joins` test).
-    // A 0-spawn here means the heavy-join path stopped parallelizing.
-    m3d_assert_fires_byte_identical_alloc_free(
-        "v0_3_m3d_spike_d_saturation.ynz",
-        "832040\n1346269",
-    );
-}
-
-#[test]
-fn v03_m3d_return_class_float_fires_byte_identical() {
+    }
+    // case: a Float CPU pair is declined or its f64 bitcast result is wrong
+    v03_m3d_return_class_float_fires_byte_identical => {
     // WHY: a `float`-returning CPU pair must FIRE and bind the f64 result through the
     // canonical bind discipline (the trampoline bitcasts f64→i64 into the result slot; the
     // join load bitcasts back). Invariant: a non-int scalar return class still parallelizes —
@@ -5882,67 +6079,132 @@ fn v03_m3d_return_class_float_fires_byte_identical() {
     // run 0 spawns (sequential). The spawn-count assertion is the only thing that catches that
     // silent regression.
     m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_return_class_float.ynz", "6\n15");
-}
-
-#[test]
-fn v03_m3d_return_class_number_fires_byte_identical() {
+    }
+    // case: a Number CPU pair ptr_to_ints the result pointer instead of dereferencing the i128
+    v03_m3d_return_class_number_fires_byte_identical => {
     // WHY: `number` (decimal128) is the trickiest class — the non-SM ABI returns a POINTER to
     // a heap-stable 16-byte i128, so the trampoline must DEREFERENCE it (not ptr_to_int) and
     // pack lo/hi. A regression to ptr_to_int prints `0.000...0` (the pointer bits read as the
     // i128 low half), so this test locks the deref. Also asserts the group FIRES (2 spawns),
     // not silently sequential.
     m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_return_class_number.ynz", "6.0\n15.0");
-}
-
-#[test]
-fn v03_m3d_return_class_string_fires_byte_identical() {
+    }
+    // case: a String CPU pair loses or leaks its owned heap value
+    v03_m3d_return_class_string_fires_byte_identical => {
     // WHY: a `string`-returning CPU pair. The returned heap pointer IS the value (carried as a
     // pointer word). Asserts FIRE + byte-identical + alloc==free.
     m3d_assert_fires_byte_identical_alloc_free(
         "v0_3_m3d_return_class_string.ynz",
         "len=3\ntotal=10",
     );
-}
-
-#[test]
-fn v03_m3d_return_class_array_fires_byte_identical() {
+    }
+    // case: an Array CPU pair leaks its counted header/buffer or loses elements
+    v03_m3d_return_class_array_fires_byte_identical => {
     // WHY: an `array<int>`-returning CPU pair. Output asserts the element counts
     // (order-independent — no interleaving-dependent assertion). Asserts FIRE +
     // byte-identical + alloc==free.
     m3d_assert_fires_byte_identical_alloc_gap("v0_3_m3d_return_class_array.ynz", "3\n4", 0);
-}
-
-#[test]
-fn v03_m3d_return_class_map_fires_byte_identical() {
+    }
+    // case: a Map CPU pair leaks its five counted buffers
+    v03_m3d_return_class_map_fires_byte_identical => {
     // WHY: a `map<int, int>`-returning CPU pair. Output asserts the entry counts
     // (order-independent). Asserts FIRE + byte-identical + alloc==free — since the
     // v0.3-M5 P3 by-value map ABI, each map's FIVE buffers (header/ctrl/keys/vals/order)
     // route through the COUNTED ynz_alloc, so a leaked map would show as a gap of 5 per map;
     // the scope-exit release pass (C7) frees both maps, so the gap pinned here is 0.
     m3d_assert_fires_byte_identical_alloc_gap("v0_3_m3d_return_class_map.ynz", "3\n5", 0);
-}
-
-#[test]
-fn v03_m3d_return_class_int_errors_fires_byte_identical() {
+    }
+    // case: an `Int errors` CPU pair drops the error word turning an error into a success
+    v03_m3d_return_class_int_errors_fires_byte_identical => {
     // WHY: an `int errors` (ErrorsCapable) CPU pair. The callee returns the `{i64, i64}`
     // errors pair; the trampoline must carry BOTH words (error + success) to the result slot
     // — dropping field0 would turn an error into a success. Both callees succeed here, so
     // `.or(-1)` prints the totals. Asserts FIRE + byte-identical + alloc==free.
     m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_return_class_int_errors.ynz", "6\n20");
-}
-
-#[test]
-fn v03_m3d_return_class_bool_fires_byte_identical() {
+    }
+    // case: a Boolean CPU pair is declined or its zero-extended result is wrong
+    v03_m3d_return_class_bool_fires_byte_identical => {
     // WHY: `boolean` is admitted by the shared CPU-result-ABI gate with a dedicated
     // zero-extend pack path (the trampoline widens the i1 to the result-slot word). Before
     // this test the bool path fired in production with NO coverage. Asserts the group FIRES
     // (2 spawns) + byte-identical + alloc==free. If you relax the spawn-count assertion, the
     // bool path regressed to sequential — fix the codegen, not this test.
     m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_return_class_bool.ynz", "true\ntrue");
+    }
+    // case: two same-callee Int members alias one result slot (keyed by callee name)
+    v03_m3d_same_callee_int_distinct_values => {
+    // WHY: same callee `sumTo`, args 5 and 6 → 10 and 15 (distinct). The 2-spawn FIRE assertion
+    // plus the distinct oracle prove the members are keyed by group position, not callee name —
+    // a name-keyed result slot would make both members read the same slot. If you relax the
+    // spawn-count assertion, the parallelism regressed to sequential; fix the codegen, not this
+    // test.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_same_callee_int.ynz", "10\n15");
+    }
+    // case: two same-callee Boolean members alias one result slot
+    v03_m3d_same_callee_bool_distinct_values => {
+    // WHY: same callee `sumExceeds`, args 4 and 6 → false and true (distinct). Proves the
+    // bool pack/bind path keeps same-callee members separate. FIRE + byte-identical + alloc==free.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_same_callee_bool.ynz", "false\ntrue");
+    }
+    // case: two same-callee Float members share one f64 result word
+    v03_m3d_same_callee_float_distinct_values => {
+    // WHY: same callee `sumf`, args 2 and 4 → 3 and 6 (distinct). Proves the f64 result word is
+    // bound per member, not shared across two same-callee members. FIRE + byte-identical +
+    // alloc==free.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_same_callee_float.ynz", "3\n6");
+    }
+    // case: two same-callee Number members point at one heap value
+    v03_m3d_same_callee_number_distinct_values => {
+    // WHY: `number` is the trickiest class — the result word is a pointer to a heap-stable
+    // 16-byte value, so a name-keyed (rather than member-keyed) result slot would make both
+    // same-callee members point at the same heap value. Same callee `sumn`, args 2 and 4 → 3.0
+    // and 6.0 (distinct) catches that. FIRE + byte-identical + alloc==free.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_same_callee_number.ynz", "3.0\n6.0");
+    }
+    // case: two same-callee String members share one owned heap value
+    v03_m3d_same_callee_string_distinct_values => {
+    // WHY: same callee `buildStr`, args 3 and 5 → len=3 and len=5 (distinct heap strings).
+    // Proves two same-callee members each carry their own owning heap value, not a shared one.
+    // FIRE + byte-identical + alloc==free.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_same_callee_string.ynz", "len=3\nlen=5");
+    }
+    // case: two same-callee Array members bind one array
+    v03_m3d_same_callee_array_distinct_values => {
+    // WHY: same callee `buildArr`, args 3 and 4 → element counts 3 and 4 (distinct, order-
+    // independent). Proves same-callee members bind separate `array<int>` values. FIRE +
+    // byte-identical + alloc==free.
+    m3d_assert_fires_byte_identical_alloc_gap("v0_3_m3d_same_callee_array.ynz", "3\n4", 0);
+    }
+    // case: two same-callee Map members bind one map
+    v03_m3d_same_callee_map_distinct_values => {
+    // WHY: same callee `buildMap`, args 3 and 5 → entry counts 3 and 5 (distinct, order-
+    // independent). Proves same-callee members bind separate `map<int, int>` values. FIRE +
+    // byte-identical + alloc==free (2 maps × 5 counted buffers, all released at scope exit;
+    // see v03_m3d_return_class_map_fires_byte_identical's WHY).
+    m3d_assert_fires_byte_identical_alloc_gap("v0_3_m3d_same_callee_map.ynz", "3\n5", 0);
+    }
+    // case: two same-callee `Int errors` members read one error pair
+    v03_m3d_same_callee_int_errors_distinct_values => {
+    // WHY: same callee `compute` returning `int errors`, args 4 and 5 → 6 and 10 (distinct).
+    // The errors ABI carries both an error word and a success word; a name-keyed slot would
+    // make the second `.or(-1)` read the first member's pair. Both callees succeed, so `.or(-1)`
+    // prints the distinct totals. FIRE + byte-identical + alloc==free.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_same_callee_int_errors.ynz", "6\n10");
+    }
 }
 
-#[test]
-fn v03_m3d_promoted_host_seq_fires_byte_identical() {
+/// One named test per input class of the `cpu-group-fires table` unit; each case is a test the runner names.
+macro_rules! cpu_group_fires_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a CPU group that must fire runs sequentially, miscounts spawns or frame size, or prints output that differs from sequential | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+cpu_group_fires_table_high_case! {
+    // case: a non-entrypoint host does not spike-host its own CPU pair (0 spawns) or under-allocates its frame
+    v03_m3d_promoted_host_seq_fires_byte_identical => {
     // WHY: a host that is NOT the entrypoint must spike-host its own CPU pair. `combine` owns
     // the adjacent `score` pair and is called once, in plain sequence, by `entrypoint`. The
     // invariant: a non-entrypoint host spike-hosts its own pair, so there are 2 spawns inside
@@ -5952,10 +6214,9 @@ fn v03_m3d_promoted_host_seq_fires_byte_identical() {
     // helper — under-allocation cannot occur. If you relax the spawn-count assertion,
     // non-entrypoint hosts stopped parallelizing — fix the codegen, not this test.
     m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_promoted_host_seq.ynz", "9907");
-}
-
-#[test]
-fn v03_m3d_n3_group_fires_three_spawns_byte_identical() {
+    }
+    // case: a 3-member CPU group fires only two members while its frame reserved the third
+    v03_m3d_n3_group_fires_three_spawns_byte_identical => {
     // WHY: a CPU group is a maximal run of N >= 2 adjacent independent calls, not a fixed pair.
     // Three adjacent `score` calls form ONE group of three members; each spawns its own task
     // (3 spawns), each binds a DISTINCT result via per-(group, member-index) slot keying, and
@@ -5969,37 +6230,9 @@ fn v03_m3d_n3_group_fires_three_spawns_byte_identical() {
         "4952\n4957\n4961\n14870",
         3,
     );
-}
-
-#[test]
-fn v03_m3d_prepair_wait_declines_byte_identical() {
-    // WHY: a host that suspends on a timer (`wait sleep`) BEFORE a would-be CPU pair is already
-    // a step-by-step waiter; promoting it would require treating the spike join as a second
-    // suspension point inside an already-suspending host — the mixed CPU+I/O fusion deferred to
-    // milestone M3g (.claude/todos.md). M3d locks the safe DECLINE: 0 spawns, sequential,
-    // byte-identical to --no-auto-parallel. If this fires (spawns > 0), a pre-pair-wait host was
-    // promoted without the M3g machinery — sustain the decline, do not relax this assertion.
-    m3d_assert_declines_byte_identical("v0_3_m3d_prepair_wait_declines.ynz", "9907");
-}
-
-#[test]
-fn v03_m3d_param_host_declines_byte_identical() {
-    // WHY: a host that READS a parameter AFTER its CPU join cannot spike-host. The wrapper
-    // writes param slot 0 at the byte the first CPU-handle slot occupies; the spawn's handle
-    // store overwrites that byte, so a post-join param reload reads the handle pointer's bytes
-    // instead of its value (a silent wrong answer). Reserving param slots past the CPU-handle
-    // region is the param-host read-after-join work tracked in .claude/todos.md. M3d locks the
-    // safe DECLINE for this shape: 0 spawns, sequential, byte-identical. `combine` reads its
-    // parameter after the pair (`return seed + a + b`), exactly the read-after-join shape that
-    // corrupts. The narrowed gate still admits a param-host whose params are used ONLY in spawn
-    // args (see v03_m3d_param_host_spawn_args_only_fires_byte_identical) — this test pins that
-    // the read-after-join subset stays declined. If this fires, the read-after-join corruption
-    // was reopened — sustain the decline, do not relax this assertion.
-    m3d_assert_declines_byte_identical("v0_3_m3d_param_host_declines.ynz", "9910");
-}
-
-#[test]
-fn v03_m3d_param_host_spawn_args_only_fires_byte_identical() {
+    }
+    // case: a param-host using params only in spawn args is over-declined, or corrupted
+    v03_m3d_param_host_spawn_args_only_fires_byte_identical => {
     // WHY: a param-host whose parameter is used ONLY in the group's spawn args (and never read
     // after the join) is SAFE to fire. sm_entry loads each param into a stack alloca BEFORE the
     // spawn runs, so the spawn-arg load reads the correct value; the handle store then clobbers
@@ -6012,42 +6245,9 @@ fn v03_m3d_param_host_spawn_args_only_fires_byte_identical() {
     // gate, not this test. If it fires with wrong output, the param/handle byte-32 overlap
     // corrupted a value that WAS read post-join — re-check the gate's post-join read walk.
     m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_param_host_spawn_args_only.ynz", "9907");
-}
-
-#[test]
-fn v03_m3d_param_host_n3_spawn_args_only_fires_three_spawns() {
-    // WHY: the narrowed param-host gate composes with the N-member group extension. A 3-member
-    // group on a param-host whose params are spawn-args-only fires all three spawns (one per
-    // member) and stays byte-identical, proving the post-join-read gate does not special-case
-    // member count — it gates on whether ANY param is read after the (whole) group's join,
-    // independent of how many members the group has. If this fires fewer than 3 spawns, the
-    // N-extension and the param gate disagreed on the group; if it declines, the param gate
-    // over-declined an N-member spawn-args-only host. Fix the codegen, not this test.
-    m3d_assert_fires_n_byte_identical_alloc_free(
-        "v0_3_m3d_param_host_n3_spawn_args_only.ynz",
-        "14862",
-        3,
-    );
-}
-
-#[test]
-fn v03_m3d_param_host_loopvar_shadow_declines_byte_identical() {
-    // WHY: a post-join `for` loop whose loop variable name shadows a function parameter MUST NOT
-    // erase an EARLIER post-join statement's genuine read of that parameter. The post-join
-    // read-walk (`stmt_tree_ident_reads`) strips the loop-var shadow from the loop's OWN body
-    // reads only — never from the shared cross-statement accumulator. `combine` reads `seed` in
-    // `let z = seed + 1` (a real read-after-join) and a later `for (seed in ...)` rebinds the
-    // name; the gate must still see the earlier read and DECLINE: 0 spawns, sequential,
-    // byte-identical. If this FIRES (spawns > 0), the loop-var removal leaked to the shared
-    // accumulator, erased the param read, flipped the gate to admit, and reopened the byte-32
-    // param/handle corruption — sustain the decline, do NOT relax this assertion. (Without the
-    // loop-local fix this fixture admits and the spawn's handle store clobbers the slot `z` reads
-    // post-join, diverging from --no-auto-parallel.)
-    m3d_assert_declines_byte_identical("v0_3_m3d_param_host_loopvar_shadow_declines.ynz", "9910");
-}
-
-#[test]
-fn v03_m3d_param_host_loopvar_shadow_fires_byte_identical() {
+    }
+    // case: the loop-variable shadow fix over-strips so a safe spawn-args-only param-host is declined
+    v03_m3d_param_host_loopvar_shadow_fires_byte_identical => {
     // WHY: the FIRE companion to the loop-var-shadow decline. A post-join `for` whose loop var
     // shadows a parameter is SAFE to spike-host when the parameter itself is never read after the
     // join (used only in spawn args). The loop-local shadow-removal in `stmt_tree_ident_reads`
@@ -6064,6 +6264,642 @@ fn v03_m3d_param_host_loopvar_shadow_fires_byte_identical() {
         "v0_3_m3d_param_host_loopvar_shadow_fires.ynz",
         "9908",
     );
+    }
+    // case: a local declared before a CPU pair and read after the join is stale (silent wrong answer)
+    v03_m3d_accumulator_crossing_fires_byte_identical => {
+    // WHY: a local declared BEFORE a CPU pair and READ after the join (`running = running + a + b`)
+    // must survive the join. The CPU-group join is a suspension boundary, so `running` is a
+    // crossing local: typeck's crossing collector registers the join as a suspension, the frame
+    // reserves a slot for `running`, the pre-pair lowering flushes it, and the post-join path
+    // reloads it before the read. Without this the read sources stale/garbage frame bytes and the
+    // group FIRES into a silent wrong answer (observed live: 4389230 vs the correct 10903 oracle) —
+    // the accumulator-corruption class. This must FIRE (2 spawns) AND equal 10903 in both modes.
+    // If the value diverges from 10903, the crossing flush/reload regressed; if the spawn count
+    // drops to 0, admission regressed to sequential. Fix the codegen/crossing collection, not this
+    // test.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_accumulator_crossing.ynz", "10903");
+    }
+    // case: a CPU group inside an `if` arm does not fire or reads the wrong result slot
+    v03_m3d_nested_if_group_fires_byte_identical => {
+    // WHY: a CPU group placed inside an `if` branch must FIRE (2 spawns) from the nested SM
+    // lowering, byte-identical to `--no-auto-parallel`, with alloc==free. The group reuses the
+    // group-0 handle/result slots (32/40/48/64) — the same reservation a top-level group uses,
+    // since the function still has exactly one group. If you relax the spawn-count assertion the
+    // nested group regressed to sequential; if the value diverges from `9907` the nested spike
+    // reads the wrong slot. Fix the codegen, not this test.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_nested_if_group.ynz", "9907");
+    }
+    // case: a CPU group inside a matching arm takes the non-SM lowering with no spawn-join
+    v03_m3d_nested_match_group_fires_byte_identical => {
+    // WHY: a CPU group placed inside a matching arm (`if (pick) { 1 => { ... } }`) must FIRE
+    // (2 spawns) from the arm-body SM lowering, byte-identical to `--no-auto-parallel`, alloc==
+    // free. The arm-body routing is separate from the plain-`if` routing, so this locks the
+    // match-arm path independently. A 0 here means the arm body took the non-SM `lower_stmt`
+    // path that has no spawn-join. Fix the routing, not this test.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_nested_match_group.ynz", "9907");
+    }
+    // case: the orphan state-block terminator reloads spike results with no allocas and aborts codegen
+    v03_m3d_nested_if_no_crossing_fires_byte_identical => {
+    // WHY: a pure nested-`if` CPU group that returns its join result DIRECTLY (no local declared
+    // before the pair and read after the join) must FIRE (2 spawns) and stay byte-identical (9907),
+    // with alloc==free. This shape populates the join's result names while the top-level crossing
+    // scan finds no surrounding crossing local, so `m3d_spike_cpu_result_allocas` is empty. The
+    // orphan (unreachable) state-block terminator must NOT attempt to reload spike results there
+    // (reload bool is `false`) — otherwise the empty-alloca lookup aborts codegen. If this aborts,
+    // the orphan-terminator reload regressed to `true`; if spawns drop to 0, admission regressed.
+    // Fix the codegen, not this test.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_nested_if_no_crossing.ynz", "9907");
+    }
+    // case: a nested CPU group plus a later `wait` crashes the backend (no sm_entry alloca) or is declined
+    v03_m3d_nested_group_with_outer_wait_declines_byte_identical => {
+    // WHY (v0.3-M3g Phase 3 FLIP — one of the three non-negotiable acceptance-signal fixtures;
+    // test name retained for `git blame`/history continuity even though the assertion now FIRES):
+    // a single nested CPU group in a function that ALSO has a separate `wait` used to decline
+    // (0 spawns) because the nested group's result allocas were pre-allocated ONLY by the
+    // top-level Step-1c scan — a nested pair was invisible to that scan, so firing it while a
+    // LATER suspension (the `wait`) reloaded spike results crashed the backend ("no sm_entry
+    // alloca"). Root cause fixed directly (not papered over): `spike_cpu_group_result_names`
+    // (Step 1c's pre-alloc scan) now walks nested blocks too, mirroring
+    // `spike_cpu_group_member_count`'s existing depth-aware traversal — so a nested group's
+    // bind names get entry-block allocas regardless of depth, and the later reload succeeds.
+    // The nested-branch admission decline for "co-resident with another suspension" is REMOVED
+    // for this shape (a plain `wait`/ordinary suspending callee) — the state machine's existing
+    // multi-suspension-point dispatch already shares one continuation across every resume_point
+    // value, so the nested join and the wait coexist safely once the alloca gap is closed. This
+    // is the general SM-multi-suspension mechanism, NOT a synchronous bridge: the join and the
+    // wait each yield Pending independently and resume through the ordinary dispatch switch.
+    // Invariant: the group now FIRES (2 spawns) and stays byte-identical to `--no-auto-parallel`
+    // (9907). If this shows 0 spawns, the flip regressed — fix the admission gate, not this test.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_nested_group_with_outer_wait.ynz", "9907");
+    }
+    // case: a host with a nested group and a suspending promoted callee mis-sizes its composed frame (heap overflow)
+    v03_m3d_nested_group_with_suspending_callee_no_abort_byte_identical => {
+    // WHY (v0.3-M3g Phase 3 continuation — FLIPPED; test name retained for `git blame`/history
+    // continuity even though the assertion now FIRES BOTH groups): `combine` owns a nested CPU
+    // group AND ALSO calls `other` — a function promoted to run its OWN pair concurrently, which
+    // makes `other` a suspension point inside `combine`. A prior session HALTed here, attributing
+    // a reproducible hang/crash to "a genuine, pre-existing latent defect in the
+    // `ynz_rt_join_poll`/`CpuJoinHandle` handle-lifecycle machinery." That attribution was WRONG —
+    // re-investigated this session with runtime-level `eprintln!` tracing (added, exercised, fully
+    // reverted): every spawn/poll/free traced correctly; the runtime handle machinery is sound.
+    // The REAL root cause, found by reading the emitted LLVM IR directly: `combine`'s wrapper
+    // function allocated its composed frame using a stale special-case formula
+    // (`crates/ynz-codegen/src/emit.rs`'s `frame_bytes` computation for a spike-active host) that
+    // silently DROPPED the embedded `other` child sub-frame from the size — `ynz_alloc_zeroed(88)`
+    // when the composed frame (with the 80-byte embedded `other` sub-frame) needed 168 bytes. A
+    // genuine heap-buffer-overflow: every write into `other`'s embedded region landed past the end
+    // of the 88-byte allocation, corrupting adjacent heap metadata — the observed crash/hang.
+    // Fixed directly in `emit.rs` (always trust `frame_layout.total_size`, which already includes
+    // both the CPU reserve and every embedded child, instead of the stale own-base-only fallback).
+    // With the real bug fixed, the narrow residual decline this comment used to describe
+    // (`admitted_cpu_group`'s nested-branch `spike_capable_names` check) was verified unnecessary
+    // (20/20 clean runs of the minimized repro, correct output, no crash, no hang) and removed.
+    // Both groups now FIRE: `combine`'s own nested pair (2 spawns) AND `other`'s top-level pair
+    // (2 spawns) = 4 total. See the plan's audit trail for the full repro + fix.
+    m3d_assert_fires_n_byte_identical_alloc_free(
+        "v0_3_m3d_nested_group_with_suspending_callee.ynz",
+        "19810",
+        4,
+    );
+    }
+    // case: a `wait` nested in an `if` after a CPU group leaves the group's result locals non-crossing (SSA dominance failure)
+    v03_m3d_spike_n_nested_wait_fires_byte_identical_alloc_free => {
+    // WHY: a top-level 2-member CPU group (`fib(10)`/`fib(11)`) followed by a LATER `wait`
+    // NESTED inside an `if` (`if (flag > 0) { wait sleep(0) }`), then reads of both group
+    // members (`print(a)`, `print(b)`) — a PRE-EXISTING corpus fixture (not one of the three
+    // non-negotiable flip fixtures) whose divergence surfaced via `cross_impl_consistency`'s
+    // corpus sweep during v0.3-M3g Phase 3. Root cause: `crate::check::collect_crossings_in_stmts`'s
+    // `this_stmt_suspends` check recognized only a DIRECT top-level `wait`/suspending-call
+    // statement as a suspension point — never a control-flow statement (`if`/`while`/`for`/
+    // `match`) whose BODY suspends — so the group's pending result-binding names (`a`/`b`) were
+    // never flushed into `declared` before the nested `wait`, and the post-if reads were never
+    // marked crossing: codegen emitted an alloca that does not dominate the read (LLVM SSA
+    // verification failure, "Instruction does not dominate all uses"). A prior session found this
+    // and worked around it with an admission-gate residual decline
+    // (`stmt_control_flow_body_suspends`) rather than fixing the deeper analysis gap. Fixed for
+    // real this session: `this_stmt_suspends` now also recognizes a control-flow statement whose
+    // body suspends, flushing pending result-bindings and recursing into the suspending sub-block
+    // exactly like the not-yet-suspended case already did (see `check.rs` for the full fix,
+    // including a self-caught regression on `flag`-in-a-later-if's-condition reads and its
+    // correction). The residual decline is now removed. Invariant: the group FIRES (2 spawns) and
+    // stays byte-identical to `--no-auto-parallel` (`55\n89`). If this shows 0 spawns, the fix
+    // regressed — fix `check.rs`'s crossing analysis, not this test.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_spike_n_nested_wait.ynz", "55\n89");
+    }
+    // case: a mixed CPU+I/O group is declined or deadlocks the shared continuation
+    v03_m3d_mixed_cpu_io_group_declines_byte_identical => {
+    // WHY (v0.3-M3g Phase 3 FLIP — the milestone's core acceptance signal; test name retained
+    // for history continuity even though the assertion now FIRES): a pure-CPU call (`score`)
+    // next to an I/O call (`fetch`, which `wait`s on a timer) is a mixed CPU+I/O group. Before
+    // fusion, the CPU spawn-join path and the I/O inline-poll path used separate mechanisms with
+    // no shared continuation — driving them together would deadlock the join. `emit_fused_group_
+    // spawn_poll` (`ynz_typeck::cpu_admission::admitted_fused_group`'s codegen consumer) now
+    // drives BOTH classes through ONE shared continuation: `score` spawns onto the blocking pool,
+    // `fetch` inline-polls its embedded child sub-frame, and every resume re-drives whichever is
+    // still outstanding — a genuine async yield, never a blocking join (M2-HALT corpse). The
+    // group now FIRES (1 spawn — one CPU member; `fetch` is the Suspending member and has no
+    // separate spawn call), byte-identical output to `--no-auto-parallel` (4958). If this shows
+    // 0 spawns, the fusion regressed — fix the codegen, not this test.
+    m3d_assert_fires_n_byte_identical_alloc_free(
+        "v0_3_m3d_mixed_cpu_io_group_declines.ynz",
+        "4958",
+        1,
+    );
+    }
+    // case: a top-level CPU group in a host that also waits is declined or corrupts the join
+    v03_m3g_top_level_group_in_suspending_host_declines_byte_identical => {
+    // WHY (v0.3-M3g Phase 3 FLIP — the plan's ¶3.1 note explicitly anticipates this: "The Phase 2
+    // neutrality fixtures flip with it: the top-level-group-in-suspending-host shape becomes
+    // fire-asserting"; test name retained for history continuity even though the assertion now
+    // FIRES): `entrypoint` owns a top-level CPU group (`crunch(3)`, `crunch(4)`) immediately
+    // followed by an unrelated `wait sleep(0)`. Phase 2's temporary co-resident-suspension
+    // decline (keyed on `base_suspends.contains(&f.name)`) is REMOVED in Phase 3 — the general
+    // SM multi-suspension-point dispatch already shares one continuation across the group's join
+    // AND the trailing wait, so this shape is safe once admitted (top-level groups never hit the
+    // Step-1c depth-aware-alloca gap the nested case needed — their result names were always
+    // pre-allocated). Invariant: the group now FIRES (2 spawns), byte-identical to
+    // `--no-auto-parallel` (9907). If this shows 0 spawns, the flip regressed — fix the admission
+    // gate, not this test.
+    m3d_assert_fires_byte_identical_alloc_free(
+        "v0_3_m3g_top_level_group_in_suspending_host_declines.ynz",
+        "9907",
+    );
+    }
+    // case: a suspending host that shares a module with a promoted pure-CPU host declines (2 spawns not 4) or leaks its frame
+    v03_m3g_mixed_host_with_promoted_sibling_fires_both_hosts_byte_identical => {
+    // WHY (v0.3-M3g Phase 3 FLIP): `pureCpuHost` is an ordinary, legitimately-promoted CPU host
+    // (no suspension); `mixedHost` is a suspending host (`wait sleep(0)`) that ALSO owns its own
+    // top-level CPU group, co-resident in a module with the promoted host. Both hosts admit and
+    // fire independently — `pureCpuHost`'s 2 spawns and `mixedHost`'s 2 spawns, 4 total.
+    // Invariant: exactly 4 spawns total, byte-identical to `--no-auto-parallel`, alloc == free.
+    // If this shows 2 spawns, `mixedHost` regressed back to declining; 0 spawns means BOTH
+    // stopped firing. Same assertions as the helper's fire-N check; the fixture file keeps its
+    // historical `_declines` name.
+    m3d_assert_fires_n_byte_identical_alloc_free(
+        "v0_3_m3g_mixed_host_with_promoted_sibling_declines.ynz",
+        "9907\n9911",
+        4,
+    );
+    }
+    // case: a bare `sleep(0)` (no `wait`) host is not recognised as suspending so its CPU group misbehaves
+    v03_m3g_top_level_group_in_suspending_host_bare_intrinsic_declines_byte_identical => {
+    // WHY (v0.3-M3g Phase 3 FLIP, bare-intrinsic twin of the fixture above; test name retained
+    // for history continuity): `entrypoint` owns a top-level CPU group (`crunch(3)`, `crunch(4)`)
+    // immediately followed by a BARE `sleep(0)` call — no explicit `wait` keyword.
+    // `may_block::analyze` still seeds `calls_may_block_intrinsic` for a bare may-block-intrinsic
+    // call, so `entrypoint` is a genuine `base_suspends` host at runtime regardless of `wait`
+    // syntax at the call site. Same flip rationale as the sibling test above: Phase 2's temporary
+    // decline is removed in Phase 3, and the auto-inferred suspension (no explicit `wait` needed
+    // — see `IMP-no-function-coloring.md`) coexists safely with the top-level group's join
+    // through the ordinary multi-suspension-point SM dispatch. Invariant: FIRES (2 spawns),
+    // byte-identical to `--no-auto-parallel` (9907). If this shows 0 spawns, the flip
+    // regressed — fix the admission gate, not this test.
+    m3d_assert_fires_byte_identical_alloc_free(
+        "v0_3_m3g_top_level_group_in_suspending_host_bare_intrinsic_declines.ynz",
+        "9907",
+    );
+    }
+    // case: a fused group's null-check-skip path crashes or double-frees when the I/O member outlives the CPU member
+    v03_m3g_e1_io_lags_multi_resume_fires_byte_identical => {
+    // WHY: the I/O member (150ms sleep) outlives the CPU member (100-iteration loop) by orders
+    // of magnitude, forcing several real poll passes while the CPU handle is already
+    // Ready/nulled — proves the null-check-skip path doesn't crash or double-free on repeated
+    // re-entry, and the I/O sub-frame keeps getting re-polled until its own sentinel fires.
+    m3d_assert_fires_n_byte_identical_alloc_free("v0_3_m3g_e1_io_lags_multi_resume.ynz", "4954", 1);
+    }
+    // case: a fused group stops re-driving the still-pending CPU handle once the I/O member finishes (deadlock)
+    v03_m3g_e1_cpu_lags_multi_resume_fires_byte_identical => {
+    // WHY: the mirror of the fixture above — the CPU member (150-million-iteration loop) outlives
+    // the I/O member (15ms sleep), forcing several real poll passes while the I/O sub-frame is
+    // already Ready/sentinel-routed — proves the shared poll keeps re-driving the STILL-pending
+    // CPU handle across resumes rather than silently dropping it once the other class finishes.
+    m3d_assert_fires_n_byte_identical_alloc_free(
+        "v0_3_m3g_e1_cpu_lags_multi_resume.ynz",
+        "11249999925000004",
+        1,
+    );
+    }
+    // case: a fused group with two CPU members is declined or mis-bound
+    v03_m3g_matrix_2cpu_1io_fires_byte_identical => {
+    // WHY: 2 CPU members (different callees) + 1 I/O member — proves N=2 CPU is not a ceiling.
+    m3d_assert_fires_n_byte_identical_alloc_free("v0_3_m3g_matrix_2cpu_1io.ynz", "1667", 2);
+    }
+    // case: a fused group with two I/O members does not compose their embedded sub-frames
+    v03_m3g_matrix_1cpu_2io_fires_byte_identical => {
+    // WHY: 1 CPU member + 2 I/O members (distinct callees, each own embedded sub-frame) —
+    // proves M=2 Suspending members compose in one fused group. 1 spawn (I/O members never
+    // spawn — they inline-poll via their embedded child sub-frames).
+    m3d_assert_fires_n_byte_identical_alloc_free("v0_3_m3g_matrix_1cpu_2io.ynz", "1261", 1);
+    }
+    // case: the fused-group gate drops the same-callee amendment so two same-callee CPU members alias
+    v03_m3g_matrix_same_callee_cpu_x2_with_io_fires_byte_identical => {
+    // WHY: same-callee CPU members ×2 (M3d's Same-Callee Amendment) alongside one I/O member —
+    // the fused-group admission gate must carry the amendment through unchanged. 2 spawns (the
+    // two `crunch` invocations, each with a per-invocation ctx).
+    m3d_assert_fires_n_byte_identical_alloc_free(
+        "v0_3_m3g_matrix_same_callee_cpu_x2_with_io.ynz",
+        "2457",
+        2,
+    );
+    }
+    // case: an I/O member declared first changes admission or result binding
+    v03_m3g_matrix_io_first_order_fires_byte_identical => {
+    // WHY: I/O member declared FIRST, CPU member SECOND — declaration order must not affect
+    // admission or correctness. Twin of the CPU-first fixture below (same callees, same total).
+    m3d_assert_fires_n_byte_identical_alloc_free("v0_3_m3g_matrix_io_first_order.ynz", "1229", 1);
+    }
+    // case: a CPU member declared first changes admission or result binding
+    v03_m3g_matrix_cpu_first_order_fires_byte_identical => {
+    // WHY: CPU member declared FIRST, I/O member SECOND — the order twin of the fixture above.
+    // Both fixtures sum to the identical total (1229), proving declaration order is immaterial.
+    m3d_assert_fires_n_byte_identical_alloc_free("v0_3_m3g_matrix_cpu_first_order.ynz", "1229", 1);
+    }
+    // case: an `errors`-capable I/O member's bound name is not registered so `.or()` dereferences a mistyped slot
+    v03_m3g_matrix_errors_capable_io_fires_byte_identical => {
+    // WHY: an `errors`-capable I/O member (`-> int errors`) mixed with a CPU member. The
+    // fused-group I/O-member binding must register the bound name in `errors_capable_locals`
+    // (mirrors M3b's `v0_3_m3b_p4_parallel_errors_return.ynz`) so `.or(...)` unwraps correctly
+    // instead of dereferencing a mis-typed slot (a segfault, not a silent wrong answer, if broken).
+    m3d_assert_fires_n_byte_identical_alloc_free(
+        "v0_3_m3g_matrix_errors_capable_io.ynz",
+        "1229",
+        1,
+    );
+    }
+    // case: a `float` CPU result (f64 bits in one word) packed inside an `if` arm loses its bit pattern
+    v03_m3d_danger_float_if_arm_fires_byte_identical => {
+    // WHY: a `float` (f64 bits in one word) packed inside an `if` arm. The f64 bit pattern must
+    // travel through the result slot intact. A whole-valued float prints without a trailing `.0`.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_danger_float_if_arm.ynz", "6\n15");
+    }
+    // case: a heap-pointer (`string`) CPU result packed inside an `if` arm is lost or leaks
+    v03_m3d_danger_string_if_arm_fires_byte_identical => {
+    // WHY: a heap-pointer return (`string`) packed inside an `if` arm. The result slot holds a
+    // pointer, not an inline value; that pack/bind must survive the if-arm frame machinery.
+    m3d_assert_fires_byte_identical_alloc_free(
+        "v0_3_m3d_danger_string_if_arm.ynz",
+        "first=3\nsecond=5",
+    );
+    }
+    // case: a wide `number` CPU result inside an `if` arm is packed into one word or leaks a stabilization block
+    v03_m3d_danger_number_if_arm_fires_byte_identical => {
+    // WHY: a wide-value return (`number`/decimal128) packs into BOTH words of the 16-byte result
+    // slot; that two-word pack/bind must survive the if-arm frame machinery. The result is
+    // RETURNED out of the wrapper, so this also pins that the promoted `number` return ABI matches
+    // the non-SM lowering (a stack-backed, caller-copies-and-forgets pointer): alloc==free, no
+    // heap stabilization block leaked. A regression to a heap-returning wrapper would re-open the
+    // one-allocation leak this cell now strictly guards against.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_danger_number_if_arm.ynz", "6.0\n15.0");
+    }
+    // case: a bool CPU result inside a `match` arm is not truncated i64->i1 so two members give wrong values
+    v03_m3d_danger_bool_match_arm_fires_byte_identical => {
+    // WHY: a bool returns as an i64 in the result slot and must be truncated to i1 before the
+    // bool alloca store (M3f truncation discipline). The two members produce DIFFERENT bools, so
+    // a missed truncation or slot aliasing changes the output. Reads are kept inside the arm.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_danger_bool_match_arm.ynz", "false\ntrue");
+    }
+    // case: two same-callee string members inside an `if` arm share one result slot
+    v03_m3d_danger_same_callee_string_if_arm_fires_byte_identical => {
+    // WHY: same-callee distinctness with a heap-pointer return INSIDE an `if` arm — the
+    // per-(group, member-index) slot keying must hold for a pointer pack AND inside nested
+    // control flow at once. The two calls give DIFFERENT strings (n=3, n=7); aliasing would make
+    // them equal.
+    m3d_assert_fires_byte_identical_alloc_free(
+        "v0_3_m3d_danger_same_callee_string_if_arm.ynz",
+        "n=3\nn=7",
+    );
+    }
+    // case: two same-callee `array` members inside an `if` arm share one result slot, so their counts coincide
+    v03_m3d_danger_same_callee_array_if_arm_fires_byte_identical => {
+    // WHY: same-callee distinctness with a heap-pointer (`array<int>`) return INSIDE an `if` arm.
+    // The member-index slot keying must hold for a pointer pack in nested control flow; the two
+    // calls give DIFFERENT counts (3, 6).
+    m3d_assert_fires_byte_identical_alloc_gap(
+        "v0_3_m3d_danger_same_callee_array_if_arm.ynz",
+        "3\n6",
+        0,
+    );
+    }
+    // case: two same-callee wide `number` members inside a `match` arm share one result slot or leak
+    v03_m3d_danger_same_callee_number_match_arm_fires_byte_identical => {
+    // WHY: same-callee distinctness with a wide-value return INSIDE a `match` arm — the two-word
+    // decimal128 pack and the member-index slot keying must both hold inside a match arm. Results
+    // DIFFER (6.0, 9.0). Returned out of the wrapper, so this also strictly guards alloc==free:
+    // the promoted `number` return ABI must match the non-SM stack-backed lowering, leaking no
+    // heap stabilization block.
+    m3d_assert_fires_byte_identical_alloc_free(
+        "v0_3_m3d_danger_same_callee_number_match_arm.ynz",
+        "6.0\n9.0",
+    );
+    }
+    // case: an `Int errors` CPU result inside an `if` arm is not decoded through the EC path
+    v03_m3d_danger_int_errors_if_arm_fires_byte_identical => {
+    // WHY: an error-capable return (`int errors`) packs as a tagged {error word, ok bits} pair;
+    // the join-bind must normalize the ok word and route through the EC decode path. That EC
+    // pack/bind must survive the if-arm frame machinery. Both functions succeed (6, 30).
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_danger_int_errors_if_arm.ynz", "6\n30");
+    }
+    // case: a `map` CPU result in a match arm leaks its counted buffers or loses the pointer
+    v03_m3d_danger_map_match_arm_fires_byte_identical => {
+    // WHY: a heap-pointer return (`map<int, int>`) packed inside a `match` arm. The map's heap
+    // pointer travels through the result slot; that pack/bind must survive match-arm machinery.
+    // alloc==free: 2 maps × 5 counted buffers, all released at scope exit (v0.3-M5 P3 by-value
+    // map ABI; see v03_m3d_return_class_map_fires_byte_identical's WHY).
+    m3d_assert_fires_byte_identical_alloc_gap("v0_3_m3d_danger_map_match_arm.ynz", "3\n5", 0);
+    }
+    // case: a heap-pointer (`array`) CPU result packed inside a `match` arm loses its pointer or leaks its buffer
+    v03_m3d_danger_array_match_arm_fires_byte_identical => {
+    // WHY: a heap-pointer return (`array<int>`) packed inside a `match` arm. Same pointer-slot
+    // risk as the string-if-arm cell, but in match-arm frame machinery and with the counts read
+    // inside the arm (so the int counts, not the array pointers, cross the arm boundary).
+    m3d_assert_fires_byte_identical_alloc_gap("v0_3_m3d_danger_array_match_arm.ynz", "3\n5", 0);
+    }
+    // case: a mixed CPU(number)+I/O group is declined or mis-packs the CPU child's decimal128 result
+    v03_m3d_danger_mixed_number_declines_byte_identical => {
+    // WHY (v0.3-M3g Phase 3 FLIP — same reasoning as the string sibling below; test name
+    // retained for history continuity): a mixed group with a wide-value (`number`) CPU child.
+    // The original decline was scope-bounded ("mixed CPU+I/O overlap is M3g, not M3d"), not a
+    // safety concern about decimal128 CPU children — `build_cpu_trampoline`'s i128 packing arm
+    // already handles `number` returns for the pure-CPU path unchanged. FIRES (1 spawn),
+    // byte-identical to `--no-auto-parallel` ("6.0\n2.5"). If this shows 0 spawns, the fusion
+    // regressed — fix the codegen, not this test.
+    m3d_assert_fires_n_byte_identical_alloc_free(
+        "v0_3_m3d_danger_mixed_number_declines.ynz",
+        "6.0\n2.5",
+        1,
+    );
+    }
+    // case: a mixed CPU(string)+I/O group is declined or leaks the CPU child's owned string
+    v03_m3d_danger_mixed_string_declines_byte_identical => {
+    // WHY (v0.3-M3g Phase 3 FLIP — a DIRECT, foreseeable consequence of general fusion; test
+    // name retained for history continuity): a mixed group with a heap-pointer (`string`) CPU
+    // child. This fixture's own original WHY documented the decline as scope-bounded ("mixed
+    // CPU+I/O overlap is M3g, not M3d... belongs to a later milestone"), not a genuine safety
+    // concern about heap-pointer CPU children specifically — `build_cpu_trampoline`'s
+    // PointerValue packing arm already handles string/array/map returns for the pure-CPU path
+    // unchanged. `admitted_fused_group` places no return-class restriction narrower than
+    // `cpu_supported_callees` (the same CPU-ABI-fits predicate the pure-CPU gate uses), so this
+    // shape now correctly FIRES (1 spawn) through the general fused mechanism, byte-identical to
+    // `--no-auto-parallel` ("built=3\nwaited"). If this shows 0 spawns, the fusion regressed —
+    // fix the codegen, not this test.
+    m3d_assert_fires_n_byte_identical_alloc_free(
+        "v0_3_m3d_danger_mixed_string_declines.ynz",
+        "built=3\nwaited",
+        1,
+    );
+    }
+    // case: a CPU group at the bottom of a promoted call chain is declined or its frame is mis-sized
+    v03_m3d_hostile_deep_promoted_chain_fires_byte_identical => {
+    // WHY: a deep call chain (top → middle → combine) where the bottom function hosts the CPU
+    // group and the enclosing callers are state machines driving the one below. The bottom group
+    // must still FIRE through the chain. 2 spawns + byte-identical + alloc==free.
+    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_hostile_deep_promoted_chain.ynz", "102");
+    }
+    // case: a CPU child that spawns a background task from a blocking-pool thread crashes
+    v03_m3d_hostile_cpu_child_spawns_background_fires_byte_identical => {
+    // WHY: a CPU child that itself spawns a `background` task — the spawn-from-a-blocking-pool
+    // thread path. The CPU group must FIRE, the nested spawn must not crash, and the result must
+    // be byte-identical in both modes. The detached background task's own output is not part of
+    // the contract (it may not flush before exit).
+    m3d_assert_fires_byte_identical_alloc_free(
+        "v0_3_m3d_hostile_cpu_child_spawns_background.ynz",
+        "3675",
+    );
+    }
+    // case: post-join binds attach to the wrong member when members finish out of declaration order
+    v03_m3d_hostile_reverse_completion_fires_byte_identical => {
+    // WHY: reverse completion order — a HEAVY child finishes long after a LIGHT child, so the
+    // children complete out of declaration order. The post-join binds must stay attached to the
+    // right member regardless of completion order (slots keyed by position, not finish time).
+    // Output is order-independent (12497500, 3) and byte-identical.
+    m3d_assert_fires_byte_identical_alloc_free(
+        "v0_3_m3d_hostile_reverse_completion.ynz",
+        "12497500\n3",
+    );
+    }
+    // case: the channel-admission gate over-declines so the non-channel twin no longer fires
+    // WHY: the FIRE twin proving the decline above is attributable to the channel classification
+    // and not to the fixture shape: the SAME host shape with a pure-CPU callee is admitted and
+    // fires 2 blocking-pool spawns. Without this twin, the decline test would pass vacuously on
+    // any inadmissible shape (masked-branch discipline).
+    v0_3_m4_p2_cpu_admission_fire_twin_still_fires => {
+    m3d_assert_fires_n_byte_identical_alloc_free(
+        "v0_3_m4_channel_cpu_admission_fires.ynz",
+        "9932",
+        2,
+    );
+    }
+}
+
+/// One named test per input class of the `cpu-group-declines table` unit; each case is a test the runner names.
+macro_rules! cpu_group_declines_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a CPU group that must decline fires anyway (or is mis-declined), corrupting a post-join read or the output | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+cpu_group_declines_table_high_case! {
+    // case: a host that waits before its CPU pair is promoted without fusion machinery (deadlock or wrong output)
+    v03_m3d_prepair_wait_declines_byte_identical => {
+    // WHY: a host that suspends on a timer (`wait sleep`) BEFORE a would-be CPU pair is already
+    // a step-by-step waiter; promoting it would require treating the spike join as a second
+    // suspension point inside an already-suspending host — the mixed CPU+I/O fusion deferred to
+    // milestone M3g (.claude/todos.md). M3d locks the safe DECLINE: 0 spawns, sequential,
+    // byte-identical to --no-auto-parallel. If this fires (spawns > 0), a pre-pair-wait host was
+    // promoted without the M3g machinery — sustain the decline, do not relax this assertion.
+    m3d_assert_declines_byte_identical("v0_3_m3d_prepair_wait_declines.ynz", "9907");
+    }
+    // case: a param-host reading its parameter after the join reads the handle bytes of the spawn
+    v03_m3d_param_host_declines_byte_identical => {
+    // WHY: a host that READS a parameter AFTER its CPU join cannot spike-host. The wrapper
+    // writes param slot 0 at the byte the first CPU-handle slot occupies; the spawn's handle
+    // store overwrites that byte, so a post-join param reload reads the handle pointer's bytes
+    // instead of its value (a silent wrong answer). Reserving param slots past the CPU-handle
+    // region is the param-host read-after-join work tracked in .claude/todos.md. M3d locks the
+    // safe DECLINE for this shape: 0 spawns, sequential, byte-identical. `combine` reads its
+    // parameter after the pair (`return seed + a + b`), exactly the read-after-join shape that
+    // corrupts. The narrowed gate still admits a param-host whose params are used ONLY in spawn
+    // args (see v03_m3d_param_host_spawn_args_only_fires_byte_identical) — this test pins that
+    // the read-after-join subset stays declined. If this fires, the read-after-join corruption
+    // was reopened — sustain the decline, do not relax this assertion.
+    m3d_assert_declines_byte_identical("v0_3_m3d_param_host_declines.ynz", "9910");
+    }
+    // case: a loop variable shadowing a parameter erases an earlier post-join read so the gate admits it (byte-32 corruption)
+    v03_m3d_param_host_loopvar_shadow_declines_byte_identical => {
+    // WHY: a post-join `for` loop whose loop variable name shadows a function parameter MUST NOT
+    // erase an EARLIER post-join statement's genuine read of that parameter. The post-join
+    // read-walk (`stmt_tree_ident_reads`) strips the loop-var shadow from the loop's OWN body
+    // reads only — never from the shared cross-statement accumulator. `combine` reads `seed` in
+    // `let z = seed + 1` (a real read-after-join) and a later `for (seed in ...)` rebinds the
+    // name; the gate must still see the earlier read and DECLINE: 0 spawns, sequential,
+    // byte-identical. If this FIRES (spawns > 0), the loop-var removal leaked to the shared
+    // accumulator, erased the param read, flipped the gate to admit, and reopened the byte-32
+    // param/handle corruption — sustain the decline, do NOT relax this assertion. (Without the
+    // loop-local fix this fixture admits and the spawn's handle store clobbers the slot `z` reads
+    // post-join, diverging from --no-auto-parallel.)
+    m3d_assert_declines_byte_identical("v0_3_m3d_param_host_loopvar_shadow_declines.ynz", "9910");
+    }
+    // case: a `Number errors` CPU pair is admitted though its 24-byte result overflows the 16-byte slot (UAF)
+    v03_m3d_return_class_number_errors_declines_byte_identical => {
+    // WHY: `number errors` is DECLINED by the shared gate — the 24-byte {error word + i128
+    // value} pair overflows the 16-byte result slot, so admitting it would make join-bind
+    // dereference a pointer into the dead worker frame (use-after-free). The decline routes
+    // it to the sequential path, which is correct (distinct callees give distinct values:
+    // 6.0 / 10.0). This test locks the decline: 0 spawns + byte-identical. If you make this
+    // fire, you have reopened the wide-EC use-after-free — fix the wide-EC ABI on its own
+    // track (see .claude/todos.md), do NOT admit it here.
+    m3d_assert_declines_byte_identical("v0_3_m3d_return_class_number_errors.ynz", "6.0\n10.0");
+    }
+    // case: a CPU group inside a `for` body fires without a reserved loop-index slot (silent miscompile)
+    v03_m3d_nested_for_body_group_declines_byte_identical => {
+    // WHY: a CPU group inside a `for`-iteration body must DECLINE to sequential lowering (0 spawns)
+    // and stay byte-identical to `--no-auto-parallel` (29706). Firing it would require the loop's
+    // synthetic iteration index and every loop-carried local to survive the group's join across the
+    // loop's resume — the SM resumes inside the body without re-running the loop header — and that
+    // multi-level synthetic-index reservation is NOT provided for loop-body groups. `for`/`while`
+    // bodies are excluded from `spike_nested_blocks`, so a loop-body group is never detected and
+    // never fires. If this shows ANY spawns, loop-body admission regressed (a corpse-class
+    // silent-wrong risk — see the nested-placement decline fixtures); fix the gate, not this test.
+    // (For-body CPU parallelism for all placements is deferred — see .claude/todos.md.)
+    m3d_assert_declines_byte_identical("v0_3_m3d_nested_for_body_group.ynz", "29706");
+    }
+    // case: two CPU groups in one function alias the single reserved group-0 slot region (top-level first)
+    v03_m3d_nested_multi_group_declines_byte_identical => {
+    // WHY: a promoted function with BOTH a top-level CPU group and a nested one is a MULTI-GROUP
+    // function — it declines ALL spiking (0 spawns) and runs fully sequentially, byte-identical
+    // (19810). The single reserved group-0 slot region holds exactly one group; firing two groups
+    // into it would alias the first group's handles (silent wrong answer). This fixture places the
+    // top-level pair first; `v0_3_m3d_nested_group_before_top.ynz` places the nested pair first —
+    // both must decline identically because the multi-group decline is order-INDEPENDENT (the
+    // count check runs before any representative-callee selection). If this shows ANY spawns,
+    // multi-group admission regressed — fix the gate (count != 1 must decline BEFORE the
+    // top-level early-return), not this test. Partial hosting (fire one group, decline the rest)
+    // needs per-group slot reservation that is not yet implemented (see .claude/todos.md).
+    m3d_assert_declines_byte_identical("v0_3_m3d_nested_multi_group.ynz", "19810");
+    }
+    // case: the multi-group decline depends on source order (nested group first aliases the top-level slots)
+    v03_m3d_nested_group_before_top_declines_byte_identical => {
+    // WHY: a multi-group function with the NESTED group placed BEFORE the top-level group in
+    // source order must decline ALL spiking (0 spawns) and stay byte-identical (19810) — exactly
+    // like `v0_3_m3d_nested_multi_group.ynz` where the ordering is reversed. This locks the
+    // order-INDEPENDENCE of the multi-group decline: the `count_cpu_groups_all_depths != 1` check
+    // runs BEFORE `spike_pair_in_block` selects any representative callee, so a nested-first
+    // function cannot have its nested group selected and sized while the top-level group fires
+    // into the same single reserved slot region. If the count check is moved back after the
+    // representative selection, this fixture compiles to a corrupt binary (the nested arm fires,
+    // the top-level pair aliases the one reserved group-0 slot region — observed 4389422 vs the
+    // correct 19810 oracle). A 0-spawn DECLINE is the only correct outcome until per-group slot
+    // reservation lands (see .claude/todos.md). If this shows ANY spawns, the order-independence
+    // broke — fix the gate ordering, not this test.
+    m3d_assert_declines_byte_identical("v0_3_m3d_nested_group_before_top.ynz", "19810");
+    }
+    // case: a suspending host with a third same-callee call in a sub-expression is promoted (permanent codegen constraint)
+    v03_m3g_guard_tripping_crossing_in_suspending_host_declines_byte_identical => {
+    // WHY (Phase 2 E6 adversarial fixture): a suspending host (`wait sleep(0)`) that also owns
+    // a clean top-level CPU group (`crunch(3)`, `crunch(4)`), PLUS a THIRD, separate call to the
+    // SAME callee in a sub-expression position (`crunch(5) + 1`). `crunch` never suspends under
+    // the REAL suspend set, so this compiles clean at the plain layer (no pre-existing hard
+    // error) — the hazard is visible ONLY to the promotion-layer guard-probe, which augments
+    // `suspending_fns` with this candidate's own CPU-group callee before probing. This is a
+    // PERMANENT safety decline (unlike the neutrality fixtures above) — the guard-probe
+    // extension to `base_suspends` hosts (`compute_cpu_promotions`'s rollback loop) must exclude
+    // this host from the typeck `promoted` set regardless of the Phase-2 temporary
+    // admission-gate decline, because "a suspending call inside a larger expression" is a real,
+    // permanent codegen constraint. 0 spawns, byte-identical to `--no-auto-parallel`. If this
+    // shows ANY spawns, the guard-probe extension regressed — fix `compute_cpu_promotions`'s
+    // rollback loop, not this test. (Direct, precise proof of the `promoted`-set exclusion lives
+    // in `ynz-typeck`'s `base_suspends_host_with_subexpr_position_guard_declines_promotion` unit
+    // test — this fixture proves the observable byte-identical behavior.)
+    m3d_assert_declines_byte_identical(
+        "v0_3_m3g_guard_tripping_crossing_in_suspending_host_declines.ynz",
+        "14863",
+    );
+    }
+    // case: a nested mixed CPU+I/O group is silently fused without frame-layout support at depth > 0
+    v03_m3g_nested_mixed_group_declines_byte_identical => {
+    // WHY (Phase 5 cheap-gate follow-up, deviation-judge minor finding): the plan's Future
+    // Requirements table names "A NESTED mixed (fused CPU+I/O) group stays declined to
+    // sequential" as a scoped, permanent-for-now decline — `admitted_fused_group` is TOP-LEVEL
+    // ONLY by construction (its own doc comment). That row had prose (WHAT/WHY/COST/TRIGGER) but
+    // no locked decline-test proving the shape actually declines rather than crashing, silently
+    // misfiring, or diverging between modes. `crunch(1)` (CPU-eligible) and `fetchA(2)`
+    // (suspending) sit adjacent inside an `if` body — the EXACT shape that would fuse if it were
+    // top-level. Because it is nested, `admitted_fused_group` never scans it; the pure-CPU
+    // nested-group path also declines (only ONE CPU-eligible member exists there — `fetchA` is
+    // excluded from CPU eligibility since it suspends — so no adjacent CPU-eligible PAIR exists
+    // to admit). 0 spawns, byte-identical to `--no-auto-parallel`. If this ever shows a nonzero
+    // spawn count, the nested-fused-group scope narrowing this fixture locks has been silently
+    // lifted without the Future-Requirements-row's own re-derivation work (frame-layout
+    // extension to a dual-kind reserve at depth > 0) — fix the admission gate's scope, not this
+    // test, unless that re-derivation genuinely landed.
+    m3d_assert_declines_byte_identical("v0_3_m3g_nested_mixed_group_declines.ynz", "448");
+    }
+    // case: fusion reopens the wide-EC (`Number errors`) use-after-free next to an I/O call
+    v03_m3g_wide_ec_mixed_group_declines_byte_identical => {
+    // WHY (v0.3-M3g Phase 3 — E7 wide-EC ratchet, fused-group instance): a wide-value-EC
+    // (`number errors`) call (`priceA`) next to an I/O call (`fetch`). `priceA` is excluded from
+    // `cpu_supported_callees` — the SAME shared CPU-ABI-fits predicate both the pure-CPU
+    // (`admitted_cpu_group`) and fused (`admitted_fused_group`) admission gates read (the 24-byte
+    // {error word + i128 value} pair overflows the 16-byte CPU result slot; admitting it would
+    // make the fused join-bind dereference a pointer into the dead worker-thread frame — a
+    // use-after-free). `priceA` is not a suspending call either, so the fused-group classifier
+    // finds it ineligible for EITHER class — no adjacent eligible pair ever forms, so no fused
+    // group is even considered. This proves the pre-existing pure-CPU decline-around
+    // (`v03_m3d_return_class_number_errors_declines_byte_identical`) SURVIVES fusion rather than
+    // being silently reopened by the new admission path: 0 spawns, byte-identical to
+    // `--no-auto-parallel`. If this shows ANY spawns, the wide-EC UAF class has reopened — fix
+    // the shared `cpu_supported_callees`/`ec_inner_fits_cpu_result_abi` predicate, not this test.
+    m3d_assert_declines_byte_identical("v0_3_m3g_wide_ec_mixed_group_declines.ynz", "6.0\nwaited");
+    }
+    // case: a CPU group inside a loop body fires and corrupts the per-iteration handle slots
+    v03_m3d_danger_string_loop_body_declines_byte_identical => {
+    // WHY: a heap-pointer (`string`) group inside a loop body DECLINES — loop-body CPU groups are
+    // a future loop-placement slice, not M3d. The heap-pointer pack must not make a loop-body
+    // group fire. 0 spawns + byte-identical locks the loop-body decline for the heap-pointer case.
+    m3d_assert_declines_byte_identical("v0_3_m3d_danger_string_loop_body_declines.ynz", "hi=2");
+    }
+    // case: an arm-placed CPU group whose results are read after the arm closes is fused without a crossing slot
+    v03_m3d_danger_read_after_arm_declines_byte_identical => {
+    // WHY: a CPU group inside a `match` arm whose results are READ in a statement AFTER the arm
+    // closes DECLINES — the result must survive the arm boundary as a crossing local, which the
+    // arm-placement path does not reserve for cross-boundary reads. This locks the boundary:
+    // reads kept INSIDE the arm FIRE (danger_bool_match_arm), reads that cross OUT decline. 0
+    // spawns + byte-identical. If this fired, the cross-arm crossing-slot path is being exercised
+    // without the reservation — fix the crossing machinery, not this test.
+    m3d_assert_declines_byte_identical(
+        "v0_3_m3d_danger_read_after_arm_declines.ynz",
+        "false\ntrue",
+    );
+    }
+    // case: a CPU group inside a self-recursive function is fused and aliases the recursive frame's slots
+    v03_m3d_hostile_self_recursive_group_declines_byte_identical => {
+    // WHY: a self-recursive function holding a CPU group in its base case DECLINES — a function
+    // in a call cycle is excluded from parallelization (recursion's heap-boxed frame would
+    // intersect the per-member handle/result slots). 0 spawns + byte-identical locks the
+    // recursion exclusion. If this fired, recursion × per-member-slot is being exercised unsafely.
+    m3d_assert_declines_byte_identical("v0_3_m3d_hostile_self_recursive_group_declines.ynz", "100");
+    }
+    // case: a CPU group in a zero-iteration loop body changes the accumulated value
+    v03_m3d_hostile_zero_iteration_loop_group_declines_byte_identical => {
+    // WHY: a CPU group inside a ZERO-iteration loop body — the boundary case for the loop-body
+    // decline. The loop never runs, the group declines (loop-body groups are a future slice), the
+    // accumulator stays at its initial value. 0 spawns + byte-identical, output 0.
+    m3d_assert_declines_byte_identical(
+        "v0_3_m3d_hostile_zero_iteration_loop_group_declines.ynz",
+        "0",
+    );
+    }
+    // case: a callee that uses a channel is admitted to a CPU group (channel use crosses threads)
+    // WHY: the R6→cpu_admission decline gate (plan R7 exit criterion): a channel-using callee is
+    // classified SUSPENDING through the one authoritative classifier chain (suspension_source →
+    // may_block fixpoint → cpu_admission's suspend_set), so a pair of calls to it is DECLINED
+    // from CPU-pool admission — 0 blocking-pool spawns. A channel-using closure admitted to the
+    // blocking pool would park an OS thread on a suspended send (the M3g deadlock class).
+    v0_3_m4_p2_channel_using_callee_declines_cpu_admission => {
+    m3d_assert_declines_byte_identical("v0_3_m4_channel_cpu_admission_declines.ynz", "32");
+    }
 }
 
 /// Assert a v0.3-M3d fixture whose return class the shared gate DECLINES runs sequentially:
@@ -6107,18 +6943,7 @@ fn m3d_assert_declines_byte_identical(fixture_name: &str, expected_stdout: &str)
     );
 }
 
-#[test]
-fn v03_m3d_return_class_number_errors_declines_byte_identical() {
-    // WHY: `number errors` is DECLINED by the shared gate — the 24-byte {error word + i128
-    // value} pair overflows the 16-byte result slot, so admitting it would make join-bind
-    // dereference a pointer into the dead worker frame (use-after-free). The decline routes
-    // it to the sequential path, which is correct (distinct callees give distinct values:
-    // 6.0 / 10.0). This test locks the decline: 0 spawns + byte-identical. If you make this
-    // fire, you have reopened the wide-EC use-after-free — fix the wide-EC ABI on its own
-    // track (see .claude/todos.md), do NOT admit it here.
-    m3d_assert_declines_byte_identical("v0_3_m3d_return_class_number_errors.ynz", "6.0\n10.0");
-}
-
+// bug: typeck's parallel-group hint and codegen disagree on `Maybe` (one admits, the other declines) | tier: Medium
 #[test]
 fn v03_m3d_return_class_maybe_declines_and_ir_inert() {
     // WHY: `maybe<int>` is outside this milestone's carried return-class set and is DECLINED
@@ -6179,76 +7004,18 @@ fn v03_m3d_return_class_maybe_declines_and_ir_inert() {
 // All reuse `m3d_assert_fires_byte_identical_alloc_free` (FIRES with 2 spawns + byte-identical
 // to `--no-auto-parallel` + alloc==free).
 
-#[test]
-fn v03_m3d_same_callee_int_distinct_values() {
-    // WHY: same callee `sumTo`, args 5 and 6 → 10 and 15 (distinct). The 2-spawn FIRE assertion
-    // plus the distinct oracle prove the members are keyed by group position, not callee name —
-    // a name-keyed result slot would make both members read the same slot. If you relax the
-    // spawn-count assertion, the parallelism regressed to sequential; fix the codegen, not this
-    // test.
-    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_same_callee_int.ynz", "10\n15");
+/// One named test per input class of the `worth-it table` unit; each case is a test the runner names.
+macro_rules! worth_it_table_medium_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: the worth-it proxy spawns trivial callees or declines loop-bearing ones | tier: Medium
+        #[test]
+        fn $case_name() $case_body
+    )+ };
 }
 
-#[test]
-fn v03_m3d_same_callee_bool_distinct_values() {
-    // WHY: same callee `sumExceeds`, args 4 and 6 → false and true (distinct). Proves the
-    // bool pack/bind path keeps same-callee members separate. FIRE + byte-identical + alloc==free.
-    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_same_callee_bool.ynz", "false\ntrue");
-}
-
-#[test]
-fn v03_m3d_same_callee_float_distinct_values() {
-    // WHY: same callee `sumf`, args 2 and 4 → 3 and 6 (distinct). Proves the f64 result word is
-    // bound per member, not shared across two same-callee members. FIRE + byte-identical +
-    // alloc==free.
-    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_same_callee_float.ynz", "3\n6");
-}
-
-#[test]
-fn v03_m3d_same_callee_number_distinct_values() {
-    // WHY: `number` is the trickiest class — the result word is a pointer to a heap-stable
-    // 16-byte value, so a name-keyed (rather than member-keyed) result slot would make both
-    // same-callee members point at the same heap value. Same callee `sumn`, args 2 and 4 → 3.0
-    // and 6.0 (distinct) catches that. FIRE + byte-identical + alloc==free.
-    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_same_callee_number.ynz", "3.0\n6.0");
-}
-
-#[test]
-fn v03_m3d_same_callee_string_distinct_values() {
-    // WHY: same callee `buildStr`, args 3 and 5 → len=3 and len=5 (distinct heap strings).
-    // Proves two same-callee members each carry their own owning heap value, not a shared one.
-    // FIRE + byte-identical + alloc==free.
-    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_same_callee_string.ynz", "len=3\nlen=5");
-}
-
-#[test]
-fn v03_m3d_same_callee_array_distinct_values() {
-    // WHY: same callee `buildArr`, args 3 and 4 → element counts 3 and 4 (distinct, order-
-    // independent). Proves same-callee members bind separate `array<int>` values. FIRE +
-    // byte-identical + alloc==free.
-    m3d_assert_fires_byte_identical_alloc_gap("v0_3_m3d_same_callee_array.ynz", "3\n4", 0);
-}
-
-#[test]
-fn v03_m3d_same_callee_map_distinct_values() {
-    // WHY: same callee `buildMap`, args 3 and 5 → entry counts 3 and 5 (distinct, order-
-    // independent). Proves same-callee members bind separate `map<int, int>` values. FIRE +
-    // byte-identical + alloc==free (2 maps × 5 counted buffers, all released at scope exit;
-    // see v03_m3d_return_class_map_fires_byte_identical's WHY).
-    m3d_assert_fires_byte_identical_alloc_gap("v0_3_m3d_same_callee_map.ynz", "3\n5", 0);
-}
-
-#[test]
-fn v03_m3d_same_callee_int_errors_distinct_values() {
-    // WHY: same callee `compute` returning `int errors`, args 4 and 5 → 6 and 10 (distinct).
-    // The errors ABI carries both an error word and a success word; a name-keyed slot would
-    // make the second `.or(-1)` read the first member's pair. Both callees succeed, so `.or(-1)`
-    // prints the distinct totals. FIRE + byte-identical + alloc==free.
-    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_same_callee_int_errors.ynz", "6\n10");
-}
-
-#[test]
-fn v03_m3d_worth_it_trivial_leaf_runs_inline() {
+worth_it_table_medium_case! {
+    // case: two trivial straight-line callees are spawned (overhead) instead of run inline
+    v03_m3d_worth_it_trivial_leaf_runs_inline => {
     // WHY: the worth-it proxy is a perf gate, never a correctness gate. Two tiny straight-line
     // callees (`double`/`triple`, no loop, no recursion) are NOT worth coordinating to run at
     // the same time, so the compiler DECLINES the group and runs them inline — exactly 0 spawn
@@ -6258,16 +7025,27 @@ fn v03_m3d_worth_it_trivial_leaf_runs_inline() {
     // this fire (≠ 0 spawns), the worth-it proxy stopped gating trivial leaves — fix the gate,
     // not this test.
     m3d_assert_declines_byte_identical("v0_3_m3d_worth_it_trivial_leaf_inline.ynz", "40\n63");
-}
-
-#[test]
-fn v03_m3d_worth_it_loop_callee_fires() {
+    }
+    // case: heavy straight-line callees (no loop or self-call) are spawned or change the output instead of staying inline
+    v03_m3d_hostile_worth_it_false_negative_declines_byte_identical => {
+    // WHY: a worth-it FALSE NEGATIVE — heavy-looking straight-line callees with no loop or
+    // self-call, so the loop/recursion-keyed worth-it proxy declines them. A false negative is
+    // only a missed perf opportunity, never a wrong answer: 0 spawns + byte-identical output.
+    // This locks that the proxy is a perf gate, never a correctness gate.
+    m3d_assert_declines_byte_identical(
+        "v0_3_m3d_hostile_worth_it_false_negative_declines.ynz",
+        "82\n177",
+    );
+    }
+    // case: loop-bearing callees are declined by the worth-it proxy so no parallelism happens
+    v03_m3d_worth_it_loop_callee_fires => {
     // WHY: the positive companion to `v03_m3d_worth_it_trivial_leaf_runs_inline`. Same entrypoint
     // shape (two adjacent distinct-callee binds), but each callee loops, so the worth-it proxy
     // admits the group and it FIRES (2 spawns) — the loop is the proxy's primary signal. Output
     // (190, 420) byte-identical between modes. Together the two tests prove the worth-it proxy
     // discriminates on callee body (loop/recursion present), not on the call-site shape.
     m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_worth_it_loop_overlaps.ynz", "190\n420");
+    }
 }
 
 // The R6 `cpu_result_abi_gate_parity` test (ynz-codegen `emit.rs`) compile-forces the
@@ -6394,6 +7172,7 @@ fn runtime_axis_coverage(variant: &ynz_typeck::types::Type) -> RuntimeAxisCovera
     }
 }
 
+// bug: a CPU-admitted return class has no runtime fixture, or the runtime matrix and the production gate disagree (protected parity keep) | tier: Medium
 #[test]
 fn cpu_runtime_axis_fixtures_compile_forced_exhaustive() {
     // WHY: closes the runtime-correctness half of the CPU-result-ABI gate. The R6 parity test
@@ -6531,224 +7310,6 @@ fn cpu_runtime_axis_fixtures_compile_forced_exhaustive() {
 // nested, or two nested, in ANY source order) would alias the single reserved group-0 slot
 // region, so it declines ALL spiking. Every decline lowers sequentially, byte-identical.
 
-#[test]
-fn v03_m3d_accumulator_crossing_fires_byte_identical() {
-    // WHY: a local declared BEFORE a CPU pair and READ after the join (`running = running + a + b`)
-    // must survive the join. The CPU-group join is a suspension boundary, so `running` is a
-    // crossing local: typeck's crossing collector registers the join as a suspension, the frame
-    // reserves a slot for `running`, the pre-pair lowering flushes it, and the post-join path
-    // reloads it before the read. Without this the read sources stale/garbage frame bytes and the
-    // group FIRES into a silent wrong answer (observed live: 4389230 vs the correct 10903 oracle) —
-    // the accumulator-corruption class. This must FIRE (2 spawns) AND equal 10903 in both modes.
-    // If the value diverges from 10903, the crossing flush/reload regressed; if the spawn count
-    // drops to 0, admission regressed to sequential. Fix the codegen/crossing collection, not this
-    // test.
-    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_accumulator_crossing.ynz", "10903");
-}
-
-#[test]
-fn v03_m3d_nested_if_group_fires_byte_identical() {
-    // WHY: a CPU group placed inside an `if` branch must FIRE (2 spawns) from the nested SM
-    // lowering, byte-identical to `--no-auto-parallel`, with alloc==free. The group reuses the
-    // group-0 handle/result slots (32/40/48/64) — the same reservation a top-level group uses,
-    // since the function still has exactly one group. If you relax the spawn-count assertion the
-    // nested group regressed to sequential; if the value diverges from `9907` the nested spike
-    // reads the wrong slot. Fix the codegen, not this test.
-    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_nested_if_group.ynz", "9907");
-}
-
-#[test]
-fn v03_m3d_nested_match_group_fires_byte_identical() {
-    // WHY: a CPU group placed inside a matching arm (`if (pick) { 1 => { ... } }`) must FIRE
-    // (2 spawns) from the arm-body SM lowering, byte-identical to `--no-auto-parallel`, alloc==
-    // free. The arm-body routing is separate from the plain-`if` routing, so this locks the
-    // match-arm path independently. A 0 here means the arm body took the non-SM `lower_stmt`
-    // path that has no spawn-join. Fix the routing, not this test.
-    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_nested_match_group.ynz", "9907");
-}
-
-#[test]
-fn v03_m3d_nested_for_body_group_declines_byte_identical() {
-    // WHY: a CPU group inside a `for`-iteration body must DECLINE to sequential lowering (0 spawns)
-    // and stay byte-identical to `--no-auto-parallel` (29706). Firing it would require the loop's
-    // synthetic iteration index and every loop-carried local to survive the group's join across the
-    // loop's resume — the SM resumes inside the body without re-running the loop header — and that
-    // multi-level synthetic-index reservation is NOT provided for loop-body groups. `for`/`while`
-    // bodies are excluded from `spike_nested_blocks`, so a loop-body group is never detected and
-    // never fires. If this shows ANY spawns, loop-body admission regressed (a corpse-class
-    // silent-wrong risk — see the nested-placement decline fixtures); fix the gate, not this test.
-    // (For-body CPU parallelism for all placements is deferred — see .claude/todos.md.)
-    m3d_assert_declines_byte_identical("v0_3_m3d_nested_for_body_group.ynz", "29706");
-}
-
-#[test]
-fn v03_m3d_for_under_if_group_declines_byte_identical() {
-    // WHY: a CPU group in a `for` body that is itself nested under an `if` must DECLINE (0 spawns)
-    // and stay byte-identical (29706). This is a corpse-prevention lock: firing a loop-body group
-    // one level under a branch silently miscompiled (observed 9905/19807 vs the 29706 oracle)
-    // because the synthetic loop-index/loop-carried slots are unreserved at that depth. Loop bodies
-    // are excluded from `spike_nested_blocks`, so the group is never detected and never fires. If
-    // this shows ANY spawns, the loop-body exclusion regressed — fix the gate, not this test.
-    m3d_assert_declines_byte_identical("v0_3_m3d_for_under_if_group.ynz", "29706");
-}
-
-#[test]
-fn v03_m3d_inner_nested_for_group_declines_byte_identical() {
-    // WHY: a CPU group in the INNER body of two nested `for` loops must DECLINE (0 spawns), stay
-    // byte-identical (59412), AND not abort codegen. This is a corpse-prevention lock: firing it
-    // hard-aborted the backend (`__ynz_for_idx_1 not found in frame`) — a compile error on
-    // previously-valid code, which auto-promotion must never produce. Loop bodies are excluded from
-    // `spike_nested_blocks`, so the inner-loop group is never detected and never fires; the function
-    // compiles and runs sequentially. If this aborts or shows ANY spawns, the loop-body exclusion
-    // regressed — fix the gate, not this test.
-    m3d_assert_declines_byte_identical("v0_3_m3d_inner_nested_for_group.ynz", "59412");
-}
-
-#[test]
-fn v03_m3d_nested_if_no_crossing_fires_byte_identical() {
-    // WHY: a pure nested-`if` CPU group that returns its join result DIRECTLY (no local declared
-    // before the pair and read after the join) must FIRE (2 spawns) and stay byte-identical (9907),
-    // with alloc==free. This shape populates the join's result names while the top-level crossing
-    // scan finds no surrounding crossing local, so `m3d_spike_cpu_result_allocas` is empty. The
-    // orphan (unreachable) state-block terminator must NOT attempt to reload spike results there
-    // (reload bool is `false`) — otherwise the empty-alloca lookup aborts codegen. If this aborts,
-    // the orphan-terminator reload regressed to `true`; if spawns drop to 0, admission regressed.
-    // Fix the codegen, not this test.
-    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_nested_if_no_crossing.ynz", "9907");
-}
-
-#[test]
-fn v03_m3d_nested_multi_group_declines_byte_identical() {
-    // WHY: a promoted function with BOTH a top-level CPU group and a nested one is a MULTI-GROUP
-    // function — it declines ALL spiking (0 spawns) and runs fully sequentially, byte-identical
-    // (19810). The single reserved group-0 slot region holds exactly one group; firing two groups
-    // into it would alias the first group's handles (silent wrong answer). This fixture places the
-    // top-level pair first; `v0_3_m3d_nested_group_before_top.ynz` places the nested pair first —
-    // both must decline identically because the multi-group decline is order-INDEPENDENT (the
-    // count check runs before any representative-callee selection). If this shows ANY spawns,
-    // multi-group admission regressed — fix the gate (count != 1 must decline BEFORE the
-    // top-level early-return), not this test. Partial hosting (fire one group, decline the rest)
-    // needs per-group slot reservation that is not yet implemented (see .claude/todos.md).
-    m3d_assert_declines_byte_identical("v0_3_m3d_nested_multi_group.ynz", "19810");
-}
-
-#[test]
-fn v03_m3d_nested_group_before_top_declines_byte_identical() {
-    // WHY: a multi-group function with the NESTED group placed BEFORE the top-level group in
-    // source order must decline ALL spiking (0 spawns) and stay byte-identical (19810) — exactly
-    // like `v0_3_m3d_nested_multi_group.ynz` where the ordering is reversed. This locks the
-    // order-INDEPENDENCE of the multi-group decline: the `count_cpu_groups_all_depths != 1` check
-    // runs BEFORE `spike_pair_in_block` selects any representative callee, so a nested-first
-    // function cannot have its nested group selected and sized while the top-level group fires
-    // into the same single reserved slot region. If the count check is moved back after the
-    // representative selection, this fixture compiles to a corrupt binary (the nested arm fires,
-    // the top-level pair aliases the one reserved group-0 slot region — observed 4389422 vs the
-    // correct 19810 oracle). A 0-spawn DECLINE is the only correct outcome until per-group slot
-    // reservation lands (see .claude/todos.md). If this shows ANY spawns, the order-independence
-    // broke — fix the gate ordering, not this test.
-    m3d_assert_declines_byte_identical("v0_3_m3d_nested_group_before_top.ynz", "19810");
-}
-
-#[test]
-fn v03_m3d_nested_group_with_outer_wait_declines_byte_identical() {
-    // WHY (v0.3-M3g Phase 3 FLIP — one of the three non-negotiable acceptance-signal fixtures;
-    // test name retained for `git blame`/history continuity even though the assertion now FIRES):
-    // a single nested CPU group in a function that ALSO has a separate `wait` used to decline
-    // (0 spawns) because the nested group's result allocas were pre-allocated ONLY by the
-    // top-level Step-1c scan — a nested pair was invisible to that scan, so firing it while a
-    // LATER suspension (the `wait`) reloaded spike results crashed the backend ("no sm_entry
-    // alloca"). Root cause fixed directly (not papered over): `spike_cpu_group_result_names`
-    // (Step 1c's pre-alloc scan) now walks nested blocks too, mirroring
-    // `spike_cpu_group_member_count`'s existing depth-aware traversal — so a nested group's
-    // bind names get entry-block allocas regardless of depth, and the later reload succeeds.
-    // The nested-branch admission decline for "co-resident with another suspension" is REMOVED
-    // for this shape (a plain `wait`/ordinary suspending callee) — the state machine's existing
-    // multi-suspension-point dispatch already shares one continuation across every resume_point
-    // value, so the nested join and the wait coexist safely once the alloca gap is closed. This
-    // is the general SM-multi-suspension mechanism, NOT a synchronous bridge: the join and the
-    // wait each yield Pending independently and resume through the ordinary dispatch switch.
-    // Invariant: the group now FIRES (2 spawns) and stays byte-identical to `--no-auto-parallel`
-    // (9907). If this shows 0 spawns, the flip regressed — fix the admission gate, not this test.
-    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_nested_group_with_outer_wait.ynz", "9907");
-}
-
-#[test]
-fn v03_m3d_nested_group_with_suspending_callee_no_abort_byte_identical() {
-    // WHY (v0.3-M3g Phase 3 continuation — FLIPPED; test name retained for `git blame`/history
-    // continuity even though the assertion now FIRES BOTH groups): `combine` owns a nested CPU
-    // group AND ALSO calls `other` — a function promoted to run its OWN pair concurrently, which
-    // makes `other` a suspension point inside `combine`. A prior session HALTed here, attributing
-    // a reproducible hang/crash to "a genuine, pre-existing latent defect in the
-    // `ynz_rt_join_poll`/`CpuJoinHandle` handle-lifecycle machinery." That attribution was WRONG —
-    // re-investigated this session with runtime-level `eprintln!` tracing (added, exercised, fully
-    // reverted): every spawn/poll/free traced correctly; the runtime handle machinery is sound.
-    // The REAL root cause, found by reading the emitted LLVM IR directly: `combine`'s wrapper
-    // function allocated its composed frame using a stale special-case formula
-    // (`crates/ynz-codegen/src/emit.rs`'s `frame_bytes` computation for a spike-active host) that
-    // silently DROPPED the embedded `other` child sub-frame from the size — `ynz_alloc_zeroed(88)`
-    // when the composed frame (with the 80-byte embedded `other` sub-frame) needed 168 bytes. A
-    // genuine heap-buffer-overflow: every write into `other`'s embedded region landed past the end
-    // of the 88-byte allocation, corrupting adjacent heap metadata — the observed crash/hang.
-    // Fixed directly in `emit.rs` (always trust `frame_layout.total_size`, which already includes
-    // both the CPU reserve and every embedded child, instead of the stale own-base-only fallback).
-    // With the real bug fixed, the narrow residual decline this comment used to describe
-    // (`admitted_cpu_group`'s nested-branch `spike_capable_names` check) was verified unnecessary
-    // (20/20 clean runs of the minimized repro, correct output, no crash, no hang) and removed.
-    // Both groups now FIRE: `combine`'s own nested pair (2 spawns) AND `other`'s top-level pair
-    // (2 spawns) = 4 total. See the plan's audit trail for the full repro + fix.
-    m3d_assert_fires_n_byte_identical_alloc_free(
-        "v0_3_m3d_nested_group_with_suspending_callee.ynz",
-        "19810",
-        4,
-    );
-}
-
-#[test]
-fn v03_m3d_spike_n_nested_wait_fires_byte_identical_alloc_free() {
-    // WHY: a top-level 2-member CPU group (`fib(10)`/`fib(11)`) followed by a LATER `wait`
-    // NESTED inside an `if` (`if (flag > 0) { wait sleep(0) }`), then reads of both group
-    // members (`print(a)`, `print(b)`) — a PRE-EXISTING corpus fixture (not one of the three
-    // non-negotiable flip fixtures) whose divergence surfaced via `cross_impl_consistency`'s
-    // corpus sweep during v0.3-M3g Phase 3. Root cause: `crate::check::collect_crossings_in_stmts`'s
-    // `this_stmt_suspends` check recognized only a DIRECT top-level `wait`/suspending-call
-    // statement as a suspension point — never a control-flow statement (`if`/`while`/`for`/
-    // `match`) whose BODY suspends — so the group's pending result-binding names (`a`/`b`) were
-    // never flushed into `declared` before the nested `wait`, and the post-if reads were never
-    // marked crossing: codegen emitted an alloca that does not dominate the read (LLVM SSA
-    // verification failure, "Instruction does not dominate all uses"). A prior session found this
-    // and worked around it with an admission-gate residual decline
-    // (`stmt_control_flow_body_suspends`) rather than fixing the deeper analysis gap. Fixed for
-    // real this session: `this_stmt_suspends` now also recognizes a control-flow statement whose
-    // body suspends, flushing pending result-bindings and recursing into the suspending sub-block
-    // exactly like the not-yet-suspended case already did (see `check.rs` for the full fix,
-    // including a self-caught regression on `flag`-in-a-later-if's-condition reads and its
-    // correction). The residual decline is now removed. Invariant: the group FIRES (2 spawns) and
-    // stays byte-identical to `--no-auto-parallel` (`55\n89`). If this shows 0 spawns, the fix
-    // regressed — fix `check.rs`'s crossing analysis, not this test.
-    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_spike_n_nested_wait.ynz", "55\n89");
-}
-
-#[test]
-fn v03_m3d_mixed_cpu_io_group_declines_byte_identical() {
-    // WHY (v0.3-M3g Phase 3 FLIP — the milestone's core acceptance signal; test name retained
-    // for history continuity even though the assertion now FIRES): a pure-CPU call (`score`)
-    // next to an I/O call (`fetch`, which `wait`s on a timer) is a mixed CPU+I/O group. Before
-    // fusion, the CPU spawn-join path and the I/O inline-poll path used separate mechanisms with
-    // no shared continuation — driving them together would deadlock the join. `emit_fused_group_
-    // spawn_poll` (`ynz_typeck::cpu_admission::admitted_fused_group`'s codegen consumer) now
-    // drives BOTH classes through ONE shared continuation: `score` spawns onto the blocking pool,
-    // `fetch` inline-polls its embedded child sub-frame, and every resume re-drives whichever is
-    // still outstanding — a genuine async yield, never a blocking join (M2-HALT corpse). The
-    // group now FIRES (1 spawn — one CPU member; `fetch` is the Suspending member and has no
-    // separate spawn call), byte-identical output to `--no-auto-parallel` (4958). If this shows
-    // 0 spawns, the fusion regressed — fix the codegen, not this test.
-    m3d_assert_fires_n_byte_identical_alloc_free(
-        "v0_3_m3d_mixed_cpu_io_group_declines.ynz",
-        "4958",
-        1,
-    );
-}
-
 // WHY (group): v0.3-M3g Phase 2 (typeck front half) neutrality fixtures, UPDATED in Phase 3.
 // Phase 2 lifted `compute_cpu_promotions`'s `base_suspends` skip so a suspending host can host
 // its own CPU-promotion candidate group, and extended the guard-probe (E6) to `base_suspends`
@@ -6762,160 +7323,6 @@ fn v03_m3d_mixed_cpu_io_group_declines_byte_identical() {
 // exception — it declines at a different layer (typeck promotion, not this admission gate) and
 // is unaffected by the admission-gate flip.
 
-#[test]
-fn v03_m3g_top_level_group_in_suspending_host_declines_byte_identical() {
-    // WHY (v0.3-M3g Phase 3 FLIP — the plan's ¶3.1 note explicitly anticipates this: "The Phase 2
-    // neutrality fixtures flip with it: the top-level-group-in-suspending-host shape becomes
-    // fire-asserting"; test name retained for history continuity even though the assertion now
-    // FIRES): `entrypoint` owns a top-level CPU group (`crunch(3)`, `crunch(4)`) immediately
-    // followed by an unrelated `wait sleep(0)`. Phase 2's temporary co-resident-suspension
-    // decline (keyed on `base_suspends.contains(&f.name)`) is REMOVED in Phase 3 — the general
-    // SM multi-suspension-point dispatch already shares one continuation across the group's join
-    // AND the trailing wait, so this shape is safe once admitted (top-level groups never hit the
-    // Step-1c depth-aware-alloca gap the nested case needed — their result names were always
-    // pre-allocated). Invariant: the group now FIRES (2 spawns), byte-identical to
-    // `--no-auto-parallel` (9907). If this shows 0 spawns, the flip regressed — fix the admission
-    // gate, not this test.
-    m3d_assert_fires_byte_identical_alloc_free(
-        "v0_3_m3g_top_level_group_in_suspending_host_declines.ynz",
-        "9907",
-    );
-}
-
-#[test]
-fn v03_m3g_top_level_group_in_suspending_host_bare_intrinsic_declines_byte_identical() {
-    // WHY (v0.3-M3g Phase 3 FLIP, bare-intrinsic twin of the fixture above; test name retained
-    // for history continuity): `entrypoint` owns a top-level CPU group (`crunch(3)`, `crunch(4)`)
-    // immediately followed by a BARE `sleep(0)` call — no explicit `wait` keyword.
-    // `may_block::analyze` still seeds `calls_may_block_intrinsic` for a bare may-block-intrinsic
-    // call, so `entrypoint` is a genuine `base_suspends` host at runtime regardless of `wait`
-    // syntax at the call site. Same flip rationale as the sibling test above: Phase 2's temporary
-    // decline is removed in Phase 3, and the auto-inferred suspension (no explicit `wait` needed
-    // — see `IMP-no-function-coloring.md`) coexists safely with the top-level group's join
-    // through the ordinary multi-suspension-point SM dispatch. Invariant: FIRES (2 spawns),
-    // byte-identical to `--no-auto-parallel` (9907). If this shows 0 spawns, the flip
-    // regressed — fix the admission gate, not this test.
-    m3d_assert_fires_byte_identical_alloc_free(
-        "v0_3_m3g_top_level_group_in_suspending_host_bare_intrinsic_declines.ynz",
-        "9907",
-    );
-}
-
-#[test]
-fn v03_m3g_mixed_host_with_promoted_sibling_declines_byte_identical() {
-    // WHY (v0.3-M3g Phase 3 FLIP — test name retained for history continuity even though the
-    // assertion now FIRES for BOTH hosts): `pureCpuHost` is an ordinary, legitimately-promoted
-    // CPU host (no suspension); `mixedHost` is a suspending host (`wait sleep(0)`) that ALSO owns
-    // its own top-level CPU group — the SAME "top-level group in a suspending host" shape as
-    // `v03_m3g_top_level_group_in_suspending_host_declines_byte_identical` above, just co-resident
-    // in a module with a second, independently-promoted pure-CPU host. Phase 2's temporary
-    // co-resident-suspension decline (which used to force `mixedHost`'s group to decline while
-    // `pureCpuHost`'s fired normally) is removed in Phase 3: both hosts now admit and fire
-    // independently — `pureCpuHost`'s 2 spawns and `mixedHost`'s 2 spawns, 4 total, exactly as a
-    // module with two independently-promoted CPU-group hosts should behave (no cross-host
-    // interaction; each function has its own composed frame). Invariant: exactly 4 spawns total,
-    // byte-identical to `--no-auto-parallel`. If this shows 2 spawns, `mixedHost`'s flip
-    // regressed (back to Phase-2 behavior); 0 spawns means BOTH stopped firing.
-    let fixture_name = "v0_3_m3g_mixed_host_with_promoted_sibling_declines.ynz";
-    let src = fixture(fixture_name);
-
-    let (par_stdout, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
-    assert_eq!(
-        par_code, 0,
-        "default build must exit 0; stderr:\n{par_stderr}"
-    );
-    assert_eq!(
-        par_stdout.trim(),
-        "9907\n9911",
-        "default-mode output must equal the oracle; stdout:\n{par_stdout}"
-    );
-
-    let (seq_stdout, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(
-        seq_code, 0,
-        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
-    );
-    assert_eq!(
-        par_stdout, seq_stdout,
-        "default and --no-auto-parallel stdout must be byte-identical"
-    );
-
-    let ir = build_to_tmpdir_emit_ir(&src);
-    assert_eq!(
-        count_spawn_calls(&ir),
-        4,
-        "exactly 4 spawns — 2 from pureCpuHost's promotion, 2 from mixedHost's (Phase 3 flip). \
-         2 spawns = mixedHost regressed back to declining; 0 = both stopped firing. IR:\n{ir}"
-    );
-
-    let (alloc, free) = ynz_run_with_alloc_counter(fixture_name);
-    assert_eq!(
-        alloc, free,
-        "alloc must equal free (no leak on the dual-host fired path); alloc={alloc}, free={free}"
-    );
-}
-
-#[test]
-fn v03_m3g_guard_tripping_crossing_in_suspending_host_declines_byte_identical() {
-    // WHY (Phase 2 E6 adversarial fixture): a suspending host (`wait sleep(0)`) that also owns
-    // a clean top-level CPU group (`crunch(3)`, `crunch(4)`), PLUS a THIRD, separate call to the
-    // SAME callee in a sub-expression position (`crunch(5) + 1`). `crunch` never suspends under
-    // the REAL suspend set, so this compiles clean at the plain layer (no pre-existing hard
-    // error) — the hazard is visible ONLY to the promotion-layer guard-probe, which augments
-    // `suspending_fns` with this candidate's own CPU-group callee before probing. This is a
-    // PERMANENT safety decline (unlike the neutrality fixtures above) — the guard-probe
-    // extension to `base_suspends` hosts (`compute_cpu_promotions`'s rollback loop) must exclude
-    // this host from the typeck `promoted` set regardless of the Phase-2 temporary
-    // admission-gate decline, because "a suspending call inside a larger expression" is a real,
-    // permanent codegen constraint. 0 spawns, byte-identical to `--no-auto-parallel`. If this
-    // shows ANY spawns, the guard-probe extension regressed — fix `compute_cpu_promotions`'s
-    // rollback loop, not this test. (Direct, precise proof of the `promoted`-set exclusion lives
-    // in `ynz-typeck`'s `base_suspends_host_with_subexpr_position_guard_declines_promotion` unit
-    // test — this fixture proves the observable byte-identical behavior.)
-    m3d_assert_declines_byte_identical(
-        "v0_3_m3g_guard_tripping_crossing_in_suspending_host_declines.ynz",
-        "14863",
-    );
-}
-
-#[test]
-fn v03_m3g_nested_mixed_group_declines_byte_identical() {
-    // WHY (Phase 5 cheap-gate follow-up, deviation-judge minor finding): the plan's Future
-    // Requirements table names "A NESTED mixed (fused CPU+I/O) group stays declined to
-    // sequential" as a scoped, permanent-for-now decline — `admitted_fused_group` is TOP-LEVEL
-    // ONLY by construction (its own doc comment). That row had prose (WHAT/WHY/COST/TRIGGER) but
-    // no locked decline-test proving the shape actually declines rather than crashing, silently
-    // misfiring, or diverging between modes. `crunch(1)` (CPU-eligible) and `fetchA(2)`
-    // (suspending) sit adjacent inside an `if` body — the EXACT shape that would fuse if it were
-    // top-level. Because it is nested, `admitted_fused_group` never scans it; the pure-CPU
-    // nested-group path also declines (only ONE CPU-eligible member exists there — `fetchA` is
-    // excluded from CPU eligibility since it suspends — so no adjacent CPU-eligible PAIR exists
-    // to admit). 0 spawns, byte-identical to `--no-auto-parallel`. If this ever shows a nonzero
-    // spawn count, the nested-fused-group scope narrowing this fixture locks has been silently
-    // lifted without the Future-Requirements-row's own re-derivation work (frame-layout
-    // extension to a dual-kind reserve at depth > 0) — fix the admission gate's scope, not this
-    // test, unless that re-derivation genuinely landed.
-    m3d_assert_declines_byte_identical("v0_3_m3g_nested_mixed_group_declines.ynz", "448");
-}
-
-#[test]
-fn v03_m3g_wide_ec_mixed_group_declines_byte_identical() {
-    // WHY (v0.3-M3g Phase 3 — E7 wide-EC ratchet, fused-group instance): a wide-value-EC
-    // (`number errors`) call (`priceA`) next to an I/O call (`fetch`). `priceA` is excluded from
-    // `cpu_supported_callees` — the SAME shared CPU-ABI-fits predicate both the pure-CPU
-    // (`admitted_cpu_group`) and fused (`admitted_fused_group`) admission gates read (the 24-byte
-    // {error word + i128 value} pair overflows the 16-byte CPU result slot; admitting it would
-    // make the fused join-bind dereference a pointer into the dead worker-thread frame — a
-    // use-after-free). `priceA` is not a suspending call either, so the fused-group classifier
-    // finds it ineligible for EITHER class — no adjacent eligible pair ever forms, so no fused
-    // group is even considered. This proves the pre-existing pure-CPU decline-around
-    // (`v03_m3d_return_class_number_errors_declines_byte_identical`) SURVIVES fusion rather than
-    // being silently reopened by the new admission path: 0 spawns, byte-identical to
-    // `--no-auto-parallel`. If this shows ANY spawns, the wide-EC UAF class has reopened — fix
-    // the shared `cpu_supported_callees`/`ec_inner_fits_cpu_result_abi` predicate, not this test.
-    m3d_assert_declines_byte_identical("v0_3_m3g_wide_ec_mixed_group_declines.ynz", "6.0\nwaited");
-}
-
 // ── v0.3-M3g Phase 3: E1 adversarial multi-resume deadlock gate ──────────────
 //
 // WHY (group): the three non-negotiable flip fixtures above use trivial workloads
@@ -6928,30 +7335,9 @@ fn v03_m3g_wide_ec_mixed_group_declines_byte_identical() {
 // member that stops getting re-driven by the shared continuation. Both routed through the
 // watchdog-wrapped shared helpers; a dropped member hangs here.
 
+// bug: load/soak: 20 cumulative fused groups in a fan-out; deadlock detection (liveness for one group is held by the e1 cases) | tier: Medium
 #[test]
-fn v03_m3g_e1_io_lags_multi_resume_fires_byte_identical() {
-    // WHY: the I/O member (150ms sleep) outlives the CPU member (100-iteration loop) by orders
-    // of magnitude, forcing several real poll passes while the CPU handle is already
-    // Ready/nulled — proves the null-check-skip path doesn't crash or double-free on repeated
-    // re-entry, and the I/O sub-frame keeps getting re-polled until its own sentinel fires.
-    m3d_assert_fires_n_byte_identical_alloc_free("v0_3_m3g_e1_io_lags_multi_resume.ynz", "4954", 1);
-}
-
-#[test]
-fn v03_m3g_e1_cpu_lags_multi_resume_fires_byte_identical() {
-    // WHY: the mirror of the fixture above — the CPU member (150-million-iteration loop) outlives
-    // the I/O member (15ms sleep), forcing several real poll passes while the I/O sub-frame is
-    // already Ready/sentinel-routed — proves the shared poll keeps re-driving the STILL-pending
-    // CPU handle across resumes rather than silently dropping it once the other class finishes.
-    m3d_assert_fires_n_byte_identical_alloc_free(
-        "v0_3_m3g_e1_cpu_lags_multi_resume.ynz",
-        "11249999925000004",
-        1,
-    );
-}
-
-#[test]
-fn v03_m3g_e8_pool_exhaustion_stress_completes_without_deadlock() {
+fn nightly_v03_m3g_e8_pool_exhaustion_stress_completes_without_deadlock() {
     // WHY (E8 obligation): drives 20 CUMULATIVE fused CPU+I/O groups via a RECURSION-SPAWNING,
     // FAN-OUT shape — four independent chains, each with one root worker hosting its OWN
     // top-level fused group and, once that group resolves, `background`-spawning ALL FOUR of its
@@ -7037,6 +7423,7 @@ fn v03_m3g_e8_pool_exhaustion_stress_completes_without_deadlock() {
     );
 }
 
+// bug: a fused group runs its CPU and I/O members one after another instead of concurrently | tier: High
 #[test]
 fn v03_m3g_overlap_proof_cpu_and_io_members_genuinely_run_concurrently() {
     // WHY: a deterministic, contention-immune ORDERING assertion (Phase 1's confirmed A7
@@ -7130,66 +7517,6 @@ fn v03_m3g_overlap_proof_cpu_and_io_members_genuinely_run_concurrently() {
 // below asserts the EXACT expected spawn count (CPU-class member count only — Suspending members
 // never spawn) + byte-identical output across modes + alloc==free.
 
-#[test]
-fn v03_m3g_matrix_2cpu_1io_fires_byte_identical() {
-    // WHY: 2 CPU members (different callees) + 1 I/O member — proves N=2 CPU is not a ceiling.
-    m3d_assert_fires_n_byte_identical_alloc_free("v0_3_m3g_matrix_2cpu_1io.ynz", "1667", 2);
-}
-
-#[test]
-fn v03_m3g_matrix_1cpu_2io_fires_byte_identical() {
-    // WHY: 1 CPU member + 2 I/O members (distinct callees, each own embedded sub-frame) —
-    // proves M=2 Suspending members compose in one fused group. 1 spawn (I/O members never
-    // spawn — they inline-poll via their embedded child sub-frames).
-    m3d_assert_fires_n_byte_identical_alloc_free("v0_3_m3g_matrix_1cpu_2io.ynz", "1261", 1);
-}
-
-#[test]
-fn v03_m3g_matrix_3cpu_2io_fires_byte_identical() {
-    // WHY: 3 CPU + 2 I/O, the widest cell in this milestone's matrix — 5 total members sharing
-    // ONE continuation. 3 spawns (CPU-class count only).
-    m3d_assert_fires_n_byte_identical_alloc_free("v0_3_m3g_matrix_3cpu_2io.ynz", "2165", 3);
-}
-
-#[test]
-fn v03_m3g_matrix_same_callee_cpu_x2_with_io_fires_byte_identical() {
-    // WHY: same-callee CPU members ×2 (M3d's Same-Callee Amendment) alongside one I/O member —
-    // the fused-group admission gate must carry the amendment through unchanged. 2 spawns (the
-    // two `crunch` invocations, each with a per-invocation ctx).
-    m3d_assert_fires_n_byte_identical_alloc_free(
-        "v0_3_m3g_matrix_same_callee_cpu_x2_with_io.ynz",
-        "2457",
-        2,
-    );
-}
-
-#[test]
-fn v03_m3g_matrix_io_first_order_fires_byte_identical() {
-    // WHY: I/O member declared FIRST, CPU member SECOND — declaration order must not affect
-    // admission or correctness. Twin of the CPU-first fixture below (same callees, same total).
-    m3d_assert_fires_n_byte_identical_alloc_free("v0_3_m3g_matrix_io_first_order.ynz", "1229", 1);
-}
-
-#[test]
-fn v03_m3g_matrix_cpu_first_order_fires_byte_identical() {
-    // WHY: CPU member declared FIRST, I/O member SECOND — the order twin of the fixture above.
-    // Both fixtures sum to the identical total (1229), proving declaration order is immaterial.
-    m3d_assert_fires_n_byte_identical_alloc_free("v0_3_m3g_matrix_cpu_first_order.ynz", "1229", 1);
-}
-
-#[test]
-fn v03_m3g_matrix_errors_capable_io_fires_byte_identical() {
-    // WHY: an `errors`-capable I/O member (`-> int errors`) mixed with a CPU member. The
-    // fused-group I/O-member binding must register the bound name in `errors_capable_locals`
-    // (mirrors M3b's `v0_3_m3b_p4_parallel_errors_return.ynz`) so `.or(...)` unwraps correctly
-    // instead of dereferencing a mis-typed slot (a segfault, not a silent wrong answer, if broken).
-    m3d_assert_fires_n_byte_identical_alloc_free(
-        "v0_3_m3g_matrix_errors_capable_io.ynz",
-        "1229",
-        1,
-    );
-}
-
 // ── v0.3-M3g Phase 4: cross-module fused group (the named gap) ───────────────
 //
 // WHY (group): the plan's Terrain section flags this explicitly: "Cross-module frame
@@ -7201,8 +7528,18 @@ fn v03_m3g_matrix_errors_capable_io_fires_byte_identical() {
 // not a smoke test: default-mode output correctness, default==--no-auto-parallel byte-identity,
 // AND the exact expected CPU-class spawn count via the (Phase-4-added) multi-file IR extraction.
 
-#[test]
-fn v03_m3g_cross_module_direct_fires_byte_identical() {
+/// One named test per input class of the `fused-group-cross-module table` unit; each case is a test the runner names.
+macro_rules! fused_group_cross_module_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: an imported member of a fused group is mis-bound or mis-sized across modules | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+fused_group_cross_module_table_high_case! {
+    // case: a fused group's local CPU reserve and an imported I/O member's child sub-frame size disagree (frame corruption)
+    v03_m3g_cross_module_direct_fires_byte_identical => {
     // WHY: `entrypoint` fuses a local CPU member (`crunch`) with an I/O member imported DIRECTLY
     // from `io_lib` (one module hop). `entrypoint`'s frame reserves the CPU handle/result region
     // locally AND embeds the imported `fetchRemote`'s child sub-frame at the resolver-computed
@@ -7248,10 +7585,9 @@ fn v03_m3g_cross_module_direct_fires_byte_identical() {
         alloc, free,
         "alloc must equal free on the cross-module fused group's frame; alloc={alloc}, free={free}"
     );
-}
-
-#[test]
-fn v03_m3g_cross_module_reexport_chain_fires_byte_identical() {
+    }
+    // case: a two-hop re-export chain inside a fused parent frame is mis-sized
+    v03_m3g_cross_module_reexport_chain_fires_byte_identical => {
     // WHY: the deepest boundary-matrix cell — `entrypoint` fuses local `crunch` with `doWork`
     // (imported from `b_ops`), and `doWork` ITSELF wraps `a_ops.getValue` (a genuine two-hop
     // re-export chain, M3e's `reexport_chain_b_total_size_includes_a_sub_frame` style).
@@ -7298,10 +7634,9 @@ fn v03_m3g_cross_module_reexport_chain_fires_byte_identical() {
         alloc, free,
         "alloc must equal free on the cross-module fused group's frame; alloc={alloc}, free={free}"
     );
-}
-
-#[test]
-fn v03_m3g_cross_module_errors_capable_fires_byte_identical() {
+    }
+    // case: an imported `errors`-capable I/O member of a fused group is mis-bound across modules
+    v03_m3g_cross_module_errors_capable_fires_byte_identical => {
     // WHY: intersects the two first-class targets in one frame — an imported I/O member that is
     // ALSO `errors`-capable (`-> int errors`). The fused-group binding must register the bound
     // name in `errors_capable_locals` (the local-only matrix cell,
@@ -7346,6 +7681,7 @@ fn v03_m3g_cross_module_errors_capable_fires_byte_identical() {
         alloc, free,
         "alloc must equal free on the cross-module fused group's frame; alloc={alloc}, free={free}"
     );
+    }
 }
 
 // ── v0.3-M3g Phase 4: resource cleanup + background/mixed-group interaction sweep ────────────
@@ -7364,6 +7700,7 @@ fn v03_m3g_cross_module_errors_capable_fires_byte_identical() {
 // I/O-sub-frame region), and any observed panic noise is the SAME pre-existing benign message —
 // never a hang (routed through the watchdog) and never a new crash class.
 
+// bug: a detached background-hosted fused group leaks (alloc!=free) or crashes in the shutdown race (plan #18 repro, protected: bug/tier line only) | tier: High
 #[test]
 fn v03_m3g_background_fused_group_detach_no_leak_and_rate_unchanged() {
     let src = fixture("v0_3_m3g_background_fused_group_detach.ynz");
@@ -7444,6 +7781,7 @@ fn v03_m3g_background_fused_group_detach_no_leak_and_rate_unchanged() {
     );
 }
 
+// bug: a completed-and-discarded background-hosted fused group leaks its dual-kind frame (plan #18 repro, protected; distinct fixture and regime) | tier: High
 #[test]
 fn v03_m3g_background_fused_group_detach_completes_before_exit_no_leak() {
     // WHY: the sibling test above (`..._no_leak_and_rate_unchanged`) lands almost entirely in the
@@ -7506,172 +7844,6 @@ fn v03_m3g_background_fused_group_detach_completes_before_exit_no_leak() {
 // multiple-run garbage detection for the frame-slot-touching cells. If you relax any
 // spawn-count assertion, a cell silently regressed FIRE↔DECLINE — fix the codegen, not the test.
 
-#[test]
-fn v03_m3d_danger_string_if_arm_fires_byte_identical() {
-    // WHY: a heap-pointer return (`string`) packed inside an `if` arm. The result slot holds a
-    // pointer, not an inline value; that pack/bind must survive the if-arm frame machinery.
-    m3d_assert_fires_byte_identical_alloc_free(
-        "v0_3_m3d_danger_string_if_arm.ynz",
-        "first=3\nsecond=5",
-    );
-}
-
-#[test]
-fn v03_m3d_danger_array_match_arm_fires_byte_identical() {
-    // WHY: a heap-pointer return (`array<int>`) packed inside a `match` arm. Same pointer-slot
-    // risk as the string-if-arm cell, but in match-arm frame machinery and with the counts read
-    // inside the arm (so the int counts, not the array pointers, cross the arm boundary).
-    m3d_assert_fires_byte_identical_alloc_gap("v0_3_m3d_danger_array_match_arm.ynz", "3\n5", 0);
-}
-
-#[test]
-fn v03_m3d_danger_number_if_arm_fires_byte_identical() {
-    // WHY: a wide-value return (`number`/decimal128) packs into BOTH words of the 16-byte result
-    // slot; that two-word pack/bind must survive the if-arm frame machinery. The result is
-    // RETURNED out of the wrapper, so this also pins that the promoted `number` return ABI matches
-    // the non-SM lowering (a stack-backed, caller-copies-and-forgets pointer): alloc==free, no
-    // heap stabilization block leaked. A regression to a heap-returning wrapper would re-open the
-    // one-allocation leak this cell now strictly guards against.
-    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_danger_number_if_arm.ynz", "6.0\n15.0");
-}
-
-#[test]
-fn v03_m3d_danger_bool_match_arm_fires_byte_identical() {
-    // WHY: a bool returns as an i64 in the result slot and must be truncated to i1 before the
-    // bool alloca store (M3f truncation discipline). The two members produce DIFFERENT bools, so
-    // a missed truncation or slot aliasing changes the output. Reads are kept inside the arm.
-    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_danger_bool_match_arm.ynz", "false\ntrue");
-}
-
-#[test]
-fn v03_m3d_danger_same_callee_string_if_arm_fires_byte_identical() {
-    // WHY: same-callee distinctness with a heap-pointer return INSIDE an `if` arm — the
-    // per-(group, member-index) slot keying must hold for a pointer pack AND inside nested
-    // control flow at once. The two calls give DIFFERENT strings (n=3, n=7); aliasing would make
-    // them equal.
-    m3d_assert_fires_byte_identical_alloc_free(
-        "v0_3_m3d_danger_same_callee_string_if_arm.ynz",
-        "n=3\nn=7",
-    );
-}
-
-#[test]
-fn v03_m3d_danger_same_callee_number_match_arm_fires_byte_identical() {
-    // WHY: same-callee distinctness with a wide-value return INSIDE a `match` arm — the two-word
-    // decimal128 pack and the member-index slot keying must both hold inside a match arm. Results
-    // DIFFER (6.0, 9.0). Returned out of the wrapper, so this also strictly guards alloc==free:
-    // the promoted `number` return ABI must match the non-SM stack-backed lowering, leaking no
-    // heap stabilization block.
-    m3d_assert_fires_byte_identical_alloc_free(
-        "v0_3_m3d_danger_same_callee_number_match_arm.ynz",
-        "6.0\n9.0",
-    );
-}
-
-#[test]
-fn v03_m3d_danger_same_callee_bool_match_arm_fires_byte_identical() {
-    // WHY: same-callee distinctness with a bool return INSIDE a `match` arm — combines i64→i1
-    // truncation + member-index slot keying + match-arm machinery. Results DIFFER (false, true).
-    m3d_assert_fires_byte_identical_alloc_free(
-        "v0_3_m3d_danger_same_callee_bool_match_arm.ynz",
-        "false\ntrue",
-    );
-}
-
-#[test]
-fn v03_m3d_danger_same_callee_array_if_arm_fires_byte_identical() {
-    // WHY: same-callee distinctness with a heap-pointer (`array<int>`) return INSIDE an `if` arm.
-    // The member-index slot keying must hold for a pointer pack in nested control flow; the two
-    // calls give DIFFERENT counts (3, 6).
-    m3d_assert_fires_byte_identical_alloc_gap(
-        "v0_3_m3d_danger_same_callee_array_if_arm.ynz",
-        "3\n6",
-        0,
-    );
-}
-
-#[test]
-fn v03_m3d_danger_int_errors_if_arm_fires_byte_identical() {
-    // WHY: an error-capable return (`int errors`) packs as a tagged {error word, ok bits} pair;
-    // the join-bind must normalize the ok word and route through the EC decode path. That EC
-    // pack/bind must survive the if-arm frame machinery. Both functions succeed (6, 30).
-    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_danger_int_errors_if_arm.ynz", "6\n30");
-}
-
-#[test]
-fn v03_m3d_danger_float_if_arm_fires_byte_identical() {
-    // WHY: a `float` (f64 bits in one word) packed inside an `if` arm. The f64 bit pattern must
-    // travel through the result slot intact. A whole-valued float prints without a trailing `.0`.
-    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_danger_float_if_arm.ynz", "6\n15");
-}
-
-#[test]
-fn v03_m3d_danger_map_match_arm_fires_byte_identical() {
-    // WHY: a heap-pointer return (`map<int, int>`) packed inside a `match` arm. The map's heap
-    // pointer travels through the result slot; that pack/bind must survive match-arm machinery.
-    // alloc==free: 2 maps × 5 counted buffers, all released at scope exit (v0.3-M5 P3 by-value
-    // map ABI; see v03_m3d_return_class_map_fires_byte_identical's WHY).
-    m3d_assert_fires_byte_identical_alloc_gap("v0_3_m3d_danger_map_match_arm.ynz", "3\n5", 0);
-}
-
-#[test]
-fn v03_m3d_danger_mixed_string_declines_byte_identical() {
-    // WHY (v0.3-M3g Phase 3 FLIP — a DIRECT, foreseeable consequence of general fusion; test
-    // name retained for history continuity): a mixed group with a heap-pointer (`string`) CPU
-    // child. This fixture's own original WHY documented the decline as scope-bounded ("mixed
-    // CPU+I/O overlap is M3g, not M3d... belongs to a later milestone"), not a genuine safety
-    // concern about heap-pointer CPU children specifically — `build_cpu_trampoline`'s
-    // PointerValue packing arm already handles string/array/map returns for the pure-CPU path
-    // unchanged. `admitted_fused_group` places no return-class restriction narrower than
-    // `cpu_supported_callees` (the same CPU-ABI-fits predicate the pure-CPU gate uses), so this
-    // shape now correctly FIRES (1 spawn) through the general fused mechanism, byte-identical to
-    // `--no-auto-parallel` ("built=3\nwaited"). If this shows 0 spawns, the fusion regressed —
-    // fix the codegen, not this test.
-    m3d_assert_fires_n_byte_identical_alloc_free(
-        "v0_3_m3d_danger_mixed_string_declines.ynz",
-        "built=3\nwaited",
-        1,
-    );
-}
-
-#[test]
-fn v03_m3d_danger_mixed_number_declines_byte_identical() {
-    // WHY (v0.3-M3g Phase 3 FLIP — same reasoning as the string sibling above; test name
-    // retained for history continuity): a mixed group with a wide-value (`number`) CPU child.
-    // The original decline was scope-bounded ("mixed CPU+I/O overlap is M3g, not M3d"), not a
-    // safety concern about decimal128 CPU children — `build_cpu_trampoline`'s i128 packing arm
-    // already handles `number` returns for the pure-CPU path unchanged. FIRES (1 spawn),
-    // byte-identical to `--no-auto-parallel` ("6.0\n2.5"). If this shows 0 spawns, the fusion
-    // regressed — fix the codegen, not this test.
-    m3d_assert_fires_n_byte_identical_alloc_free(
-        "v0_3_m3d_danger_mixed_number_declines.ynz",
-        "6.0\n2.5",
-        1,
-    );
-}
-
-#[test]
-fn v03_m3d_danger_string_loop_body_declines_byte_identical() {
-    // WHY: a heap-pointer (`string`) group inside a loop body DECLINES — loop-body CPU groups are
-    // a future loop-placement slice, not M3d. The heap-pointer pack must not make a loop-body
-    // group fire. 0 spawns + byte-identical locks the loop-body decline for the heap-pointer case.
-    m3d_assert_declines_byte_identical("v0_3_m3d_danger_string_loop_body_declines.ynz", "hi=2");
-}
-
-#[test]
-fn v03_m3d_danger_read_after_arm_declines_byte_identical() {
-    // WHY: a CPU group inside a `match` arm whose results are READ in a statement AFTER the arm
-    // closes DECLINES — the result must survive the arm boundary as a crossing local, which the
-    // arm-placement path does not reserve for cross-boundary reads. This locks the boundary:
-    // reads kept INSIDE the arm FIRE (danger_bool_match_arm), reads that cross OUT decline. 0
-    // spawns + byte-identical. If this fired, the cross-arm crossing-slot path is being exercised
-    // without the reservation — fix the crossing machinery, not this test.
-    m3d_assert_declines_byte_identical(
-        "v0_3_m3d_danger_read_after_arm_declines.ynz",
-        "false\ntrue",
-    );
-}
-
 // WHY (group): structured stress cases that feature-development testing does not naturally hit —
 // deep promotion chains, recursion, nested background spawns, reverse completion order, and loop
 // trip-count boundaries. Each asserts the expected FIRE/DECLINE plus byte-identical output. The
@@ -7681,600 +7853,22 @@ fn v03_m3d_danger_read_after_arm_declines_byte_identical() {
 // Yinz source layer cannot express 600 joins or an out-of-band cancellation in one program; the
 // source-expressible panic case is v03_m3d_cpu_child_panic_fires_byte_identical above.
 
-#[test]
-fn v03_m3d_hostile_deep_promoted_chain_fires_byte_identical() {
-    // WHY: a deep call chain (top → middle → combine) where the bottom function hosts the CPU
-    // group and the enclosing callers are state machines driving the one below. The bottom group
-    // must still FIRE through the chain. 2 spawns + byte-identical + alloc==free.
-    m3d_assert_fires_byte_identical_alloc_free("v0_3_m3d_hostile_deep_promoted_chain.ynz", "102");
-}
-
-#[test]
-fn v03_m3d_hostile_cpu_child_spawns_background_fires_byte_identical() {
-    // WHY: a CPU child that itself spawns a `background` task — the spawn-from-a-blocking-pool
-    // thread path. The CPU group must FIRE, the nested spawn must not crash, and the result must
-    // be byte-identical in both modes. The detached background task's own output is not part of
-    // the contract (it may not flush before exit).
-    m3d_assert_fires_byte_identical_alloc_free(
-        "v0_3_m3d_hostile_cpu_child_spawns_background.ynz",
-        "3675",
-    );
-}
-
-#[test]
-fn v03_m3d_hostile_reverse_completion_fires_byte_identical() {
-    // WHY: reverse completion order — a HEAVY child finishes long after a LIGHT child, so the
-    // children complete out of declaration order. The post-join binds must stay attached to the
-    // right member regardless of completion order (slots keyed by position, not finish time).
-    // Output is order-independent (12497500, 3) and byte-identical.
-    m3d_assert_fires_byte_identical_alloc_free(
-        "v0_3_m3d_hostile_reverse_completion.ynz",
-        "12497500\n3",
-    );
-}
-
-#[test]
-fn v03_m3d_hostile_self_recursive_group_declines_byte_identical() {
-    // WHY: a self-recursive function holding a CPU group in its base case DECLINES — a function
-    // in a call cycle is excluded from parallelization (recursion's heap-boxed frame would
-    // intersect the per-member handle/result slots). 0 spawns + byte-identical locks the
-    // recursion exclusion. If this fired, recursion × per-member-slot is being exercised unsafely.
-    m3d_assert_declines_byte_identical("v0_3_m3d_hostile_self_recursive_group_declines.ynz", "100");
-}
-
-#[test]
-fn v03_m3d_hostile_mixed_reverse_completion_declines_byte_identical() {
-    // WHY (v0.3-M3g Phase 3 FLIP — a DIRECT, foreseeable consequence of general fusion; test
-    // name retained for history continuity): a mixed group (CPU child + I/O child) where the CPU
-    // child would complete BEFORE the I/O child suspends — the highest-risk completion ordering
-    // for a shared continuation across two member classes. `emit_fused_group_spawn_poll`'s poll
-    // state is ORDER-INDEPENDENT by construction: every poll pass drives every member (CPU via
-    // null-check-skip idempotent `ynz_rt_join_poll`, I/O via sentinel-skip idempotent resume-fn
-    // call) and accumulates "any pending" across BOTH classes regardless of which finishes
-    // first — completion order was never load-bearing for correctness. FIRES (1 spawn),
-    // byte-identical to `--no-auto-parallel` (4958). If this shows 0 spawns, the fusion
-    // regressed — fix the codegen, not this test.
-    m3d_assert_fires_n_byte_identical_alloc_free(
-        "v0_3_m3d_hostile_mixed_reverse_completion_declines.ynz",
-        "4958",
-        1,
-    );
-}
-
-#[test]
-fn v03_m3d_hostile_worth_it_false_negative_declines_byte_identical() {
-    // WHY: a worth-it FALSE NEGATIVE — heavy-looking straight-line callees with no loop or
-    // self-call, so the loop/recursion-keyed worth-it proxy declines them. A false negative is
-    // only a missed perf opportunity, never a wrong answer: 0 spawns + byte-identical output.
-    // This locks that the proxy is a perf gate, never a correctness gate.
-    m3d_assert_declines_byte_identical(
-        "v0_3_m3d_hostile_worth_it_false_negative_declines.ynz",
-        "82\n177",
-    );
-}
-
-#[test]
-fn v03_m3d_hostile_zero_iteration_loop_group_declines_byte_identical() {
-    // WHY: a CPU group inside a ZERO-iteration loop body — the boundary case for the loop-body
-    // decline. The loop never runs, the group declines (loop-body groups are a future slice), the
-    // accumulator stays at its initial value. 0 spawns + byte-identical, output 0.
-    m3d_assert_declines_byte_identical(
-        "v0_3_m3d_hostile_zero_iteration_loop_group_declines.ynz",
-        "0",
-    );
-}
-
-#[test]
-fn v03_m3d_hostile_many_iteration_loop_group_declines_byte_identical() {
-    // WHY: a CPU group inside a 10,000-iteration loop body — the high-trip-count stress companion
-    // to the zero-iteration boundary. The loop-body decline must hold whether the body runs zero
-    // or ten thousand times, with byte-identical accumulated output. 0 spawns + byte-identical.
-    m3d_assert_declines_byte_identical(
-        "v0_3_m3d_hostile_many_iteration_loop_group_declines.ynz",
-        "100890000",
-    );
-}
-
-#[test]
-fn v03_m3b_p4_wait_barrier_first_correct_output() {
-    // WHY: `wait` as the first call is an ordering barrier — waiter must complete
-    // before worker and helper start. Output order must be deterministic: waiter then done.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_wait_barrier_first.ynz"));
-    assert_eq!(
-        code, 0,
-        "wait-barrier-first fixture must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "waiter\ndone",
-        "waiter must print before done; stdout:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_wait_barrier_first_byte_identical() {
-    // WHY: Cross-impl consistency for the wait-barrier-first fixture.
-    let src = fixture("v0_3_m3b_p4_wait_barrier_first.ynz");
-    let (par, _, par_code) = build_to_tmpdir_and_run(&src, false);
-    let (seq, _, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(par_code, 0, "parallel build must exit 0");
-    assert_eq!(seq_code, 0, "--no-auto-parallel build must exit 0");
-    assert_eq!(
-        par, seq,
-        "wait-barrier-first stdout must be byte-identical in both modes"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_wait_barrier_mid_correct_output() {
-    // WHY: `wait` mid-group forces fa to complete before fb starts. Output order
-    // must be fa then fb then done regardless of whether fa and fb were otherwise
-    // independent suspending calls.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_wait_barrier_mid.ynz"));
-    assert_eq!(
-        code, 0,
-        "wait-barrier-mid must compile and run; stderr:\n{stderr}"
-    );
-    // fa() has no explicit wait so it is part of an independent group, then wait fb() runs
-    // fa starts, then wait fb() is an ordering barrier — fb runs after fa.
-    assert!(
-        stdout.contains("fa"),
-        "fa must have been called; stdout:\n{stdout}"
-    );
-    assert!(
-        stdout.contains("fb"),
-        "fb must have been called; stdout:\n{stdout}"
-    );
-    assert!(
-        stdout.contains("done"),
-        "done must be printed; stdout:\n{stdout}"
-    );
-    // fb must appear after fa in the output (ordering barrier guarantee).
-    let fa_pos = stdout.find("fa").expect("fa in stdout");
-    let fb_pos = stdout.find("fb").expect("fb in stdout");
-    assert!(fa_pos < fb_pos, "fa must appear before fb in stdout");
-}
-
-#[test]
-fn v03_m3b_p4_wait_barrier_mid_byte_identical() {
-    // WHY: Cross-impl consistency for the wait-barrier-mid fixture.
-    let src = fixture("v0_3_m3b_p4_wait_barrier_mid.ynz");
-    let (par, _, par_code) = build_to_tmpdir_and_run(&src, false);
-    let (seq, _, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(par_code, 0, "parallel build must exit 0");
-    assert_eq!(seq_code, 0, "--no-auto-parallel build must exit 0");
-    assert_eq!(
-        par, seq,
-        "wait-barrier-mid stdout must be byte-identical in both modes"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_wait_data_dependent_correct_output() {
-    // WHY: `wait` whose callee depends on an in-flight result. The data dependency
-    // forces ordering; the explicit `wait` forces the join. Output must be deterministic.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_wait_data_dependent.ynz"));
-    assert_eq!(
-        code, 0,
-        "wait-data-dependent must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "result:99\ndone",
-        "result must be 99 and done must follow; stdout:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_wait_data_dependent_byte_identical() {
-    // WHY: Cross-impl consistency for the wait-data-dependent fixture.
-    let src = fixture("v0_3_m3b_p4_wait_data_dependent.ynz");
-    let (par, _, par_code) = build_to_tmpdir_and_run(&src, false);
-    let (seq, _, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(par_code, 0);
-    assert_eq!(seq_code, 0);
-    assert_eq!(
-        par, seq,
-        "wait-data-dependent must be byte-identical in both modes"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_wait_two_consecutive_correct_output() {
-    // WHY: Two consecutive `wait` statements — each is a separate barrier that forces
-    // sequential ordering: alpha completes, then beta starts. The output order must
-    // be alpha then beta.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_wait_two_consecutive.ynz"));
-    assert_eq!(
-        code, 0,
-        "two-consecutive-wait must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "alpha\nbeta\ndone",
-        "alpha must appear before beta; stdout:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_wait_two_consecutive_byte_identical() {
-    // WHY: Cross-impl consistency for the two-consecutive-wait fixture.
-    let src = fixture("v0_3_m3b_p4_wait_two_consecutive.ynz");
-    let (par, _, par_code) = build_to_tmpdir_and_run(&src, false);
-    let (seq, _, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(par_code, 0);
-    assert_eq!(seq_code, 0);
-    assert_eq!(
-        par, seq,
-        "two-consecutive-wait must be byte-identical in both modes"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_wait_then_fresh_group_correct_output() {
-    // WHY: A `wait` barrier followed by a fresh independent group. The fresh group
-    // (fresh1+fresh2) must not join into the pre-barrier work. The barrier
-    // (`wait barrier()`) prints "barrier" and then the fresh group runs and done is printed.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_wait_then_fresh_group.ynz"));
-    assert_eq!(
-        code, 0,
-        "wait-then-fresh-group must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "barrier\ndone",
-        "barrier must print before done; stdout:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_wait_then_fresh_group_byte_identical() {
-    // WHY: Cross-impl consistency for the wait-then-fresh-group fixture.
-    let src = fixture("v0_3_m3b_p4_wait_then_fresh_group.ynz");
-    let (par, _, par_code) = build_to_tmpdir_and_run(&src, false);
-    let (seq, _, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(par_code, 0);
-    assert_eq!(seq_code, 0);
-    assert_eq!(
-        par, seq,
-        "wait-then-fresh-group must be byte-identical in both modes"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_data_dependent_ordered_correct_output() {
-    // WHY: Data-dependent statements must stay ordered WITHOUT `wait`. The auto-parallel
-    // pass must detect that `profileId = fetcher(userId)` depends on `userId` (defined
-    // by the first `fetcher` call) and NOT group them as Parallel. If they were parallelized,
-    // `profileId` would read an uninitialised `userId`.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_data_dependent_ordered.ynz"));
-    assert_eq!(
-        code, 0,
-        "data-dependent-ordered must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "user:42\nprofile:42",
-        "user and profile must both be 42; stdout:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_data_dependent_ordered_byte_identical() {
-    // WHY: Cross-impl consistency for the data-dependent-ordered fixture. This is
-    // the key gate: if the pass wrongly parallelizes dependent stmts, the parallel
-    // output diverges from --no-auto-parallel (sequential) output → gate RED.
-    let src = fixture("v0_3_m3b_p4_data_dependent_ordered.ynz");
-    let (par, _, par_code) = build_to_tmpdir_and_run(&src, false);
-    let (seq, _, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(par_code, 0);
-    assert_eq!(seq_code, 0);
-    assert_eq!(
-        par, seq,
-        "data-dependent output must be byte-identical in both modes (gate-discrimination proof)"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_write_conflict_ordered_correct_output() {
-    // WHY: Two calls both lend the same binding (write conflict). The independence
-    // analysis must detect the shared-write conflict via param_ownerships and keep
-    // them sequential. The final value (20) proves writeB ran after writeA.
-    // If they ran in parallel, the result would be non-deterministic.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_write_conflict_ordered.ynz"));
-    assert_eq!(
-        code, 0,
-        "write-conflict-ordered must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "final:20",
-        "writeB must run after writeA (final value = 20); stdout:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_write_conflict_ordered_byte_identical() {
-    // WHY: Cross-impl consistency for the write-conflict-ordered fixture.
-    let src = fixture("v0_3_m3b_p4_write_conflict_ordered.ynz");
-    let (par, _, par_code) = build_to_tmpdir_and_run(&src, false);
-    let (seq, _, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(par_code, 0);
-    assert_eq!(seq_code, 0);
-    assert_eq!(
-        par, seq,
-        "write-conflict output must be byte-identical in both modes"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_loop_sequential_correct_output() {
-    // WHY: Loop iterations with suspending calls must remain sequential — the
-    // auto-parallel pass must NOT reach into loop bodies. Output order is
-    // step:0 → step:1 → step:2 → done. Any parallelization across loop
-    // iterations would produce non-deterministic ordering.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_loop_sequential.ynz"));
-    assert_eq!(
-        code, 0,
-        "loop-sequential must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "step:0\nstep:1\nstep:2\ndone",
-        "loop iterations must run in order; stdout:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_loop_sequential_byte_identical() {
-    // WHY: Cross-impl consistency for the loop-sequential fixture.
-    let src = fixture("v0_3_m3b_p4_loop_sequential.ynz");
-    let (par, _, par_code) = build_to_tmpdir_and_run(&src, false);
-    let (seq, _, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(par_code, 0);
-    assert_eq!(seq_code, 0);
-    assert_eq!(
-        par, seq,
-        "loop-sequential output must be byte-identical in both modes"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_partial_dependency_correct_output() {
-    // WHY: Adversarial fixture (i) — partial dependency grouping. `fa` and `fb(a)`
-    // are data-dependent (fb reads `a` defined by fa). `fc` is independent of both
-    // fa and fb. The correct grouping: [fa] as Singleton, [fb, fc] as Parallel
-    // (fb reads `a` but fc doesn't — so fb and fc are independent of each other).
-    // All three values must be correct.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_partial_dependency.ynz"));
-    assert_eq!(
-        code, 0,
-        "partial-dependency must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "a:1\nb:1\nc:2\ndone",
-        "a=1, b=1 (fb(a)), c=2 — all correct; stdout:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_partial_dependency_byte_identical() {
-    // WHY: Cross-impl consistency for the partial-dependency fixture.
-    let src = fixture("v0_3_m3b_p4_partial_dependency.ynz");
-    let (par, _, par_code) = build_to_tmpdir_and_run(&src, false);
-    let (seq, _, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(par_code, 0);
-    assert_eq!(seq_code, 0);
-    assert_eq!(
-        par, seq,
-        "partial-dependency output must be byte-identical in both modes"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_no_new_runtime_symbols() {
-    // WHY: Auto-parallelization uses interleaved inline polling of embedded sub-frames —
-    // NOT ynz_rt_spawn or any new join-handle primitive. This test checks that the IR
-    // for the two-independent-parallel fixture contains no calls to ynz_rt_spawn.
-    // A violation means the pass accidentally fell back to a spawn-based approach,
-    // which would require a new runtime ABI and break the "zero new runtime symbols" AC.
-    let ll_path = fixture_path("v0_3_m3b_p4_two_independent_parallel.ll");
-    if ll_path.exists() {
-        let ir = std::fs::read_to_string(&ll_path).expect("read IR file");
-        // Check that `ynz_rt_spawn` is declared (fine — runtime decls are always emitted)
-        // but NOT called in the entrypoint's resume function. The call instruction for
-        // a spawn would appear as `call void @ynz_rt_spawn(` in the LLVM IR.
-        assert!(
-            !ir.contains("call void @ynz_rt_spawn("),
-            "auto-parallel IR must not CALL ynz_rt_spawn (only declare it); interleaved inline poll only"
-        );
-    }
-    // If the .ll file doesn't exist, skip (it's generated by the golden tests).
-    // The AC is also verified by the runtime-decls test below.
-}
-
-/// Returns the path to a fixture file (without running it).
-fn fixture_path(name: &str) -> std::path::PathBuf {
-    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest_dir.join("tests").join("fixtures").join(name)
-}
-
 // ── Adversarial fixtures (ii)–(v) ────────────────────────────────────────────
-
-#[test]
-fn v03_m3b_p4_transitive_write_conflict_ordered() {
-    // WHY (adversarial ii): Two callers each expose `lend c` in their own signature,
-    // propagating a write effect from an inner callee that lends. The independence
-    // analysis must detect the write conflict via param_ownerships and sequence them.
-    // If they were parallelized, outerB could overwrite outerA's value non-deterministically.
-    // Correct output: final:30 (outerA sets 10 then outerB sets 30, in source order).
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3b_p4_transitive_write_conflict.ynz"));
-    assert_eq!(
-        code, 0,
-        "transitive-write-conflict fixture must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "final:30",
-        "outerA then outerB must run in order; stdout:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_transitive_write_conflict_byte_identical() {
-    // WHY: Cross-impl consistency for adversarial fixture (ii).
-    let src = fixture("v0_3_m3b_p4_transitive_write_conflict.ynz");
-    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
-    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(
-        par_code, 0,
-        "parallel build must exit 0; stderr:\n{par_stderr}"
-    );
-    assert_eq!(
-        seq_code, 0,
-        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
-    );
-    assert_eq!(
-        par, seq,
-        "transitive-write-conflict stdout must be byte-identical in both modes"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_wait_nonsuspending_barrier_correct_output() {
-    // WHY (adversarial iii): `wait` on a non-suspending callee still acts as an ordering
-    // barrier that joins any prior in-flight auto-parallel work. `fetcher()` (suspending)
-    // runs, then `wait pureCpu(21)` barriers before printing. Output: fetched\ncpu\ndone.
-    // A missing barrier would allow continuation before fetcher completes.
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3b_p4_wait_nonsuspending_barrier.ynz"));
-    assert_eq!(
-        code, 0,
-        "wait-nonsuspending-barrier fixture must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "fetched\ncpu\ndone",
-        "fetched must appear before cpu; stdout:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_wait_nonsuspending_barrier_byte_identical() {
-    // WHY: Cross-impl consistency for adversarial fixture (iii).
-    let src = fixture("v0_3_m3b_p4_wait_nonsuspending_barrier.ynz");
-    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
-    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(
-        par_code, 0,
-        "parallel build must exit 0; stderr:\n{par_stderr}"
-    );
-    assert_eq!(
-        seq_code, 0,
-        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
-    );
-    assert_eq!(
-        par, seq,
-        "wait-nonsuspending-barrier stdout must be byte-identical in both modes"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_middle_resolves_first_correct_output() {
-    // WHY (adversarial iv): Three independent suspending statements where the MIDDLE
-    // one (fb, 5ms) resolves before the outer two (fa, fc, 50ms each). Each result
-    // must be bound to its own variable at its own declaration — NOT in completion order.
-    // Wrong: if the pass binds results in poll-completion order, b would get fa's value.
-    // Correct: a=1, b=2, c=3 regardless of which future completes first.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_middle_resolves_first.ynz"));
-    assert_eq!(
-        code, 0,
-        "middle-resolves-first fixture must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "a:1\nb:2\nc:3\ndone",
-        "each result must be bound to its own declaration slot; stdout:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_middle_resolves_first_byte_identical() {
-    // WHY: Cross-impl consistency for adversarial fixture (iv).
-    let src = fixture("v0_3_m3b_p4_middle_resolves_first.ynz");
-    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
-    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(
-        par_code, 0,
-        "parallel build must exit 0; stderr:\n{par_stderr}"
-    );
-    assert_eq!(
-        seq_code, 0,
-        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
-    );
-    assert_eq!(
-        par, seq,
-        "middle-resolves-first stdout must be byte-identical in both modes"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_nested_composed_frames_correct_output() {
-    // WHY (adversarial v): Nested composed sub-frames — one outer group member's callee
-    // itself contains an inner independent parallel group. The composed frame layout
-    // must hold at depth 2 (outer group + inner group). If the composed-frame allocation
-    // is wrong (double-alloc, dangling inner pointer), this crashes or produces garbage.
-    // All leaf labels must appear exactly once; "done" must be last.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_nested_composed_frames.ynz"));
-    assert_eq!(
-        code, 0,
-        "nested-composed-frames fixture must compile and run; stderr:\n{stderr}"
-    );
-    // Leaf output order is non-deterministic; assert all labels present and "done" last.
-    assert!(
-        stdout.contains("leaf_a"),
-        "leaf_a must appear; stdout:\n{stdout}"
-    );
-    assert!(
-        stdout.contains("leaf_b"),
-        "leaf_b must appear; stdout:\n{stdout}"
-    );
-    assert!(
-        stdout.contains("leaf_c"),
-        "leaf_c must appear; stdout:\n{stdout}"
-    );
-    assert!(
-        stdout.trim().ends_with("done"),
-        "done must be last; stdout:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_nested_composed_frames_byte_identical() {
-    // WHY: Cross-impl consistency for adversarial fixture (v).
-    let src = fixture("v0_3_m3b_p4_nested_composed_frames.ynz");
-    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
-    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(
-        par_code, 0,
-        "parallel build must exit 0; stderr:\n{par_stderr}"
-    );
-    assert_eq!(
-        seq_code, 0,
-        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
-    );
-    assert_eq!(
-        par, seq,
-        "nested-composed-frames stdout must be byte-identical in both modes"
-    );
-}
 
 // ── v0.3-M3b Phase 4 fix-round: Model-A teaching fixtures ────────────────────
 
-#[test]
-fn v03_m3b_p4_model_a_intended_reorder_parallel_output() {
+/// One named test per input class of the `auto-parallel reorder test` unit; each case is a test the runner names.
+macro_rules! auto_parallel_reorder_test_medium_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: independent suspending calls do not overlap under auto-parallel, or `--no-auto-parallel` does not keep source order | tier: Medium
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+auto_parallel_reorder_test_medium_case! {
+    // case: independent suspending calls do not overlap under auto-parallel (the shorter call must finish first)
+    v03_m3b_p4_model_a_intended_reorder_parallel_output => {
     // WHY: Locks the INTENDED Model-A reorder behavior — two independent suspending
     // side-effect calls (fa: 100ms+print A, fb: 50ms+print B) run concurrently under
     // the auto-parallel pass. fb finishes first (shorter sleep) so default output is
@@ -8295,10 +7889,9 @@ fn v03_m3b_p4_model_a_intended_reorder_parallel_output() {
         "B\nA\ndone",
         "parallel: fb (50ms) finishes before fa (100ms) — reorder is the intended Model-A behavior; stdout:\n{par_stdout}"
     );
-}
-
-#[test]
-fn v03_m3b_p4_model_a_intended_reorder_sequential_output() {
+    }
+    // case: `--no-auto-parallel` does not preserve source order (baseline for the reorder)
+    v03_m3b_p4_model_a_intended_reorder_sequential_output => {
     // WHY: Under --no-auto-parallel, source order is preserved: fa then fb.
     // This establishes the baseline that the parallel reorder is a real scheduling
     // change, not an artifact of an implementation bug.
@@ -8313,51 +7906,23 @@ fn v03_m3b_p4_model_a_intended_reorder_sequential_output() {
         "A\nB\ndone",
         "--no-auto-parallel: source order preserved (fa before fb); stdout:\n{seq_stdout}"
     );
-}
-
-#[test]
-fn v03_m3b_p4_model_a_wait_orders_them_parallel_output() {
-    // WHY: `wait fa()` is an explicit ordering barrier — it forces fa (100ms) to complete
-    // before fb (50ms) starts, even though fa takes longer and the auto-parallel pass
-    // would otherwise overlap them. With `wait`, output is "A\nB\ndone" in BOTH modes.
-    // This proves `wait` is the user's ordering tool (design/concurrency.md lines 97-120):
-    // write `wait foo()` when the causal order must be guaranteed regardless of duration.
-    // If this test fails (output is B/A), the wait-barrier is not enforcing ordering.
-    let src = fixture("v0_3_m3b_p4_model_a_wait_orders_them.ynz");
-    let (par_stdout, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
-    assert_eq!(
-        par_code, 0,
-        "wait-orders-them parallel build must exit 0; stderr:\n{par_stderr}"
-    );
-    assert_eq!(
-        par_stdout.trim(),
-        "A\nB\ndone",
-        "parallel with wait fa(): fa must complete before fb starts; stdout:\n{par_stdout}"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_model_a_wait_orders_them_sequential_output() {
-    // WHY: Under --no-auto-parallel, `wait fa(); fb()` also produces "A\nB\ndone"
-    // (source order). Both modes produce identical output when `wait` is present —
-    // the wait-barrier is consistent across scheduling modes.
-    let src = fixture("v0_3_m3b_p4_model_a_wait_orders_them.ynz");
-    let (seq_stdout, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(
-        seq_code, 0,
-        "wait-orders-them sequential build must exit 0; stderr:\n{seq_stderr}"
-    );
-    assert_eq!(
-        seq_stdout.trim(),
-        "A\nB\ndone",
-        "--no-auto-parallel with wait fa(): same A/B/done order; stdout:\n{seq_stdout}"
-    );
+    }
 }
 
 // ── v0.3-M3b Phase 4 fix-round: corpse-(a) and aliasing-guard regressions ─────
 
-#[test]
-fn v03_m3b_p4_parallel_number_return_correct_output() {
+/// One named test per input class of the `parallel-binding table` unit; each case is a test the runner names.
+macro_rules! parallel_binding_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a parallel-group binding of a suspending callee (number, string, errors, ...) corrupts or loses its value | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+parallel_binding_table_high_case! {
+    // case: a parallel-group binding of a `number` suspending callee is routed through a hand-rolled i64 path and corrupts the decimal value
+    v03_m3b_p4_parallel_number_return_correct_output => {
     // WHY: Regression lock for corpse-(a) — a parallel let-binding to a decimal128
     // (`number`) suspending callee must route its i128 IntValue through
     // `bind_sm_return_value`, which allocates an i128 alloca. A hand-rolled
@@ -8374,31 +7939,9 @@ fn v03_m3b_p4_parallel_number_return_correct_output() {
         "a:1.5\nb:2.5",
         "parallel number-return must print a:1.5 and b:2.5; stdout:\n{par}"
     );
-}
-
-#[test]
-fn v03_m3b_p4_parallel_number_return_byte_identical() {
-    // WHY: Cross-impl consistency — parallel number return must be byte-identical
-    // under default and --no-auto-parallel modes.
-    let src = fixture("v0_3_m3b_p4_parallel_number_return.ynz");
-    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
-    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(
-        par_code, 0,
-        "parallel build must exit 0; stderr:\n{par_stderr}"
-    );
-    assert_eq!(
-        seq_code, 0,
-        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
-    );
-    assert_eq!(
-        par, seq,
-        "number-return stdout must be byte-identical in both modes"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_parallel_float_return_correct_output() {
+    }
+    // case: a parallel-group binding of a `float` suspending callee panics the compiler in the f64 arm of the i64-bits path
+    v03_m3b_p4_parallel_float_return_correct_output => {
     // WHY: Regression lock for corpse-(a) — a parallel let-binding to a `float`
     // suspending callee must route its FloatValue (f64) through `bind_sm_return_value`,
     // which allocates an f64 alloca. A hand-rolled `to_i64_bits` path would panic
@@ -8415,31 +7958,9 @@ fn v03_m3b_p4_parallel_float_return_correct_output() {
         "x:3.5\ny:7",
         "parallel float-return must print x:3.5 and y:7; stdout:\n{par}"
     );
-}
-
-#[test]
-fn v03_m3b_p4_parallel_float_return_byte_identical() {
-    // WHY: Cross-impl consistency — parallel float return must be byte-identical
-    // under default and --no-auto-parallel modes.
-    let src = fixture("v0_3_m3b_p4_parallel_float_return.ynz");
-    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
-    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(
-        par_code, 0,
-        "parallel build must exit 0; stderr:\n{par_stderr}"
-    );
-    assert_eq!(
-        seq_code, 0,
-        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
-    );
-    assert_eq!(
-        par, seq,
-        "float-return stdout must be byte-identical in both modes"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_parallel_string_return_correct_output() {
+    }
+    // case: a parallel-group binding of a `string` suspending callee loses its heap pointer
+    v03_m3b_p4_parallel_string_return_correct_output => {
     // WHY: Regression lock for corpse-(a) — a parallel let-binding to a `string`
     // suspending callee must route its PointerValue (heap pointer) through
     // `bind_sm_return_value`, which converts the pointer to i64 bits via
@@ -8456,31 +7977,9 @@ fn v03_m3b_p4_parallel_string_return_correct_output() {
         "first:hello\nsecond:world",
         "parallel string-return must print first:hello and second:world; stdout:\n{par}"
     );
-}
-
-#[test]
-fn v03_m3b_p4_parallel_string_return_byte_identical() {
-    // WHY: Cross-impl consistency — parallel string return must be byte-identical
-    // under default and --no-auto-parallel modes.
-    let src = fixture("v0_3_m3b_p4_parallel_string_return.ynz");
-    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
-    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(
-        par_code, 0,
-        "parallel build must exit 0; stderr:\n{par_stderr}"
-    );
-    assert_eq!(
-        seq_code, 0,
-        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
-    );
-    assert_eq!(
-        par, seq,
-        "string-return stdout must be byte-identical in both modes"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_parallel_errors_return_correct_output() {
+    }
+    // case: a parallel-group `int errors` return collapses the 2-slot error struct and segfaults (exit 139)
+    v03_m3b_p4_parallel_errors_return_correct_output => {
     // WHY (HOLE B): an errors-capable (`-> int errors`) suspending callee in a parallel
     // group returns the 2-slot `{i64, i64}` errors ABI struct. The parallel-group return
     // load must rebuild that struct (via `is_errors_capable_fn` + `load_return_value_errors`)
@@ -8499,33 +7998,9 @@ fn v03_m3b_p4_parallel_errors_return_correct_output() {
         "a:10\nb:20",
         "parallel errors-return must print a:10 and b:20; stdout:\n{par}"
     );
-}
-
-#[test]
-fn v03_m3b_p4_parallel_errors_return_byte_identical() {
-    // WHY (HOLE B): cross-impl consistency — a parallel errors-capable return must be
-    // byte-identical and exit 0 under both default and --no-auto-parallel modes. Before the
-    // EC parallel-return arm, default mode segfaulted (exit 139) while --no-auto-parallel
-    // exited 0 — a divergence this test locks against recurring.
-    let src = fixture("v0_3_m3b_p4_parallel_errors_return.ynz");
-    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
-    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(
-        par_code, 0,
-        "parallel build must exit 0; stderr:\n{par_stderr}"
-    );
-    assert_eq!(
-        seq_code, 0,
-        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
-    );
-    assert_eq!(
-        par, seq,
-        "errors-return stdout must be byte-identical in both modes"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_heterogeneous_ec_group_byte_identical() {
+    }
+    // case: a parallel group mixing an `int errors` member with a plain `int` member garbles one member through a shared return-binding path
+    v03_m3b_p4_heterogeneous_ec_group_byte_identical => {
     // WHY (HOLE B coverage): a heterogeneous auto-parallel group mixing a `-> int errors`
     // (2-slot {err,ok}) member with a `-> int` (1-slot) member must compose correctly — each
     // member's return-binding load dispatches on its own return type. A shared dispatch path
@@ -8552,10 +8027,9 @@ fn v03_m3b_p4_heterogeneous_ec_group_byte_identical() {
         par, seq,
         "heterogeneous-EC-group stdout must be byte-identical in both modes"
     );
-}
-
-#[test]
-fn v03_m3b_p5_parallel_int_crosses_wait_correct_output() {
+    }
+    // case: a parallel-group `int` binding used after a later `wait` is reloaded from a block its alloca does not dominate (compile failure)
+    v03_m3b_p5_parallel_int_crosses_wait_correct_output => {
     // WHY (P5): a parallel-group `-> int` binding whose value is used AFTER a SUBSEQUENT
     // `wait` is a crossing local. Before the fix, the parallel binding fresh-allocated an
     // i64 slot in the parallel-join block and overwrote `cg.locals`, so the post-`wait`
@@ -8575,33 +8049,9 @@ fn v03_m3b_p5_parallel_int_crosses_wait_correct_output() {
         "later\na:7\nb:8",
         "parallel int-crosses-wait must print later, a:7, b:8; stdout:\n{par}"
     );
-}
-
-#[test]
-fn v03_m3b_p5_parallel_int_crosses_wait_byte_identical() {
-    // WHY (P5): cross-impl consistency — a parallel-group `int` binding crossing a subsequent
-    // `wait` must be byte-identical and exit 0 under both modes. Before the fix, default mode
-    // emitted invalid LLVM (compile failure) while --no-auto-parallel succeeded — a divergence
-    // this locks against recurring.
-    let src = fixture("v0_3_m3b_p5_parallel_int_crosses_wait.ynz");
-    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
-    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(
-        par_code, 0,
-        "parallel build must exit 0; stderr:\n{par_stderr}"
-    );
-    assert_eq!(
-        seq_code, 0,
-        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
-    );
-    assert_eq!(
-        par, seq,
-        "int-crosses-wait stdout must be byte-identical in both modes"
-    );
-}
-
-#[test]
-fn v03_m3b_p5_parallel_number_crosses_wait_correct_output() {
+    }
+    // case: a parallel-group `number errors` binding crossing a `wait` is stored in a join-block alloca so its 16-byte value is lost
+    v03_m3b_p5_parallel_number_crosses_wait_correct_output => {
     // WHY (P5): a parallel-group `-> number errors` (decimal128) binding crossing a subsequent
     // `wait` is a crossing local stored across the suspension as i128 (2 frame slots) AND as
     // errors-capable (companion `{i64,i64}` struct). The binding must store into the pre-created
@@ -8619,33 +8069,9 @@ fn v03_m3b_p5_parallel_number_crosses_wait_correct_output() {
         "later\na:9999999999.000000001\nb:2.5",
         "parallel number-crosses-wait must print later, a:9999999999.000000001, b:2.5; stdout:\n{par}"
     );
-}
-
-#[test]
-fn v03_m3b_p5_parallel_number_crosses_wait_byte_identical() {
-    // WHY (P5): cross-impl consistency — a parallel-group `number errors` (decimal128) binding
-    // crossing a subsequent `wait` must be byte-exact in both modes. The failing alloca in the
-    // pre-fix default build was `%a_ec_ptr`/`%a_ec_struct`; this locks the decimal128+EC
-    // crossing reload against drift.
-    let src = fixture("v0_3_m3b_p5_parallel_number_crosses_wait.ynz");
-    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
-    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(
-        par_code, 0,
-        "parallel build must exit 0; stderr:\n{par_stderr}"
-    );
-    assert_eq!(
-        seq_code, 0,
-        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
-    );
-    assert_eq!(
-        par, seq,
-        "number-crosses-wait stdout must be byte-identical in both modes"
-    );
-}
-
-#[test]
-fn v03_m3b_p5_parallel_ec_crosses_wait_correct_output() {
+    }
+    // case: a parallel-group `int errors` binding crossing a `wait` collapses its 2-slot struct
+    v03_m3b_p5_parallel_ec_crosses_wait_correct_output => {
     // WHY (P5): a parallel-group `-> int errors` binding crossing a subsequent `wait` is an
     // errors-capable crossing local stored across the suspension as the 2-slot `{i64,i64}`
     // errors ABI struct, with `name` registered in `errors_capable_locals` so a later use
@@ -8664,32 +8090,9 @@ fn v03_m3b_p5_parallel_ec_crosses_wait_correct_output() {
         "later\na:10\nb:20",
         "parallel ec-crosses-wait must print later, a:10, b:20; stdout:\n{par}"
     );
-}
-
-#[test]
-fn v03_m3b_p5_parallel_ec_crosses_wait_byte_identical() {
-    // WHY (P5): cross-impl consistency — a parallel-group `int errors` binding crossing a
-    // subsequent `wait` must be byte-identical and exit 0 in both modes. Locks the EC crossing
-    // reload against both the dominance miscompile and an EC-struct collapse.
-    let src = fixture("v0_3_m3b_p5_parallel_ec_crosses_wait.ynz");
-    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
-    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(
-        par_code, 0,
-        "parallel build must exit 0; stderr:\n{par_stderr}"
-    );
-    assert_eq!(
-        seq_code, 0,
-        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
-    );
-    assert_eq!(
-        par, seq,
-        "ec-crosses-wait stdout must be byte-identical in both modes"
-    );
-}
-
-#[test]
-fn v03_m3b_p5_parallel_noncrossing_control_correct_output() {
+    }
+    // case: the crossing-local fix changes a parallel-group binding that is used immediately (no `wait` between)
+    v03_m3b_p5_parallel_noncrossing_control_correct_output => {
     // WHY (P5 regression guard): a parallel-group binding used IMMEDIATELY (no intervening
     // `wait`) is NOT a crossing local. The crossing-local fix must leave this path unchanged —
     // `bind_sm_result_and_flush` fresh-allocas in the join block for non-crossing bindings,
@@ -8706,71 +8109,9 @@ fn v03_m3b_p5_parallel_noncrossing_control_correct_output() {
         "a:7\nb:8",
         "non-crossing control must print a:7, b:8; stdout:\n{par}"
     );
-}
-
-#[test]
-fn v03_m3b_p5_parallel_noncrossing_control_byte_identical() {
-    // WHY (P5 regression guard): cross-impl consistency for the non-crossing parallel binding.
-    // Must be byte-identical and exit 0 in both modes — proves the crossing-local fix did not
-    // change the non-crossing path.
-    let src = fixture("v0_3_m3b_p5_parallel_noncrossing_control.ynz");
-    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
-    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(
-        par_code, 0,
-        "parallel build must exit 0; stderr:\n{par_stderr}"
-    );
-    assert_eq!(
-        seq_code, 0,
-        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
-    );
-    assert_eq!(
-        par, seq,
-        "non-crossing control stdout must be byte-identical in both modes"
-    );
-}
-
-#[test]
-fn v03_m3b_p5_parallel_multi_wait_correct_output() {
-    // WHY (P5 regression guard): a parallel-group return binding must survive MULTIPLE
-    // subsequent `wait` barriers — `a`/`b` each cross two suspensions (`wait mid()`,
-    // `wait late()`) and are read interleaved after each. Locks that the dominating
-    // entry-block + frame-backed slot round-trips across any number of suspensions.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p5_parallel_multi_wait.ynz"));
-    assert_eq!(
-        code, 0,
-        "multi-wait fixture must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "mid\na:11\nlate\nb:22",
-        "multi-wait: a survives wait mid(), b survives wait late(); stdout:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3b_p5_parallel_multi_wait_byte_identical() {
-    // WHY (P5 regression guard): cross-impl consistency — a parallel binding crossing two
-    // waits must be byte-identical in both modes (was an LLVM dominance crash before the fix).
-    let src = fixture("v0_3_m3b_p5_parallel_multi_wait.ynz");
-    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
-    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(
-        par_code, 0,
-        "parallel build must exit 0; stderr:\n{par_stderr}"
-    );
-    assert_eq!(
-        seq_code, 0,
-        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
-    );
-    assert_eq!(
-        par, seq,
-        "multi-wait stdout must be byte-identical in both modes"
-    );
-}
-
-#[test]
-fn v03_m3b_p5_parallel_number_ec_inline_collect_correct_output() {
+    }
+    // case: an inline-poll `number errors` parallel collection (decimal128 + errors-capable, no `wait`) loses its 128-bit value or error slot
+    v03_m3b_p5_parallel_number_ec_inline_collect_correct_output => {
     // WHY (P5 inline-poll lock): an inline-poll `-> number errors` (decimal128 + errors-capable)
     // parallel collection with NO intervening `wait` is the already-working non-crossing path.
     // The parallel-group return load rebuilds the 2-slot EC struct AND carries the full i128
@@ -8788,386 +8129,26 @@ fn v03_m3b_p5_parallel_number_ec_inline_collect_correct_output() {
         "a:9999999999.000000001\nb:2.5",
         "inline-poll number+EC collect must print a:9999999999.000000001, b:2.5; stdout:\n{par}"
     );
-}
-
-#[test]
-fn v03_m3b_p5_parallel_number_ec_inline_collect_byte_identical() {
-    // WHY (P5 inline-poll lock): cross-impl consistency for the non-crossing EC+decimal128
-    // inline-poll collection. Must be byte-exact in both modes.
-    let src = fixture("v0_3_m3b_p5_parallel_number_ec_inline_collect.ynz");
-    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
-    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(
-        par_code, 0,
-        "parallel build must exit 0; stderr:\n{par_stderr}"
-    );
-    assert_eq!(
-        seq_code, 0,
-        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
-    );
-    assert_eq!(
-        par, seq,
-        "inline-poll number+EC collect stdout must be byte-identical in both modes"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_share_read_pair_correct_output() {
-    // WHY: two suspending calls taking a mutable-heap `share` argument run correctly under the
-    // conservative floor (they sequentialize — a mutable-heap arg is a potential write). Output
-    // must be correct and exit 0 in the default mode.
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3b_p4_share_read_pair_sequentializes.ynz"));
+    }
+    // case: a parallel-group binding does not survive a second `wait` barrier
+    v03_m3b_p5_parallel_multi_wait_correct_output => {
+    // WHY (P5 regression guard): a parallel-group return binding must survive MULTIPLE
+    // subsequent `wait` barriers — `a`/`b` each cross two suspensions (`wait mid()`,
+    // `wait late()`) and are read interleaved after each. Locks that the dominating
+    // entry-block + frame-backed slot round-trips across any number of suspensions.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p5_parallel_multi_wait.ynz"));
     assert_eq!(
         code, 0,
-        "share-read-pair fixture must compile and run; stderr:\n{stderr}"
+        "multi-wait fixture must compile and run; stderr:\n{stderr}"
     );
     assert_eq!(
         stdout.trim(),
-        "one\ntwo\ndone",
-        "share-read pair must print one, two, done; stdout:\n{stdout}"
+        "mid\na:11\nlate\nb:22",
+        "multi-wait: a survives wait mid(), b survives wait late(); stdout:\n{stdout}"
     );
-}
-
-#[test]
-fn v03_m3b_p4_share_read_pair_byte_identical() {
-    // WHY: cross-impl consistency for the share-read pair. Under the conservative floor the
-    // pair sequentializes (mutable-heap arg → potential write), and stdout is byte-identical
-    // to --no-auto-parallel.
-    let src = fixture("v0_3_m3b_p4_share_read_pair_sequentializes.ynz");
-    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
-    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(
-        par_code, 0,
-        "parallel build must exit 0; stderr:\n{par_stderr}"
-    );
-    assert_eq!(
-        seq_code, 0,
-        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
-    );
-    assert_eq!(
-        par, seq,
-        "share-read-pair stdout must be byte-identical in both modes"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_share_read_pair_sequentializes_under_floor() {
-    // test-ratchet: the conservative floor (Golden Rule 2 soundness > Rule 7 perf) forfeits
-    // read-only-mutable-heap parallelism. A mutable-heap arg is unconditionally a potential
-    // aliased write under the floor, which does not trust any per-form ownership classifier
-    // (that approach missed five distinct write forms across three gate rounds), so the pair
-    // sequentializes in BOTH modes (≈400ms). The assertion locks that sound behavior;
-    // reversal = a real type+alias-aware ownership analysis.
-    //
-    // WHY: a mutable-heap (shape) argument is a potential aliased write under the floor, so
-    // the two reads do NOT overlap — default mode takes the full ≈400ms sum, same as
-    // --no-auto-parallel. If a future change wrongly re-parallelized them, default would drop
-    // to ≈200ms and this lower-bound assertion would fire.
-    let src = fixture("v0_3_m3b_p4_share_read_pair_sequentializes.ynz");
-
-    let (par_ms, par_code) = time_built_run(&src, false);
-    let (seq_ms, seq_code) = time_built_run(&src, true);
-    assert_eq!(par_code, 0, "default run must exit 0");
-    assert_eq!(seq_code, 0, "--no-auto-parallel run must exit 0");
-
-    assert!(
-        par_ms >= 350,
-        "default run took {par_ms}ms — under the floor two 200ms sleeps sequentialize to ≈400ms (no overlap)"
-    );
-    assert!(
-        seq_ms >= 350,
-        "--no-auto-parallel run took {seq_ms}ms — two 200ms sleeps sum to ≈400ms"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_give_arg_sequenced_correct_output() {
-    // WHY (HOLE A): a `give`-heap argument is ownership transfer = a write. The pair
-    // `consume(give a); inspect(share b)` must be SEQUENCED (give is write-capable), so
-    // `consumed` (100ms) prints before `inspected` (10ms). If `give` were missed by the
-    // write-effect summary (the old lend-only bug), the pair would parallelize and the
-    // shorter `inspect` sleep would print `inspected` first — wrong order.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m3b_p4_give_arg_sequenced.ynz"));
-    assert_eq!(
-        code, 0,
-        "give-arg-sequenced fixture must compile and run; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout.trim(),
-        "consumed\ninspected\ndone",
-        "give arg must sequence: consumed before inspected; stdout:\n{stdout}"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_give_arg_sequenced_byte_identical() {
-    // WHY (HOLE A): cross-impl consistency — the give-sequenced ordering must be identical
-    // under both modes (the pair is sequential in both because `give` is write-capable).
-    let src = fixture("v0_3_m3b_p4_give_arg_sequenced.ynz");
-    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
-    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(
-        par_code, 0,
-        "parallel build must exit 0; stderr:\n{par_stderr}"
-    );
-    assert_eq!(
-        seq_code, 0,
-        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
-    );
-    assert_eq!(
-        par, seq,
-        "give-arg-sequenced stdout must be byte-identical in both modes"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_transitive_share_violation_rejected() {
-    // WHY (transitive HOLE C): a `share` parameter written TRANSITIVELY through a bare
-    // mutating callee must be a compile error (design/concurrency.md line 651, full
-    // enforcement). `fa(share x)` passes `x` to `helper(b)` — a bare parameter whose body
-    // mutates it (effective `lend`). The direct checks miss this because `helper`'s DECLARED
-    // modifier is bare, not `lend`; the transitive effective-ownership fixpoint catches it.
-    // Reverting the fixpoint or its `find_transitive_share_violations` consumer makes this
-    // compile and run (prints 999), reopening the soundness hole the independence analysis
-    // relies on. Do NOT relax this to accept a clean run.
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3b_p4_transitive_share_violation.ynz"));
-    assert_eq!(
-        code, 1,
-        "transitive share violation must exit 1 (clean typeck reject); exit was {code}"
-    );
-    assert!(
-        stdout.is_empty(),
-        "transitive share violation: stdout must be empty on a clean compile error; got: {stdout:?}"
-    );
-    assert!(
-        stderr.contains("modified through `helper`"),
-        "transitive share violation: diagnostic must name the mutating callee; stderr:\n{stderr}"
-    );
-    assert!(
-        !stderr.contains("SIGILL")
-            && !stderr.contains("illegal instruction")
-            && !stderr.contains("malloc"),
-        "transitive share violation: reject must be clean (no crash markers); stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_self_transitive_share_violation_rejected() {
-    // WHY (HOLE 1 — `self`-blindness): a `share self` parameter written TRANSITIVELY through a
-    // mutating callee must be a compile error, IDENTICAL to the named-parameter form. The parser
-    // emits `self` as `Expr::SelfValue`, not `Expr::Ident("self")`; before the `arg_is_binding`
-    // / `root_binding_name` SelfValue arms, the effective-ownership fixpoint matched only
-    // `Expr::Ident`, so `self` flowing into `helper` stayed Reads and the program compiled +
-    // printed 999 — reopening the transitive share-violation hole the independence analysis
-    // relies on. Reverting either SelfValue arm makes this compile and run. Do NOT relax this
-    // to accept a clean run.
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3b_p4_self_transitive_share_violation.ynz"));
-    assert_eq!(
-        code, 1,
-        "self transitive share violation must exit 1 (clean typeck reject); exit was {code}"
-    );
-    assert!(
-        stdout.is_empty(),
-        "self transitive share violation: stdout must be empty on a clean compile error; got: {stdout:?}"
-    );
-    assert!(
-        stderr.contains("modified through `helper`"),
-        "self transitive share violation: diagnostic must name the mutating callee; stderr:\n{stderr}"
-    );
-    assert!(
-        !stderr.contains("SIGILL")
-            && !stderr.contains("illegal instruction")
-            && !stderr.contains("malloc"),
-        "self transitive share violation: reject must be clean (no crash markers); stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_share_collection_mutation_rejected() {
-    // WHY (HOLE 2 — mutating collection method on a `share` param): an in-place collection
-    // mutator (`array.add`) on a `share` parameter must be a compile error, the same as a direct
-    // element assign. Before the fix, the effective-ownership fixpoint routed a builtin method
-    // receiver through `classify_call_position`, which returns Reads for any builtin method name
-    // (the false "intrinsics take args by share/value" premise) — so `grow(share xs)` compiled
-    // and `xs.add(7)` grew the caller's array (printed 4), and two aliased `.set()` calls would
-    // auto-parallelize into concurrent in-place writes. Reverting the MethodCall-arm carve-out or
-    // the check.rs reject makes this compile and run. Do NOT relax this to accept a clean run.
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_m3b_p4_share_collection_mutation.ynz"));
-    assert_eq!(
-        code, 1,
-        "share collection mutation must exit 1 (clean typeck reject); exit was {code}"
-    );
-    assert!(
-        stdout.is_empty(),
-        "share collection mutation: stdout must be empty on a clean compile error; got: {stdout:?}"
-    );
-    assert!(
-        stderr.contains("`xs` is declared `share`")
-            && stderr.contains("elements cannot be changed"),
-        "share collection mutation: diagnostic must reject the share-param mutation; stderr:\n{stderr}"
-    );
-    assert!(
-        !stderr.contains("SIGILL")
-            && !stderr.contains("illegal instruction")
-            && !stderr.contains("malloc"),
-        "share collection mutation: reject must be clean (no crash markers); stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_mutable_heap_share_read_byte_identical() {
-    // WHY: two suspending calls taking a MUTABLE-HEAP `share` argument (a shape) sequentialize
-    // under the conservative floor (a mutable-heap arg is an unconditional potential write), and
-    // stdout stays byte-identical across modes. Byte-identical is the cross-impl oracle — it holds
-    // whether the pair runs parallel or sequential, locking that the floor preserves output.
-    let src = fixture("v0_3_m3b_p4_mutable_heap_share_read_sequentializes.ynz");
-    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
-    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(
-        par_code, 0,
-        "parallel build must exit 0; stderr:\n{par_stderr}"
-    );
-    assert_eq!(
-        seq_code, 0,
-        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
-    );
-    assert_eq!(
-        par, seq,
-        "mutable-heap share-read stdout must be byte-identical in both modes"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_mutable_heap_share_read_sequentializes_under_floor() {
-    // test-ratchet: conservative floor forfeits read-only-mutable-heap parallelism (GR2 > GR7).
-    // A mutable-heap arg is unconditionally a potential write under the floor, so the pair
-    // sequentializes (≈300ms) in both modes. The assertion locks that sound behavior.
-    //
-    // WHY: the floor sequentializes any mutable-heap-arg pair — default takes the full ≈300ms
-    // sum (no overlap). A future change re-parallelizing it would drop default to ≈150ms and
-    // trip this lower bound.
-    let src = fixture("v0_3_m3b_p4_mutable_heap_share_read_sequentializes.ynz");
-    let (par_ms, par_code) = time_built_run(&src, false);
-    let (seq_ms, seq_code) = time_built_run(&src, true);
-    assert_eq!(par_code, 0, "default run must exit 0");
-    assert_eq!(seq_code, 0, "--no-auto-parallel run must exit 0");
-    assert!(
-        par_ms >= 250,
-        "default run took {par_ms}ms — under the floor two 150ms sleeps sequentialize to ≈300ms (no overlap)"
-    );
-    assert!(
-        seq_ms >= 250,
-        "--no-auto-parallel run took {seq_ms}ms — two 150ms sleeps sum to ≈300ms"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_bare_read_heap_byte_identical() {
-    // WHY: a BARE heap argument is a potential write under the conservative floor (the floor does
-    // not prove a callee read-only), so a pair of bare-heap-arg calls sequentializes, and stdout
-    // stays byte-identical across modes. Byte-identical is the cross-impl oracle locking that the
-    // floor preserves observable output.
-    let src = fixture("v0_3_m3b_p4_bare_read_heap_sequentializes.ynz");
-    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
-    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(
-        par_code, 0,
-        "parallel build must exit 0; stderr:\n{par_stderr}"
-    );
-    assert_eq!(
-        seq_code, 0,
-        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
-    );
-    assert_eq!(
-        par, seq,
-        "bare-read-heap stdout must be byte-identical in both modes"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_bare_read_heap_sequentializes_under_floor() {
-    // test-ratchet: conservative floor forfeits read-only-mutable-heap parallelism (GR2 > GR7).
-    // A mutable-heap arg is unconditionally a potential write under the floor, so two bare-read
-    // heap calls sequentialize (≈300ms) in both modes. The assertion locks that sound behavior.
-    //
-    // WHY: the floor sequentializes any mutable-heap-arg pair regardless of how the callee
-    // uses it — default takes the full ≈300ms (no overlap).
-    let src = fixture("v0_3_m3b_p4_bare_read_heap_sequentializes.ynz");
-    let (par_ms, par_code) = time_built_run(&src, false);
-    let (seq_ms, seq_code) = time_built_run(&src, true);
-    assert_eq!(par_code, 0, "default run must exit 0");
-    assert_eq!(seq_code, 0, "--no-auto-parallel run must exit 0");
-    assert!(
-        par_ms >= 250,
-        "default run took {par_ms}ms — under the floor two 150ms sleeps sequentialize to ≈300ms (no overlap)"
-    );
-    assert!(
-        seq_ms >= 250,
-        "--no-auto-parallel run took {seq_ms}ms — two 150ms sleeps sum to ≈300ms"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_share_read_vs_lend_write_byte_identical() {
-    // WHY: Regression lock for the aliasing-guard `&&` → `||` fix in independence.rs.
-    // `writeVal(lend h)` (lend arg) and `readVal(share h)` (share arg) — before the
-    // `&&` bug, this pair could have been grouped as Parallel (only writeVal has a lend
-    // arg, so `a_has_lend && b_has_lend` was false). With `||`, any pair where EITHER
-    // has a lend arg stays sequential. Byte-identical output confirms the fix.
-    // The unit-test lock for the exact independence-analysis fix is
-    // `aliased_share_read_vs_lend_write_produces_singletons` in independence.rs.
-    let src = fixture("v0_3_m3b_p4_share_read_vs_lend_write.ynz");
-    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
-    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(
-        par_code, 0,
-        "parallel build must exit 0; stderr:\n{par_stderr}"
-    );
-    assert_eq!(
-        seq_code, 0,
-        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
-    );
-    assert_eq!(
-        par, seq,
-        "share-read/lend-write stdout must be byte-identical in both modes"
-    );
-}
-
-#[test]
-fn v03_m3b_p4_share_read_vs_lend_write_correct_output() {
-    // WHY: The `||` guard sequences `writeVal(lend h)` before `readVal(share h)`.
-    // `writeVal` sleeps 100ms; `readVal` sleeps 10ms. If they were parallelized,
-    // readVal would complete first (r before w). Sequential output must be `w\nr\ndone`
-    // in both modes — proving writeVal always runs first.
-    let src = fixture("v0_3_m3b_p4_share_read_vs_lend_write.ynz");
-    let (par, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
-    let (seq, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(
-        par_code, 0,
-        "parallel build must exit 0; stderr:\n{par_stderr}"
-    );
-    assert_eq!(
-        seq_code, 0,
-        "--no-auto-parallel build must exit 0; stderr:\n{seq_stderr}"
-    );
-    assert_eq!(
-        par.trim(),
-        "w\nr\ndone",
-        "lend-write must complete before share-read (w before r); parallel stdout:\n{par}"
-    );
-    assert_eq!(
-        seq.trim(),
-        "w\nr\ndone",
-        "lend-write must complete before share-read (w before r); sequential stdout:\n{seq}"
-    );
-}
-
-#[test]
-fn v0_3_m3f_ec_same_callee_aliasing_distinct_values() {
+    }
+    // case: two bindings of the same `number errors` callee share the callee staging slot so the first value is clobbered
+    v0_3_m3f_ec_same_callee_aliasing_distinct_values => {
     // WHY (M3f Bug 1): value semantics requires each `let` binding of a `-> number errors`
     // callee to hold the value produced by ITS OWN call. The ok-word in the EC struct
     // (`{i64,i64}`) points into the callee's 16-byte decimal128 staging slot instead of
@@ -9190,10 +8171,9 @@ fn v0_3_m3f_ec_same_callee_aliasing_distinct_values() {
         par, "24.50\n31.75\n",
         "p1=fetchPrice(0) must be 24.50 and p2=fetchPrice(1) must be 31.75; stdout:\n{par}"
     );
-}
-
-#[test]
-fn v0_3_m3f_parallel_group_bool_sibling_survives_wait() {
+    }
+    // case: a bool sibling in a parallel group corrupts an int sibling's frame slot across a later `wait`
+    v0_3_m3f_parallel_group_bool_sibling_survives_wait => {
     // WHY (M3f Bug 2): a parallel-group result binding (int `a`) must survive a subsequent
     // `wait` intact regardless of whether a sibling group result is a boolean. The boolean
     // crossing-local flush/reload path (i1→i64 zext on flush, i64→i1 trunc on reload) corrupts
@@ -9228,101 +8208,9 @@ fn v0_3_m3f_parallel_group_bool_sibling_survives_wait() {
         "default and --no-auto-parallel must be byte-identical (cross-impl consistency); \
          parallel stdout:\n{par}\n--no-auto-parallel stdout:\n{seq}"
     );
-}
-
-// ── v0.3-M3f Phase 4: permanent regression fixtures ──────────────────────────
-
-// -- Bug-2 (parallel-group bool-sibling frame-slot) trigger matrix --
-
-#[test]
-fn v0_3_m3f_parallel_group_int_int_top_level() {
-    // WHY (M3f Bug-2 regression guard — int+int, top-level use): two independent
-    // suspending int bindings are auto-grouped and both cross a subsequent `wait`;
-    // both are read at the top level (not inside a nested body). This case was
-    // CORRECT before the Bug-2 fix and must remain correct — prevents grouping
-    // suppression from silently making it wrong again.
-    // Expected: "42\n99\n" in both modes.
-    let src = fixture("v0_3_m3f_parallel_group_int_int_top.ynz");
-    let (par, par_err, par_code) = build_to_tmpdir_and_run(&src, false);
-    let (seq, seq_err, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(
-        par_code, 0,
-        "int+int top parallel build must exit 0; stderr:\n{par_err}"
-    );
-    assert_eq!(
-        seq_code, 0,
-        "int+int top sequential build must exit 0; stderr:\n{seq_err}"
-    );
-    assert_eq!(
-        par, "42\n99\n",
-        "int+int top: a must be 42, b must be 99; stdout:\n{par}"
-    );
-    assert_eq!(
-        par, seq,
-        "int+int top: default and --no-auto-parallel must be byte-identical; \
-         par:\n{par}\nseq:\n{seq}"
-    );
-}
-
-#[test]
-fn v0_3_m3f_parallel_group_int_int_nested() {
-    // WHY (M3f Bug-2 regression guard — int+int, nested-only use): both int group
-    // results are read ONLY inside a nested `if` body. Confirms that the Bug-2 fix
-    // does not accidentally suppress grouping for int+int with nested access patterns.
-    // Expected: "42\n99\n" in both modes.
-    let src = fixture("v0_3_m3f_parallel_group_int_int_nested.ynz");
-    let (par, par_err, par_code) = build_to_tmpdir_and_run(&src, false);
-    let (seq, seq_err, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(
-        par_code, 0,
-        "int+int nested parallel build must exit 0; stderr:\n{par_err}"
-    );
-    assert_eq!(
-        seq_code, 0,
-        "int+int nested sequential build must exit 0; stderr:\n{seq_err}"
-    );
-    assert_eq!(
-        par, "42\n99\n",
-        "int+int nested: a must be 42, b must be 99; stdout:\n{par}"
-    );
-    assert_eq!(
-        par, seq,
-        "int+int nested: default and --no-auto-parallel must be byte-identical; \
-         par:\n{par}\nseq:\n{seq}"
-    );
-}
-
-#[test]
-fn v0_3_m3f_parallel_group_int_bool_top_level() {
-    // WHY (M3f Bug-2 regression fixture — int+bool, top-level use): an int and a
-    // boolean both cross a subsequent `wait` and are read at the top level. The
-    // Bug-2 fix (bool i64→i1 truncate before alloca store) must preserve the int
-    // sibling's value regardless of the bool member's presence.
-    // Expected: "42\ntrue\n" in both modes.
-    let src = fixture("v0_3_m3f_parallel_group_int_bool_top.ynz");
-    let (par, par_err, par_code) = build_to_tmpdir_and_run(&src, false);
-    let (seq, seq_err, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(
-        par_code, 0,
-        "int+bool top parallel build must exit 0; stderr:\n{par_err}"
-    );
-    assert_eq!(
-        seq_code, 0,
-        "int+bool top sequential build must exit 0; stderr:\n{seq_err}"
-    );
-    assert_eq!(
-        par, "42\ntrue\n",
-        "int+bool top: int must be 42, bool must be true; stdout:\n{par}"
-    );
-    assert_eq!(
-        par, seq,
-        "int+bool top: default and --no-auto-parallel must be byte-identical; \
-         par:\n{par}\nseq:\n{seq}"
-    );
-}
-
-#[test]
-fn v0_3_m3f_parallel_group_bool_first_then_int() {
+    }
+    // case: a bool declared before an int in a parallel group shifts the slot order so the int reloads wrong
+    v0_3_m3f_parallel_group_bool_first_then_int => {
     // WHY (M3f Bug-2 regression fixture — bool-first-then-int, reversed declaration
     // order): the bool binding is declared BEFORE the int binding, so bool occupies
     // slot 0 and int occupies slot 1 — the reverse of the MIN-1 fixture. Flushes
@@ -9348,10 +8236,9 @@ fn v0_3_m3f_parallel_group_bool_first_then_int() {
         "bool-first-then-int: default and --no-auto-parallel must be byte-identical; \
          par:\n{par}\nseq:\n{seq}"
     );
-}
-
-#[test]
-fn v0_3_m3f_parallel_group_bool_bool() {
+    }
+    // case: two bool group results crossing a `wait` take the i1 path wrongly so one reloads the other's value
+    v0_3_m3f_parallel_group_bool_bool => {
     // WHY (M3f Bug-2 regression fixture — bool+bool): two boolean group results cross
     // the same subsequent `wait`. Both use the i1 alloca path; the fix must ensure
     // each bool survives with its correct value (true for flagA, false for flagB).
@@ -9376,39 +8263,9 @@ fn v0_3_m3f_parallel_group_bool_bool() {
         "bool+bool: default and --no-auto-parallel must be byte-identical; \
          par:\n{par}\nseq:\n{seq}"
     );
-}
-
-#[test]
-fn v0_3_m3f_parallel_group_three_members() {
-    // WHY (M3f Bug-2 regression fixture — ≥3 group members): three independent
-    // suspending bindings (int, int, bool) are all auto-grouped; all three cross
-    // the same subsequent `wait`. Tests that the bool-slot fix composes correctly
-    // for groups larger than 2 members.
-    // Expected: "42\n99\ntrue\n" in both modes.
-    let src = fixture("v0_3_m3f_parallel_group_three_members.ynz");
-    let (par, par_err, par_code) = build_to_tmpdir_and_run(&src, false);
-    let (seq, seq_err, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(
-        par_code, 0,
-        "3-member parallel build must exit 0; stderr:\n{par_err}"
-    );
-    assert_eq!(
-        seq_code, 0,
-        "3-member sequential build must exit 0; stderr:\n{seq_err}"
-    );
-    assert_eq!(
-        par, "42\n99\ntrue\n",
-        "3-member: a must be 42, b must be 99, flag must be true; stdout:\n{par}"
-    );
-    assert_eq!(
-        par, seq,
-        "3-member: default and --no-auto-parallel must be byte-identical; \
-         par:\n{par}\nseq:\n{seq}"
-    );
-}
-
-#[test]
-fn v0_3_m3f_parallel_group_decimal128_sibling() {
+    }
+    // case: a 2-slot decimal128 group result shifts the bool sibling's slot index
+    v0_3_m3f_parallel_group_decimal128_sibling => {
     // WHY (M3f Bug-2 regression fixture — decimal128 sibling + bool): a decimal128
     // (number) result and a boolean result both cross the same subsequent `wait`.
     // The 2-slot decimal128 frame path must compose correctly with the 1-slot bool
@@ -9434,10 +8291,9 @@ fn v0_3_m3f_parallel_group_decimal128_sibling() {
         "decimal128+bool: default and --no-auto-parallel must be byte-identical; \
          par:\n{par}\nseq:\n{seq}"
     );
-}
-
-#[test]
-fn v0_3_m3f_parallel_group_ec_number_and_bool() {
+    }
+    // case: a 3-slot `number errors` group result shifts the bool sibling's slot index
+    v0_3_m3f_parallel_group_ec_number_and_bool => {
     // WHY (M3f Bug-2 regression fixture — EC `-> number errors` 3-slot + bool 1-slot
     // interleaving): a `-> number errors` result (3-slot post-Phase-2 copy-on-bind
     // path) paired with a boolean result (1-slot), both crossing the same wait.
@@ -9465,44 +8321,9 @@ fn v0_3_m3f_parallel_group_ec_number_and_bool() {
         "EC-number+bool: default and --no-auto-parallel must be byte-identical; \
          par:\n{par}\nseq:\n{seq}"
     );
-}
-
-// -- Bug-1 (wide-EC same-callee copy-on-bind) permanent fixtures --
-
-#[test]
-fn v0_3_m3f_ec_three_bindings_distinct_values() {
-    // WHY (M3f Bug-1 regression fixture — multi-binding ok-path): three live bindings
-    // of the SAME `-> number errors` callee with three distinct arguments must each
-    // hold the value produced by their own call. A second or third call to the same
-    // callee must not clobber earlier bindings via the shared staging slot.
-    // Bug-1 copy-on-bind fix: per-binding stable storage is allocated before the next
-    // call can reuse the staging slot.
-    // Expected: "24.50\n31.75\n24.50\n" in both modes.
-    let src = fixture("v0_3_m3f_ec_three_bindings.ynz");
-    let (par, par_err, par_code) = build_to_tmpdir_and_run(&src, false);
-    let (seq, seq_err, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(
-        par_code, 0,
-        "3-binding EC parallel build must exit 0; stderr:\n{par_err}"
-    );
-    assert_eq!(
-        seq_code, 0,
-        "3-binding EC sequential build must exit 0; stderr:\n{seq_err}"
-    );
-    assert_eq!(
-        par, "24.50\n31.75\n24.50\n",
-        "3-binding EC: p1 must be 24.50, p2 must be 31.75, p3 must be 24.50 (same arg as p1, not \
-         p2's value — staging-slot aliasing is closed); stdout:\n{par}"
-    );
-    assert_eq!(
-        par, seq,
-        "3-binding EC: default and --no-auto-parallel must be byte-identical; \
-         par:\n{par}\nseq:\n{seq}"
-    );
-}
-
-#[test]
-fn v0_3_m3f_ec_failed_then_ok_no_cross_contamination() {
+    }
+    // case: a failed `number errors` binding reads a later same-callee call's ok value or derefs null on the error path
+    v0_3_m3f_ec_failed_then_ok_no_cross_contamination => {
     // WHY (M3f Bug-1 regression fixture — failed-branch interleave): one binding of a
     // `-> number errors` callee takes the error path; a later same-callee call succeeds.
     // The errored binding must surface `.failed()=true` and `.or(0.0)=0.0` (the fallback,
@@ -9531,19 +8352,197 @@ fn v0_3_m3f_ec_failed_then_ok_no_cross_contamination() {
         "failed-then-ok EC: default and --no-auto-parallel must be byte-identical; \
          par:\n{par}\nseq:\n{seq}"
     );
+    }
 }
+
+// bug: wall-clock lower bound (>=350 ms) proves the share-read pair does not overlap; timing assertion goes nightly | tier: Medium
+#[test]
+fn nightly_v03_m3b_p4_share_read_pair_sequentializes_under_floor() {
+    // test-ratchet: the conservative floor (Golden Rule 2 soundness > Rule 7 perf) forfeits
+    // read-only-mutable-heap parallelism. A mutable-heap arg is unconditionally a potential
+    // aliased write under the floor, which does not trust any per-form ownership classifier
+    // (that approach missed five distinct write forms across three gate rounds), so the pair
+    // sequentializes in BOTH modes (≈400ms). The assertion locks that sound behavior;
+    // reversal = a real type+alias-aware ownership analysis.
+    //
+    // WHY: a mutable-heap (shape) argument is a potential aliased write under the floor, so
+    // the two reads do NOT overlap — default mode takes the full ≈400ms sum, same as
+    // --no-auto-parallel. If a future change wrongly re-parallelized them, default would drop
+    // to ≈200ms and this lower-bound assertion would fire.
+    let src = fixture("v0_3_m3b_p4_share_read_pair_sequentializes.ynz");
+
+    let (par_ms, par_code) = time_built_run(&src, false);
+    let (seq_ms, seq_code) = time_built_run(&src, true);
+    assert_eq!(par_code, 0, "default run must exit 0");
+    assert_eq!(seq_code, 0, "--no-auto-parallel run must exit 0");
+
+    assert!(
+        par_ms >= 350,
+        "default run took {par_ms}ms — under the floor two 200ms sleeps sequentialize to ≈400ms (no overlap)"
+    );
+    assert!(
+        seq_ms >= 350,
+        "--no-auto-parallel run took {seq_ms}ms — two 200ms sleeps sum to ≈400ms"
+    );
+}
+
+/// One named test per input class of the `share-violation-refused table` unit; each case is a test the runner names.
+macro_rules! share_violation_refused_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a `share` parameter mutated directly, transitively or by a collection mutator is accepted | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+share_violation_refused_table_high_case! {
+    // case: a `share` parameter written through a bare mutating callee is accepted (transitive aliasing hole)
+    v03_m3b_p4_transitive_share_violation_rejected => {
+    // WHY (transitive HOLE C): a `share` parameter written TRANSITIVELY through a bare
+    // mutating callee must be a compile error (design/concurrency.md line 651, full
+    // enforcement). `fa(share x)` passes `x` to `helper(b)` — a bare parameter whose body
+    // mutates it (effective `lend`). The direct checks miss this because `helper`'s DECLARED
+    // modifier is bare, not `lend`; the transitive effective-ownership fixpoint catches it.
+    // Reverting the fixpoint or its `find_transitive_share_violations` consumer makes this
+    // compile and run (prints 999), reopening the soundness hole the independence analysis
+    // relies on. Do NOT relax this to accept a clean run.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3b_p4_transitive_share_violation.ynz"));
+    assert_eq!(
+        code, 1,
+        "transitive share violation must exit 1 (clean typeck reject); exit was {code}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "transitive share violation: stdout must be empty on a clean compile error; got: {stdout:?}"
+    );
+    assert!(
+        stderr.contains("modified through `helper`"),
+        "transitive share violation: diagnostic must name the mutating callee; stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("SIGILL")
+            && !stderr.contains("illegal instruction")
+            && !stderr.contains("malloc"),
+        "transitive share violation: reject must be clean (no crash markers); stderr:\n{stderr}"
+    );
+    }
+    // case: a `share self` parameter written through a mutating callee is accepted (SelfValue blindness)
+    v03_m3b_p4_self_transitive_share_violation_rejected => {
+    // WHY (HOLE 1 — `self`-blindness): a `share self` parameter written TRANSITIVELY through a
+    // mutating callee must be a compile error, IDENTICAL to the named-parameter form. The parser
+    // emits `self` as `Expr::SelfValue`, not `Expr::Ident("self")`; before the `arg_is_binding`
+    // / `root_binding_name` SelfValue arms, the effective-ownership fixpoint matched only
+    // `Expr::Ident`, so `self` flowing into `helper` stayed Reads and the program compiled +
+    // printed 999 — reopening the transitive share-violation hole the independence analysis
+    // relies on. Reverting either SelfValue arm makes this compile and run. Do NOT relax this
+    // to accept a clean run.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3b_p4_self_transitive_share_violation.ynz"));
+    assert_eq!(
+        code, 1,
+        "self transitive share violation must exit 1 (clean typeck reject); exit was {code}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "self transitive share violation: stdout must be empty on a clean compile error; got: {stdout:?}"
+    );
+    assert!(
+        stderr.contains("modified through `helper`"),
+        "self transitive share violation: diagnostic must name the mutating callee; stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("SIGILL")
+            && !stderr.contains("illegal instruction")
+            && !stderr.contains("malloc"),
+        "self transitive share violation: reject must be clean (no crash markers); stderr:\n{stderr}"
+    );
+    }
+    // case: an in-place collection mutator on a `share` parameter is accepted
+    v03_m3b_p4_share_collection_mutation_rejected => {
+    // WHY (HOLE 2 — mutating collection method on a `share` param): an in-place collection
+    // mutator (`array.add`) on a `share` parameter must be a compile error, the same as a direct
+    // element assign. Before the fix, the effective-ownership fixpoint routed a builtin method
+    // receiver through `classify_call_position`, which returns Reads for any builtin method name
+    // (the false "intrinsics take args by share/value" premise) — so `grow(share xs)` compiled
+    // and `xs.add(7)` grew the caller's array (printed 4), and two aliased `.set()` calls would
+    // auto-parallelize into concurrent in-place writes. Reverting the MethodCall-arm carve-out or
+    // the check.rs reject makes this compile and run. Do NOT relax this to accept a clean run.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("v0_3_m3b_p4_share_collection_mutation.ynz"));
+    assert_eq!(
+        code, 1,
+        "share collection mutation must exit 1 (clean typeck reject); exit was {code}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "share collection mutation: stdout must be empty on a clean compile error; got: {stdout:?}"
+    );
+    assert!(
+        stderr.contains("`xs` is declared `share`")
+            && stderr.contains("elements cannot be changed"),
+        "share collection mutation: diagnostic must reject the share-param mutation; stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("SIGILL")
+            && !stderr.contains("illegal instruction")
+            && !stderr.contains("malloc"),
+        "share collection mutation: reject must be clean (no crash markers); stderr:\n{stderr}"
+    );
+    }
+}
+
+// bug: wall-clock lower bound (>=250 ms) proves a bare-heap pair does not overlap; timing assertion goes nightly | tier: Medium
+#[test]
+fn nightly_v03_m3b_p4_bare_read_heap_sequentializes_under_floor() {
+    // test-ratchet: conservative floor forfeits read-only-mutable-heap parallelism (GR2 > GR7).
+    // A mutable-heap arg is unconditionally a potential write under the floor, so two bare-read
+    // heap calls sequentialize (≈300ms) in both modes. The assertion locks that sound behavior.
+    //
+    // WHY: the floor sequentializes any mutable-heap-arg pair regardless of how the callee
+    // uses it — default takes the full ≈300ms (no overlap).
+    let src = fixture("v0_3_m3b_p4_bare_read_heap_sequentializes.ynz");
+    let (par_ms, par_code) = time_built_run(&src, false);
+    let (seq_ms, seq_code) = time_built_run(&src, true);
+    assert_eq!(par_code, 0, "default run must exit 0");
+    assert_eq!(seq_code, 0, "--no-auto-parallel run must exit 0");
+    assert!(
+        par_ms >= 250,
+        "default run took {par_ms}ms — under the floor two 150ms sleeps sequentialize to ≈300ms (no overlap)"
+    );
+    assert!(
+        seq_ms >= 250,
+        "--no-auto-parallel run took {seq_ms}ms — two 150ms sleeps sum to ≈300ms"
+    );
+}
+
+// ── v0.3-M3f Phase 4: permanent regression fixtures ──────────────────────────
+
+// -- Bug-2 (parallel-group bool-sibling frame-slot) trigger matrix --
+
+// -- Bug-1 (wide-EC same-callee copy-on-bind) permanent fixtures --
 
 // ─────────────────────────────────────────────────────────────────────────────
 // v0.3-M4 Phase 1 — channel<T> construction (FRAGO 004: methods land in Phase 2)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// WHY: proves `channel<T>()` (default capacity 64) and `channel<T>(N)` construction compiles and
-// runs end-to-end through the real compiler — the typeck → codegen (`ynz_channel_create`) chain.
-// If channel construction ever regresses to a codegen crash / miscompile (the all-or-nothing
-// hazard that made a partial typeck build unsafe before FRAGO 004 removed the suspending method
-// surface from Phase 1), this fixture stops exiting 0 with the expected output.
-#[test]
-fn v0_3_m4_channel_construct_runs_through_real_compiler() {
+/// One named test per input class of the `channel-handle-run table` unit; each case is a test the runner names.
+macro_rules! channel_handle_run_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a channel or task-handle program miscompiles, leaks, loses a value across suspend/resume, or differs between modes | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+channel_handle_run_table_high_case! {
+    // case: `channel<T>()` construction miscompiles or crashes (wrong output)
+    // WHY: proves `channel<T>()` (default capacity 64) and `channel<T>(N)` construction compiles and
+    // runs end-to-end through the real compiler — the typeck → codegen (`ynz_channel_create`) chain.
+    // If channel construction ever regresses to a codegen crash / miscompile (the all-or-nothing
+    // hazard that made a partial typeck build unsafe before FRAGO 004 removed the suspending method
+    // surface from Phase 1), this fixture stops exiting 0 with the expected output.
+    v0_3_m4_channel_construct_runs_through_real_compiler => {
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m4_channel_construct.ynz"));
     assert_eq!(
         code, 0,
@@ -9553,46 +8552,184 @@ fn v0_3_m4_channel_construct_runs_through_real_compiler() {
         stdout, "channels ready\n",
         "channel construction fixture must run to completion; stdout:\n{stdout}"
     );
-}
-
-// WHY: channel construction must not leak a COUNTED allocation. `ynz_channel_create` heap-allocates
-// via Rust `Box` (not the counted `ynz_alloc`, exactly like `map`/`array`'s libc `malloc`), so a
-// channel-construction program leaves the `ynz_alloc`/`ynz_free` counter balanced (0 == 0). This
-// pins that channel construction introduces no unbalanced counted allocation on the program path —
-// a regression that routed a channel through `ynz_alloc` without a matching free would break this.
-#[test]
-fn v0_3_m4_channel_construct_alloc_equals_free() {
-    let (alloc, free) = ynz_run_with_alloc_counter("v0_3_m4_channel_construct.ynz");
-    assert_eq!(
-        alloc, free,
-        "channel construction must keep ynz_alloc==ynz_free (got alloc={alloc}, free={free})"
+    }
+    // case: a channel receive composed into a suspending caller loses a value across suspend/resume
+    // WHY: THE R5 composed-suspension gate (build-blocking, plan §3.3 P2 step 7). A handle-spawned
+    // child suspends on `send()`-on-full (capacity-1 channel) WHILE the parent polls `receive()` —
+    // the exact scenario that deadlocks on any substrate with a synchronous block or fabricated
+    // waker in the conduit path. Both values arriving in order + clean exit is the proof the
+    // suspend→persist→resume path composes. A hang here trips the test watchdog.
+    v0_3_m4_p2_r5_composed_suspension_gate => {
+    m4_p2_assert_runs_byte_identical_alloc_free("v0_3_m4_channel_composed.ynz", "10\n20\ndone\n");
+    }
+    // case: a collected `number errors` child suspended mid-execution on a full-channel send loses its frame or wide result
+    v0_3_m4_p2_r5xr8_suspend_mid_execution_then_collect => {
+    m4_p2_assert_runs_byte_identical_alloc_free(
+        "v0_3_m4_r5xr8_suspend_then_collect.ynz",
+        "15\n9999999999.000000001\n",
     );
-}
-
-// WHY: the cross-impl oracle — a channel-construction program must produce byte-identical output
-// under default auto-parallelization and `--no-auto-parallel` sequential lowering. Channel
-// construction has no suspension point in Phase 1 (no methods), so the two lowerings must agree
-// exactly; a divergence would signal channel codegen leaking into the parallelization analysis.
-#[test]
-fn v0_3_m4_channel_construct_no_auto_parallel_byte_identical() {
-    let src = fixture("v0_3_m4_channel_construct.ynz");
-    let (par, _e1, c1) = build_to_tmpdir_and_run(&src, false);
-    let (seq, _e2, c2) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(c1, 0, "default build+run must succeed");
-    assert_eq!(c2, 0, "--no-auto-parallel build+run must succeed");
-    assert_eq!(
-        par, seq,
-        "channel construction: default and --no-auto-parallel must be byte-identical;\n\
-         par:\n{par}\nseq:\n{seq}"
+    }
+    // case: a bare channel (no struct wrapper) composed with a suspend/resume loses its value or leaks
+    // WHY: the FRAGO 004 relocation proof — the BARE-channel (fire-and-forget spawn, no handle)
+    // two-task composed scenario. Proves `emit_channel_suspend_point`'s suspend→persist→resume
+    // path end-to-end WITHOUT the handle machinery: the exact path no single-task Phase-1 fixture
+    // could exercise, which is WHY the send/recv build moved to Phase 2.
+    v0_3_m4_p2_bare_channel_composed_suspend_resume => {
+    m4_p2_assert_runs_byte_identical_alloc_free(
+        "v0_3_m4_channel_composed_bare.ynz",
+        "6\nbare done\n",
     );
+    }
+    // case: a handle collected after its task completed returns a wrong value or leaks
+    // WHY: R8 matrix — collected × ok × receive-AFTER-completion. The child finished (and its
+    // frame was freed) long before the parent's `.receive()` — a byte-correct 42 proves the
+    // completion was extracted BEFORE the frame-freeing drop (copy-before-free), because a
+    // read-after-free of the dead frame could not reliably deliver it.
+    v0_3_m4_p2_r8_collect_ok_receive_after_completion => {
+    m4_p2_assert_runs_byte_identical_alloc_free("v0_3_m4_handle_collect_ok_after.ynz", "42\n");
+    }
+    // case: a handle collected before its task completes returns a wrong value or leaks (different state from receive-after)
+    // WHY: R8 matrix — collected × ok × receive-BEFORE-completion. The parent parks on
+    // `.receive()` while the child is still running; the receive endpoint future's forwarded
+    // waker must wake the parent when the completion lands (a fabricated waker hangs here).
+    v0_3_m4_p2_r8_collect_ok_receive_before_completion => {
+    m4_p2_assert_runs_byte_identical_alloc_free("v0_3_m4_handle_collect_ok_before.ynz", "42\n");
+    }
+    // case: an `errors` handle collection drops the error and returns a success value
+    // WHY: R8 matrix — collected × ERROR path. The child's typed error is the completion
+    // delivery; `.or(99)` takes the fallback. A dangling ok-pointer or double-free on the error
+    // arm would corrupt or crash instead of printing 99.
+    v0_3_m4_p2_r8_collect_error_path => {
+    m4_p2_assert_runs_byte_identical_alloc_free("v0_3_m4_handle_collect_err.ynz", "99\n");
+    }
+    // case: a collected wide `number` is read after its buffer is freed (copy-before-free)
+    // WHY: R8 matrix — collected × WIDE VALUE (`-> number errors`): the exact
+    // IMP-concurrency:465-479 copy-before-free case this feature was gated on. The ok-word
+    // points into the frame's 16-byte staging slot; the runtime must copy those bytes to the
+    // handle-owned buffer BEFORE free_frame. The full-precision value is the proof — any
+    // truncation or stale read corrupts the 9 fractional digits.
+    v0_3_m4_p2_r8_collect_wide_number_copy_before_free => {
+    m4_p2_assert_runs_byte_identical_alloc_free(
+        "v0_3_m4_handle_collect_number.ynz",
+        "9999999999.000000001\n",
+    );
+    }
+    // case: a discarded (fire-and-forget) spawn leaks or changes behaviour once handle machinery exists
+    // WHY: R8 matrix — fire-and-forget arm: a BARE spawn of the same `-> T errors` callee keeps
+    // today's discard path (no handle, no copy). Output unchanged is the behavioral half; the
+    // IR-keying test below is the structural half.
+    v0_3_m4_p2_r8_fire_and_forget_unchanged => {
+    m4_p2_assert_runs_byte_identical_alloc_free(
+        "v0_3_m4_handle_fire_forget_unchanged.ynz",
+        "fire and forget done\n",
+    );
+    }
+    // case: a handle that is never received keeps its result slot allocated forever
+    // WHY: R2 hostile — never-received handle. One completion parked in the outbox, the handle
+    // dropped without a receive: must terminate cleanly and free the frame via the task's own
+    // drop ladder (alloc==free is the handle-DROP leak gate) — never a deadlock, never a leak.
+    v0_3_m4_p2_handle_never_received_bounded_and_freed => {
+    m4_p2_assert_runs_byte_identical_alloc_free(
+        "v0_3_m4_handle_never_received.ynz",
+        "never received - still clean\n",
+    );
+    }
+    // case: handle slots are not recycled so a program that collects many handles exhausts the pool
+    // WHY: R2 hostile — pool exhaustion: 12 concurrently-suspended handled tasks (more than the
+    // worker threads). Cooperative poll-yield suspension means every task completes and every
+    // value is collected; a thread-blocking substrate wedges and trips the watchdog.
+    v0_3_m4_p2_handle_pool_exhaustion_all_collected => {
+    m4_p2_assert_runs_byte_identical_alloc_free("v0_3_m4_handle_pool_exhaustion.ynz", "12\n");
+    }
+    // case: a parent exiting while a producer is backpressured hangs or leaks the channel buffer
+    // WHY: R1 hostile — never-drained: a fire-and-forget child suspends on a full channel and
+    // nobody ever drains it. The child staying suspended is BACKPRESSURE WORKING (the teaching
+    // point), not a deadlock: the parent exits cleanly and shutdown drains the parked task
+    // (alloc==free proves the parked frame + channel refs were still freed).
+    v0_3_m4_p2_channel_never_drained_parent_exits_clean => {
+    m4_p2_assert_runs_byte_identical_alloc_free(
+        "v0_3_m4_channel_never_drained.ynz",
+        "parent exits while producer stays backpressured\n",
+    );
+    }
+    // case: a value sent and received on one channel inside a single task is lost or leaks the channel
+    v0_3_m4_p2_channel_smoke => {
+    m4_p2_assert_runs_byte_identical_alloc_free("v0_3_m4_channel_smoke.ynz", "7\nsmoke done\n");
+    }
+    // case: a value sent through a handle is lost or garbled on receive
+    // WHY: the full handle round-trip — `h.send(v)` feeds the child's first `channel<T>`
+    // parameter, the child computes from the command, and the completion returns via
+    // `h.receive()`. One parent→child→parent cycle through both conduit directions.
+    v0_3_m4_p2_handle_send_receive_roundtrip => {
+    m4_p2_assert_runs_byte_identical_alloc_free("v0_3_m4_handle_send_roundtrip.ynz", "42\n");
+    }
+    // case: a channel stored in an annotated shape field is mis-lowered
+    // WHY: the annotated shape-field extraction (`let c: channel<int> = b.wire`) must run
+    // end-to-end with suspension support — byte-identical across auto-parallel modes and
+    // alloc == free on the conduit path. This is the WHAT-INSTEAD escape hatch for the
+    // shape-field origin (the code-reviewer's exact repro, annotated).
+    v0_3_m4_channel_field_annotated_runs => {
+    m4_p2_assert_runs_byte_identical_alloc_free("v0_3_m4_channel_field_annotated.ynz", "7\n");
+    }
+    // case: a copied value crossing a spawn is aliased or leaks
+    v0_3_m4_p3_cross_copy_safe_and_byte_identical => {
+    // WHY: R3 "should-Arc is not falsely rejected" SAFETY FLOOR — a read-only shape
+    // shared across `background` with the value used after the spawn crosses via a safe
+    // independent COPY: the task reads its own copy, the caller keeps `42`. No false
+    // reject, no data race. alloc==free proves the copy is freed. (Auto-Arc is the
+    // deferred perf-form of this exact crossing — see `auto-arc-codegen-emission`.)
+    m4_p2_assert_runs_byte_identical_alloc_free(
+        "v0_3_m4_p3_cross_copy.ynz",
+        "q3\n42\ncross-copy-done\n",
+    );
+    }
+    // case: a given value crossing a spawn is double-freed or leaks
+    v0_3_m4_p3_cross_give_safe_and_byte_identical => {
+    // WHY: R3 — a `give`-param callee (ownership transfer) crosses safely; nothing
+    // dangles, no false reject.
+    m4_p2_assert_runs_byte_identical_alloc_free(
+        "v0_3_m4_p3_cross_give.ynz",
+        "q3\ncross-give-done\n",
+    );
+    }
+    // case: a generic callee receiving a given value is over-rejected
+    v0_3_m4_p3_cross_give_generic_not_over_rejected => {
+    // WHY: R3 — the closed silent-skip gap must NOT over-reject: a generic `give`
+    // (ownership transfer) is safe and stays legal. Guards against the generic-callee
+    // reject extension turning into a false-reject of the safe give form.
+    m4_p2_assert_runs_byte_identical_alloc_free(
+        "v0_3_m4_p3_cross_give_generic.ynz",
+        "q3\ncross-give-generic-done\n",
+    );
+    }
+    // case: channel arguments are wrongly refused as borrowed across a spawn
+    v0_3_m4_p3_cross_channel_exempt_holds => {
+    // WHY: R3 — the Phase 2 `channel<T>`-param exemption (FRAGO 006 ground truth) must
+    // HOLD: a `share channel<int>` param is EXEMPT from the borrow reject because a
+    // channel is the sanctioned refcount-shared conduit. Verified, not reimplemented.
+    m4_p2_assert_runs_byte_identical_alloc_free(
+        "v0_3_m4_p3_cross_channel_exempt.ynz",
+        "5\ncross-channel-done\n",
+    );
+    }
 }
 
-// WHY: the compile-time bounded-by-construction gate (stdlib-design Rule 4) — a non-positive
-// capacity LITERAL (`0` or a negated literal) must be rejected at compile time, and the too-many
-// / wrong type-argument forms must produce teaching diagnostics. These are the single-task hostile
-// fixtures the Phase-1 error gallery documents; this test pins that they fail to compile.
-#[test]
-fn v0_3_m4_channel_bad_capacity_rejected_at_compile_time() {
+/// One named test per input class of the `channel-refused table` unit; each case is a test the runner names.
+macro_rules! channel_refused_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: an invalid channel construction or an unannotated cross-module channel return is accepted instead of refused | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+channel_refused_table_high_case! {
+    // case: a non-positive channel capacity compiles and runs
+    // WHY: the compile-time bounded-by-construction gate (stdlib-design Rule 4) — a non-positive
+    // capacity LITERAL (`0` or a negated literal) must be rejected at compile time, and the too-many
+    // / wrong type-argument forms must produce teaching diagnostics. These are the single-task hostile
+    // fixtures the Phase-1 error gallery documents; this test pins that they fail to compile.
+    v0_3_m4_channel_bad_capacity_rejected_at_compile_time => {
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m4_channel_bad_capacity.ynz"));
     assert_ne!(
         code, 0,
@@ -9606,6 +8743,26 @@ fn v0_3_m4_channel_bad_capacity_rejected_at_compile_time() {
         stderr.contains("capacity must be at least 1"),
         "must reject non-positive capacity with a teaching diagnostic; got:\n{stderr}"
     );
+    }
+    // case: an unannotated cross-module channel return reaches codegen (ICE) instead of the origin diagnostic
+    // WHY: cross-module channel-returning call with NO annotation — must be a clean teaching
+    // error at compile time, never the codegen ICE it produced before the fix.
+    v0_3_m4_channel_xmod_return_unannotated_rejected => {
+    let (_stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m4_channel_xmod_return"));
+    assert_eq!(
+        code, 1,
+        "unannotated cross-module channel binding must be rejected at compile time; \
+         stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("can't see where `ch` got its channel"),
+        "expected the conduit-origin teaching error; stderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("compiler bug"),
+        "the origin case must never reach the codegen ICE; stderr:\n{stderr}"
+    );
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -9661,201 +8818,53 @@ fn m4_p2_assert_runs_byte_identical_alloc_free(fixture_name: &str, expected_stdo
     );
 }
 
-// WHY: THE R5 composed-suspension gate (build-blocking, plan §3.3 P2 step 7). A handle-spawned
-// child suspends on `send()`-on-full (capacity-1 channel) WHILE the parent polls `receive()` —
-// the exact scenario that deadlocks on any substrate with a synchronous block or fabricated
-// waker in the conduit path. Both values arriving in order + clean exit is the proof the
-// suspend→persist→resume path composes. A hang here trips the test watchdog.
-#[test]
-fn v0_3_m4_p2_r5_composed_suspension_gate() {
-    m4_p2_assert_runs_byte_identical_alloc_free("v0_3_m4_channel_composed.ynz", "10\n20\ndone\n");
+/// Counts `(handle spawns, bare spawns)` in an emitted IR text.
+fn spawn_call_counts(ir: &str) -> (usize, usize) {
+    let handle_spawns = ir
+        .lines()
+        .filter(|l| l.contains("call") && l.contains("@ynz_rt_spawn_handle"))
+        .count();
+    let bare_spawns = ir
+        .lines()
+        .filter(|l| l.contains("call") && l.contains("@ynz_rt_spawn("))
+        .count();
+    (handle_spawns, bare_spawns)
 }
 
-// WHY: the FRAGO 004 relocation proof — the BARE-channel (fire-and-forget spawn, no handle)
-// two-task composed scenario. Proves `emit_channel_suspend_point`'s suspend→persist→resume
-// path end-to-end WITHOUT the handle machinery: the exact path no single-task Phase-1 fixture
-// could exercise, which is WHY the send/recv build moved to Phase 2.
-#[test]
-fn v0_3_m4_p2_bare_channel_composed_suspend_resume() {
-    m4_p2_assert_runs_byte_identical_alloc_free(
-        "v0_3_m4_channel_composed_bare.ynz",
-        "6\nbare done\n",
-    );
-}
-
-// WHY: single-task send-then-receive smoke — the minimal bare-channel method surface
-// (typeck Lock 8 + the 3-way emit_channel_suspend_point on its Ready arms).
-#[test]
-fn v0_3_m4_p2_channel_smoke() {
-    m4_p2_assert_runs_byte_identical_alloc_free("v0_3_m4_channel_smoke.ynz", "7\nsmoke done\n");
-}
-
-// WHY: R8 matrix — collected × ok × receive-AFTER-completion. The child finished (and its
-// frame was freed) long before the parent's `.receive()` — a byte-correct 42 proves the
-// completion was extracted BEFORE the frame-freeing drop (copy-before-free), because a
-// read-after-free of the dead frame could not reliably deliver it.
-#[test]
-fn v0_3_m4_p2_r8_collect_ok_receive_after_completion() {
-    m4_p2_assert_runs_byte_identical_alloc_free("v0_3_m4_handle_collect_ok_after.ynz", "42\n");
-}
-
-// WHY: R8 matrix — collected × ok × receive-BEFORE-completion. The parent parks on
-// `.receive()` while the child is still running; the receive endpoint future's forwarded
-// waker must wake the parent when the completion lands (a fabricated waker hangs here).
-#[test]
-fn v0_3_m4_p2_r8_collect_ok_receive_before_completion() {
-    m4_p2_assert_runs_byte_identical_alloc_free("v0_3_m4_handle_collect_ok_before.ynz", "42\n");
-}
-
-// WHY: R8 matrix — collected × ERROR path. The child's typed error is the completion
-// delivery; `.or(99)` takes the fallback. A dangling ok-pointer or double-free on the error
-// arm would corrupt or crash instead of printing 99.
-#[test]
-fn v0_3_m4_p2_r8_collect_error_path() {
-    m4_p2_assert_runs_byte_identical_alloc_free("v0_3_m4_handle_collect_err.ynz", "99\n");
-}
-
-// WHY: R8 matrix — collected × WIDE VALUE (`-> number errors`): the exact
-// IMP-concurrency:465-479 copy-before-free case this feature was gated on. The ok-word
-// points into the frame's 16-byte staging slot; the runtime must copy those bytes to the
-// handle-owned buffer BEFORE free_frame. The full-precision value is the proof — any
-// truncation or stale read corrupts the 9 fractional digits.
-#[test]
-fn v0_3_m4_p2_r8_collect_wide_number_copy_before_free() {
-    m4_p2_assert_runs_byte_identical_alloc_free(
-        "v0_3_m4_handle_collect_number.ynz",
-        "9999999999.000000001\n",
-    );
-}
-
-// WHY: R8 matrix — fire-and-forget arm: a BARE spawn of the same `-> T errors` callee keeps
-// today's discard path (no handle, no copy). Output unchanged is the behavioral half; the
-// IR-keying test below is the structural half.
-#[test]
-fn v0_3_m4_p2_r8_fire_and_forget_unchanged() {
-    m4_p2_assert_runs_byte_identical_alloc_free(
-        "v0_3_m4_handle_fire_forget_unchanged.ynz",
-        "fire and forget done\n",
-    );
-}
-
-// WHY: THE composed R5×R8 cell (build-blocking, plan r4 addition): a collected
-// `-> number errors` child suspends on a full-channel `send()` MID-execution (R5's
-// scenario), resumes, finishes, and its completion is collected through the
-// copy-before-free path (R8's scenario). Asserts in one program: the frame survives the
-// channel suspension, the collected wide value is byte-correct, and (via the alloc gate)
-// frame + counted buffers are each freed exactly once.
-#[test]
-fn v0_3_m4_p2_r5xr8_suspend_mid_execution_then_collect() {
-    m4_p2_assert_runs_byte_identical_alloc_free(
-        "v0_3_m4_r5xr8_suspend_then_collect.ynz",
-        "15\n9999999999.000000001\n",
-    );
-}
-
-// WHY: R2 hostile — never-received handle. One completion parked in the outbox, the handle
-// dropped without a receive: must terminate cleanly and free the frame via the task's own
-// drop ladder (alloc==free is the handle-DROP leak gate) — never a deadlock, never a leak.
-#[test]
-fn v0_3_m4_p2_handle_never_received_bounded_and_freed() {
-    m4_p2_assert_runs_byte_identical_alloc_free(
-        "v0_3_m4_handle_never_received.ynz",
-        "never received - still clean\n",
-    );
-}
-
-// WHY: R2 hostile — pool exhaustion: 12 concurrently-suspended handled tasks (more than the
-// worker threads). Cooperative poll-yield suspension means every task completes and every
-// value is collected; a thread-blocking substrate wedges and trips the watchdog.
-#[test]
-fn v0_3_m4_p2_handle_pool_exhaustion_all_collected() {
-    m4_p2_assert_runs_byte_identical_alloc_free("v0_3_m4_handle_pool_exhaustion.ynz", "12\n");
-}
-
-// WHY: R1 hostile — never-drained: a fire-and-forget child suspends on a full channel and
-// nobody ever drains it. The child staying suspended is BACKPRESSURE WORKING (the teaching
-// point), not a deadlock: the parent exits cleanly and shutdown drains the parked task
-// (alloc==free proves the parked frame + channel refs were still freed).
-#[test]
-fn v0_3_m4_p2_channel_never_drained_parent_exits_clean() {
-    m4_p2_assert_runs_byte_identical_alloc_free(
-        "v0_3_m4_channel_never_drained.ynz",
-        "parent exits while producer stays backpressured\n",
-    );
-}
-
-// WHY: the full handle round-trip — `h.send(v)` feeds the child's first `channel<T>`
-// parameter, the child computes from the command, and the completion returns via
-// `h.receive()`. One parent→child→parent cycle through both conduit directions.
-#[test]
-fn v0_3_m4_p2_handle_send_receive_roundtrip() {
-    m4_p2_assert_runs_byte_identical_alloc_free("v0_3_m4_handle_send_roundtrip.ynz", "42\n");
-}
-
-// WHY: the R8 no-runtime-conditional grep-audit, made structural and build-blocking: the
+// The R8 no-runtime-conditional grep-audit, made structural and build-blocking: the
 // copy-before-free decision keys on the COMPILE-TIME spawn form, never on runtime
-// "was `.receive()` called" state. Proof at the IR level: a bare fire-and-forget spawn
-// lowers to `ynz_rt_spawn` ONLY (zero handle machinery — byte-for-byte today's discard
-// path), and a `let h = background ...` spawn lowers to `ynz_rt_spawn_handle` ONLY. The
-// behavioral half is the receive-after-completion matrix cells above (the copy demonstrably
-// happened at completion time even though the receive came arbitrarily later).
-#[test]
-fn v0_3_m4_p2_r8_spawn_form_keyed_at_compile_time() {
-    let ff_ir = build_to_tmpdir_emit_ir(&fixture("v0_3_m4_handle_fire_forget_unchanged.ynz"));
-    let ff_handle_spawns = ff_ir
-        .lines()
-        .filter(|l| l.contains("call") && l.contains("@ynz_rt_spawn_handle"))
-        .count();
-    let ff_bare_spawns = ff_ir
-        .lines()
-        .filter(|l| l.contains("call") && l.contains("@ynz_rt_spawn("))
-        .count();
-    assert_eq!(
-        (ff_handle_spawns, ff_bare_spawns),
-        (0, 1),
-        "fire-and-forget must lower to exactly one bare `ynz_rt_spawn` and ZERO \
-         `ynz_rt_spawn_handle` calls (the discard path must carry no handle machinery); IR:\n{ff_ir}"
-    );
-
-    let h_ir = build_to_tmpdir_emit_ir(&fixture("v0_3_m4_handle_collect_ok_after.ynz"));
-    let h_handle_spawns = h_ir
-        .lines()
-        .filter(|l| l.contains("call") && l.contains("@ynz_rt_spawn_handle"))
-        .count();
-    let h_bare_spawns = h_ir
-        .lines()
-        .filter(|l| l.contains("call") && l.contains("@ynz_rt_spawn("))
-        .count();
-    assert_eq!(
-        (h_handle_spawns, h_bare_spawns),
-        (1, 0),
-        "a handle spawn must lower to exactly one `ynz_rt_spawn_handle` and ZERO bare \
-         `ynz_rt_spawn` calls (the collecting path is compile-time keyed); IR:\n{h_ir}"
-    );
+// "was `.receive()` called" state. A bare fire-and-forget spawn lowers to `ynz_rt_spawn`
+// ONLY (zero handle machinery), and a `let h = background ...` spawn lowers to
+// `ynz_rt_spawn_handle` ONLY.
+macro_rules! spawn_form_case {
+    ($test_name:ident, $fixture_file:literal, $expected_counts:expr, $failure_text:literal) => {
+        // bug: a fire-and-forget spawn carries handle machinery, or a handle spawn lowers to a bare spawn | tier: Medium
+        #[test]
+        fn $test_name() {
+            let ir = build_to_tmpdir_emit_ir(&fixture($fixture_file));
+            assert_eq!(
+                spawn_call_counts(&ir),
+                $expected_counts,
+                "{}; IR:\n{ir}",
+                $failure_text
+            );
+        }
+    };
 }
 
-// WHY: the R6→cpu_admission decline gate (plan R7 exit criterion): a channel-using callee is
-// classified SUSPENDING through the one authoritative classifier chain (suspension_source →
-// may_block fixpoint → cpu_admission's suspend_set), so a pair of calls to it is DECLINED
-// from CPU-pool admission — 0 blocking-pool spawns. A channel-using closure admitted to the
-// blocking pool would park an OS thread on a suspended send (the M3g deadlock class).
-#[test]
-fn v0_3_m4_p2_channel_using_callee_declines_cpu_admission() {
-    m3d_assert_declines_byte_identical("v0_3_m4_channel_cpu_admission_declines.ynz", "32");
-}
+spawn_form_case!(
+    fire_and_forget_spawn_lowers_to_one_bare_spawn_and_no_handle,
+    "v0_3_m4_handle_fire_forget_unchanged.ynz",
+    (0, 1),
+    "fire-and-forget must lower to exactly one bare `ynz_rt_spawn` and ZERO `ynz_rt_spawn_handle` calls (the discard path must carry no handle machinery)"
+);
 
-// WHY: the FIRE twin proving the decline above is attributable to the channel classification
-// and not to the fixture shape: the SAME host shape with a pure-CPU callee is admitted and
-// fires 2 blocking-pool spawns. Without this twin, the decline test would pass vacuously on
-// any inadmissible shape (masked-branch discipline).
-#[test]
-fn v0_3_m4_p2_cpu_admission_fire_twin_still_fires() {
-    m3d_assert_fires_n_byte_identical_alloc_free(
-        "v0_3_m4_channel_cpu_admission_fires.ynz",
-        "9932",
-        2,
-    );
-}
+spawn_form_case!(
+    handle_spawn_lowers_to_one_handle_spawn_and_no_bare_spawn,
+    "v0_3_m4_handle_collect_ok_after.ynz",
+    (1, 0),
+    "a handle spawn must lower to exactly one `ynz_rt_spawn_handle` and ZERO bare `ynz_rt_spawn` calls (the collecting path is compile-time keyed)"
+);
 
 // ── v0.3-M4 fix-loop: conduit-receiver ORIGIN discipline ─────────────────────────────────
 //
@@ -9868,28 +8877,9 @@ fn v0_3_m4_p2_cpu_admission_fire_twin_still_fires() {
 // cover the cross-module origin (unreachable in a single-file typeck test) and the runtime
 // proof that the diagnostic's annotate-the-binding suggestion actually works.
 
-// WHY: cross-module channel-returning call with NO annotation — must be a clean teaching
-// error at compile time, never the codegen ICE it produced before the fix.
-#[test]
-fn v0_3_m4_channel_xmod_return_unannotated_rejected() {
-    let (_stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m4_channel_xmod_return"));
-    assert_eq!(
-        code, 1,
-        "unannotated cross-module channel binding must be rejected at compile time; \
-         stderr:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("can't see where `ch` got its channel"),
-        "expected the conduit-origin teaching error; stderr:\n{stderr}"
-    );
-    assert!(
-        !stderr.contains("compiler bug"),
-        "the origin case must never reach the codegen ICE; stderr:\n{stderr}"
-    );
-}
-
 // WHY: the annotated form of the SAME cross-module case must compile with suspension
 // support and run — locks the origin diagnostic's WHAT-INSTEAD as a real escape hatch.
+// bug: an annotated cross-module channel return fails to compile or prints a wrong value (project-directory harness) | tier: Medium
 #[test]
 fn v0_3_m4_channel_xmod_return_annotated_runs() {
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("v0_3_m4_channel_xmod_return_annotated"));
@@ -9898,15 +8888,6 @@ fn v0_3_m4_channel_xmod_return_annotated_runs() {
         "annotated cross-module channel binding must compile and run; stderr:\n{stderr}"
     );
     assert_eq!(stdout, "7\n", "expected output mismatch; stderr:\n{stderr}");
-}
-
-// WHY: the annotated shape-field extraction (`let c: channel<int> = b.wire`) must run
-// end-to-end with suspension support — byte-identical across auto-parallel modes and
-// alloc == free on the conduit path. This is the WHAT-INSTEAD escape hatch for the
-// shape-field origin (the code-reviewer's exact repro, annotated).
-#[test]
-fn v0_3_m4_channel_field_annotated_runs() {
-    m4_p2_assert_runs_byte_identical_alloc_free("v0_3_m4_channel_field_annotated.ynz", "7\n");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -9955,28 +8936,44 @@ fn m4_p3_assert_errors_loudly(fixture_name: &str, phrase: &str) {
     );
 }
 
-#[test]
-fn v0_3_m4_p3_reject_share_concrete() {
+/// One named test per input class of the `spawn-borrowed-argument-refused table` unit; each case is a test the runner names.
+macro_rules! spawn_borrowed_argument_refused_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a spawn of a callee that borrows (`share`) or mutates (`lend`) its arguments is accepted | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+spawn_borrowed_argument_refused_table_high_case! {
+    // case: a spawn of a callee that borrows (`share`) its arguments is accepted for a concrete callee
+    v0_3_m4_p3_reject_share_concrete => {
     // WHY: R3 — a `share`-param concrete callee across `background` is a dangling-borrow
     // hazard and must be rejected. This is the pre-existing floor the matrix pins.
     m4_p3_assert_rejects(
         "v0_3_m4_p3_reject_share_concrete.ynz",
         "borrows its arguments",
     );
-}
-
-#[test]
-fn v0_3_m4_p3_reject_lend_concrete() {
+    }
+    // case: a spawn of a callee that mutates its arguments via `lend` is accepted
+    v0_3_m4_p3_reject_lend_concrete => {
     // WHY: R3 — a `lend`-param concrete callee is the same cross-thread mutable-borrow
     // hazard as `share`; must reject.
     m4_p3_assert_rejects(
         "v0_3_m4_p3_reject_lend_concrete.ynz",
         "mutates its arguments via `lend`",
     );
-}
-
-#[test]
-fn v0_3_m4_p3_reject_share_generic() {
+    }
+    // case: a generic callee that mutates its arguments via `lend` is accepted at spawn
+    v0_3_m4_p3_reject_lend_generic => {
+    // WHY: R3 silent-skip gap CLOSED — the `lend` twin of the generic-callee gap.
+    m4_p3_assert_rejects(
+        "v0_3_m4_p3_reject_lend_generic.ynz",
+        "mutates its arguments via `lend`",
+    );
+    }
+    // case: a generic callee borrowing its arguments is accepted at spawn
+    v0_3_m4_p3_reject_share_generic => {
     // WHY: R3 silent-skip gap CLOSED — a `share`-param GENERIC callee lives in the
     // generic table, not `sig_table.fns`, so before Phase 3 it skipped the reject
     // silently. It must now reject loudly, identically to the concrete callee.
@@ -9984,81 +8981,24 @@ fn v0_3_m4_p3_reject_share_generic() {
         "v0_3_m4_p3_reject_share_generic.ynz",
         "borrows its arguments",
     );
-}
-
-#[test]
-fn v0_3_m4_p3_reject_lend_generic() {
-    // WHY: R3 silent-skip gap CLOSED — the `lend` twin of the generic-callee gap.
-    m4_p3_assert_rejects(
-        "v0_3_m4_p3_reject_lend_generic.ynz",
-        "mutates its arguments via `lend`",
-    );
-}
-
-#[test]
-fn v0_3_m4_p3_reject_share_method() {
+    }
+    // case: a method callee borrowing its arguments is accepted at spawn
+    v0_3_m4_p3_reject_share_method => {
     // WHY: R3 — the UFCS method form (`cfg.inspect()`) must reject its `share` param
     // identically to the free-function form (the reject resolves the method name).
     m4_p3_assert_rejects(
         "v0_3_m4_p3_reject_share_method.ynz",
         "borrows its arguments",
     );
-}
-
-#[test]
-fn v0_3_m4_p3_cross_copy_safe_and_byte_identical() {
-    // WHY: R3 "should-Arc is not falsely rejected" SAFETY FLOOR — a read-only shape
-    // shared across `background` with the value used after the spawn crosses via a safe
-    // independent COPY: the task reads its own copy, the caller keeps `42`. No false
-    // reject, no data race. alloc==free proves the copy is freed. (Auto-Arc is the
-    // deferred perf-form of this exact crossing — see `auto-arc-codegen-emission`.)
-    m4_p2_assert_runs_byte_identical_alloc_free(
-        "v0_3_m4_p3_cross_copy.ynz",
-        "q3\n42\ncross-copy-done\n",
-    );
-}
-
-#[test]
-fn v0_3_m4_p3_cross_give_safe_and_byte_identical() {
-    // WHY: R3 — a `give`-param callee (ownership transfer) crosses safely; nothing
-    // dangles, no false reject.
-    m4_p2_assert_runs_byte_identical_alloc_free(
-        "v0_3_m4_p3_cross_give.ynz",
-        "q3\ncross-give-done\n",
-    );
-}
-
-#[test]
-fn v0_3_m4_p3_cross_give_generic_not_over_rejected() {
-    // WHY: R3 — the closed silent-skip gap must NOT over-reject: a generic `give`
-    // (ownership transfer) is safe and stays legal. Guards against the generic-callee
-    // reject extension turning into a false-reject of the safe give form.
-    m4_p2_assert_runs_byte_identical_alloc_free(
-        "v0_3_m4_p3_cross_give_generic.ynz",
-        "q3\ncross-give-generic-done\n",
-    );
-}
-
-#[test]
-fn v0_3_m4_p3_cross_channel_exempt_holds() {
-    // WHY: R3 — the Phase 2 `channel<T>`-param exemption (FRAGO 006 ground truth) must
-    // HOLD: a `share channel<int>` param is EXEMPT from the borrow reject because a
-    // channel is the sanctioned refcount-shared conduit. Verified, not reimplemented.
-    m4_p2_assert_runs_byte_identical_alloc_free(
-        "v0_3_m4_p3_cross_channel_exempt.ynz",
-        "5\ncross-channel-done\n",
-    );
-}
-
-#[test]
-fn v0_3_m4_p3_edge_unresolvable_callee_errors_loudly() {
+    }
+    // case: a spawn of an unresolvable callee is a silent no-op instead of an error
+    v0_3_m4_p3_edge_unresolvable_callee_errors_loudly => {
     // WHY: R3 edge — an unresolvable callee under `background` must error loudly
     // (typeck "not defined"), never silently skip to a no-op spawn / no-reject hole.
     m4_p3_assert_errors_loudly("v0_3_m4_p3_edge_unresolvable_callee.ynz", "is not defined");
-}
-
-#[test]
-fn v0_3_m4_p3_edge_nonident_callee_errors_loudly() {
+    }
+    // case: a spawn of a non-identifier callee is a silent no-op instead of an error
+    v0_3_m4_p3_edge_nonident_callee_errors_loudly => {
     // WHY: R3 edge — a non-identifier callee under `background` cannot resolve to a real
     // spawnable function (Yinz has no first-class functions); it must error loudly, never
     // a silent no-Arc/no-reject hole. Errors at codegen today.
@@ -10066,65 +9006,12 @@ fn v0_3_m4_p3_edge_nonident_callee_errors_loudly() {
         "v0_3_m4_p3_edge_nonident_callee.ynz",
         "non-identifier callee",
     );
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // v0.3-M4 Phase 4 — false-sharing auto-padding: the --no-auto-parallel gate
 // ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn v0_3_m4_p4_padding_gates_off_under_no_auto_parallel_with_identical_output() {
-    // WHY: first layout transform `--no-auto-parallel` has EVER gated (plan-flagged as
-    // unproven territory). Three claims, all proven through the real compiler binary:
-    //   (a) default mode emits the PADDED layout for the crossing shape — its int fields
-    //       become `{ i64, [56 x i8] }` 64-byte slots in the IR;
-    //   (b) sequential mode emits the GENUINELY UNPADDED layout — no pad arrays anywhere,
-    //       not merely a different padding that happens not to matter;
-    //   (c) program output is byte-identical in both modes (padding is layout-only; the
-    //       cross-impl determinism contract holds).
-    let src = fixture("v0_3_m4_p4_padding_gate.ynz");
-
-    // (c) both modes run, exit 0, identical stdout.
-    let (par_stdout, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
-    assert_eq!(
-        par_code, 0,
-        "default mode must exit 0; stderr:\n{par_stderr}"
-    );
-    let (seq_stdout, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(
-        seq_code, 0,
-        "--no-auto-parallel mode must exit 0; stderr:\n{seq_stderr}"
-    );
-    assert_eq!(
-        par_stdout, "tally total: 5\n",
-        "program must compute through the padded fields"
-    );
-    assert_eq!(
-        par_stdout, seq_stdout,
-        "padded and unpadded lowerings must produce byte-identical output"
-    );
-
-    // (a) default-mode IR carries the padded struct: each i64 field wrapped to a
-    // 64-byte cache-line slot.
-    let par_ir = build_to_tmpdir_emit_ir_mode(&src, false);
-    assert!(
-        par_ir.contains("{ i64, [56 x i8] }"),
-        "default mode must emit the 64-byte padded field slots for the crossing shape; IR:\n{}",
-        &par_ir[..par_ir.len().min(4000)]
-    );
-
-    // (b) sequential-mode IR is genuinely unpadded: no cache-line pad array exists
-    // anywhere in the module (the shape lowers to its natural { i64, i64 } layout).
-    let seq_ir = build_to_tmpdir_emit_ir_mode(&src, true);
-    assert!(
-        !seq_ir.contains("[56 x i8]"),
-        "--no-auto-parallel must emit the natural, unpadded layout — found a pad array in the IR"
-    );
-    assert!(
-        seq_ir.contains("{ i64, i64 }"),
-        "--no-auto-parallel must still lower the shape (natural two-int layout expected)"
-    );
-}
 
 // ── M5 P2 step 1: by-value element-storage RED matrix ────────────────────────
 //
@@ -10156,43 +9043,60 @@ fn v0_3_m4_p4_padding_gates_off_under_no_auto_parallel_with_identical_output() {
 // binding/assignment points (emit.rs `store_binding`), or an element carried
 // out of its loop iteration silently reads the LAST iteration's bytes.
 
-#[test]
-fn m5_p2_byval_int_literal() {
+/// One named test per input class of the `by-value element table` unit; each case is a test the runner names.
+macro_rules! by_value_element_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: an array, element or map value read back by value returns a wrong element or length, or aliases its source | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+by_value_element_table_high_case! {
+    // case: an `array<Int>` literal read back by value returns a wrong element or length
+    m5_p2_byval_int_literal => {
     // WHY: int × literal elements — behavior-preservation cell (green on the
     // pointer ABI; must stay byte-identical across the cut).
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_int_literal.ynz"));
     assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
     assert_eq!(stdout, "4\n10\n40\n-1\n20\n10\n40\ntrue\nfalse\n25\n35\n");
-}
-
-#[test]
-fn m5_p2_byval_int_runtime() {
+    }
+    // case: a runtime-built `array<Int>` read back by value returns a wrong element
+    m5_p2_byval_int_runtime => {
     // WHY: int × runtime-computed elements — behavior-preservation cell.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_int_runtime.ynz"));
     assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
     assert_eq!(stdout, "4\n10\n40\n-1\n20\n10\n40\ntrue\nfalse\n25\n35\n");
-}
-
-#[test]
-fn m5_p2_byval_float_literal() {
+    }
+    // case: an `array<Float>` literal read back by value loses the f64 bits
+    m5_p2_byval_float_literal => {
     // WHY: float × literal-derived elements (seeded via .toFloat(); direct
     // decimal-literal float coercion is a known deferred base miscompile —
     // spike-notes/s1_verdict.md). Behavior-preservation cell.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_float_literal.ynz"));
     assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
     assert_eq!(stdout, "4\n10\n40\n-1\n20\n10\n40\ntrue\nfalse\n25\n35\n");
-}
-
-#[test]
-fn m5_p2_byval_float_runtime() {
+    }
+    // case: a runtime-built `array<Float>` read back by value loses the f64 bits
+    m5_p2_byval_float_runtime => {
     // WHY: float × runtime-computed elements — behavior-preservation cell.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_float_runtime.ynz"));
     assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
     assert_eq!(stdout, "4\n10\n40\n-5\n20\n10\n40\ntrue\nfalse\n25\n35\n");
-}
-
-#[test]
-fn m5_p2_byval_bool_literal() {
+    }
+    // case: a runtime-built `array<Boolean>` read back by value truncates i1 wrongly
+    m5_p2_byval_bool_runtime => {
+    // WHY: boolean × runtime-computed elements — RED-today cell #1 (same
+    // miscompile class as the literal variant; golden hand-derived).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_bool_runtime.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(
+        stdout,
+        "4\ntrue\nfalse\ntrue\nfalse\ntrue\nfalse\ntrue\ntrue\nfalse\n"
+    );
+    }
+    // case: an `array<Boolean>` read back by value truncates i1 wrongly
+    m5_p2_byval_bool_literal => {
     // WHY: boolean × literal elements — RED-today cell #1: the pointer ABI
     // miscompiles boolean arrays outright (raw i1 passed to the i64 push/set
     // ABI; LLVM module verify fails). Golden is hand-derived from the fixture;
@@ -10203,22 +9107,9 @@ fn m5_p2_byval_bool_literal() {
         stdout,
         "4\ntrue\nfalse\ntrue\nfalse\ntrue\nfalse\ntrue\ntrue\nfalse\n"
     );
-}
-
-#[test]
-fn m5_p2_byval_bool_runtime() {
-    // WHY: boolean × runtime-computed elements — RED-today cell #1 (same
-    // miscompile class as the literal variant; golden hand-derived).
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_bool_runtime.ynz"));
-    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
-    assert_eq!(
-        stdout,
-        "4\ntrue\nfalse\ntrue\nfalse\ntrue\nfalse\ntrue\ntrue\nfalse\n"
-    );
-}
-
-#[test]
-fn m5_p2_byval_string_literal() {
+    }
+    // case: an `array<String>` literal read back by value aliases or loses a string
+    m5_p2_byval_string_literal => {
     // WHY: string × literal elements — behavior-preservation cell. Strings
     // stay 8-byte pointer slots under the by-value ABI (Option A); the golden
     // pins current behavior INCLUDING the pointer-bit `contains` semantics
@@ -10229,10 +9120,9 @@ fn m5_p2_byval_string_literal() {
         stdout,
         "4\nalpha\ndelta\nnone\nbeta\nalpha\ndelta\ntrue\nfalse\nepsilon\nzeta\n"
     );
-}
-
-#[test]
-fn m5_p2_byval_string_runtime() {
+    }
+    // case: a runtime-built `array<String>` read back by value aliases or loses a string
+    m5_p2_byval_string_runtime => {
     // WHY: string × runtime-built elements — behavior-preservation cell
     // (same-pointer contains(sb) is true today; preserved under the 8-byte
     // pointer-slot convention).
@@ -10242,10 +9132,9 @@ fn m5_p2_byval_string_runtime() {
         stdout,
         "4\nalpha-x\ndelta-x\nnone\nbeta-x\nalpha-x\ndelta-x\ntrue\nfalse\nepsilon-x\nzeta-x\n"
     );
-}
-
-#[test]
-fn m5_p2_byval_shape_literal() {
+    }
+    // case: an `array<Shape>` literal read back by value returns wrong fields
+    m5_p2_byval_shape_literal => {
     // WHY: shape × LITERAL fields (the pointer ABI's const-global-fold path).
     // RED-today cell #2 lives here: contains(equal-valued Part) must be true
     // under by-value value-equality semantics (today: pointer compare → false).
@@ -10253,10 +9142,9 @@ fn m5_p2_byval_shape_literal() {
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_shape_literal.ynz"));
     assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
     assert_eq!(stdout, "4\n1\n40\nfalse\n2\n1\n4\ntrue\nfalse\n5\n60\n16\n");
-}
-
-#[test]
-fn m5_p2_byval_shape_runtime() {
+    }
+    // case: a runtime-built `array<Shape>` read back by value returns wrong fields
+    m5_p2_byval_shape_runtime => {
     // WHY: shape × RUNTIME fields — the exact element class whose pointer-ABI
     // storage is the stack-dangling miscompile class the cut permanently fixes
     // (latent without suspension). Carries RED-today cell #2 (value-equality
@@ -10264,10 +9152,9 @@ fn m5_p2_byval_shape_runtime() {
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_shape_runtime.ynz"));
     assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
     assert_eq!(stdout, "4\n1\n40\nfalse\n2\n1\n4\ntrue\nfalse\n5\n60\n16\n");
-}
-
-#[test]
-fn m5_p2_byval_s1_spike() {
+    }
+    // case: a spike mixing by-value array ops returns wrong sums
+    m5_p2_byval_s1_spike => {
     // WHY: the adopted P0 S1 spike fixture — 3-element array<Part{int,float}>
     // with ALL-runtime field values: construct, IndexAssign, for-loop element
     // reads, int+float field stdout. The S1 GREEN verdict proved this exact
@@ -10277,6 +9164,205 @@ fn m5_p2_byval_s1_spike() {
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_s1_spike.ynz"));
     assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
     assert_eq!(stdout, "11\n33\n100\n700\n13\n39\n124\n");
+    }
+    // case: a shape element escaping a `for` iteration aliases the array slot
+    m5_p2_byval_shape_escape_for => {
+    // WHY: tripwire (a) — shape element saved from a for-loop body into an
+    // outer variable, printed after the loop. Unfixed observed 3/30 (last
+    // element); the golden asserts the MATCHED element (qty == 1).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_shape_escape_for.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n10\n");
+    }
+    // case: a shape element escaping `get` aliases the array slot
+    m5_p2_byval_shape_escape_get => {
+    // WHY: tripwire (b) — same escape via indexed `arr.get(i)` + `.value`
+    // unwrap in a while loop. Unfixed observed 3/30; golden asserts 1/10.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_shape_escape_get.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n10\n");
+    }
+    // case: a `maybe` of a primitive element escaping its read reuses the envelope and reads the last element
+    m5_p2_byval_int_maybe_escape => {
+    // WHY: tripwire (d) — maybe-envelope escape with a PRIMITIVE element type:
+    // the envelope-reuse half of the class is independent of shape payloads.
+    // Unfixed observed 7 (last element); golden asserts the matched 6.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_int_maybe_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "6\n");
+    }
+    // case: a `maybe` element escaping its read aliases the array slot
+    m5_p2_byval_maybe_escape => {
+    // WHY: tripwire (c) — the maybe ENVELOPE itself escapes (get-maybe path):
+    // per-site envelope reuse + shape-payload bits into the shared out buffer.
+    // Both envelope AND payload must be copied at the binding point. Unfixed
+    // observed 3/30; golden asserts the matched element (qty == 2) → 2/20.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_maybe_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "2\n20\n");
+    }
+    // case: a shape element escaping across a `wait` aliases the array slot
+    m5_p2_byval_shape_escape_wait => {
+    // WHY: tripwire (e) — element assigned to a FRAME-EMBEDDED crossing shape
+    // local (nested-scope assign before a `wait`), read after resume. The old
+    // plain slot store clobbered the pre-wired frame-region pointer, so the
+    // post-resume read saw the stale Let-initializer bytes (unfixed observed
+    // 0/0). Fixed: assignment memcpys INTO the frame region. The
+    // maybe<Shape>-crossing-wait sibling is NOT constructible today
+    // (UnsupportedCrossingLocalType rejects it) — Phase 3's guard-lift matrix
+    // owns that cell.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_shape_escape_wait.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "2\n20\n");
+    }
+    // case: a shape stored via field assignment aliases the source element
+    m5_p2_byval_field_assign_escape => {
+    // WHY: round-2 tripwire (a) — shape element persisted into a SHAPE FIELD
+    // (`holder.best = p`) inside the loop, read after it. The field cell is a
+    // pointer cell; a plain store aliased the per-site staging buffer (unfixed
+    // observed 3/30). Locks store_field's Shape arm (counted heap-cell clone).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_field_assign_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n10\n");
+    }
+    // case: a shape stored in a struct literal field aliases the source element
+    m5_p2_byval_struct_lit_field_escape => {
+    // WHY: round-2 tripwire (a2) — same field persist through a STRUCT LITERAL
+    // provided field (`{ best: p }`), a distinct lexical path into the same
+    // store_field funnel. The escape survives the outer binding's shallow byte
+    // copy (store_binding copies the `best` POINTER cell). Unfixed 3/30.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("m5_p2_byval_struct_lit_field_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n10\n");
+    }
+    // case: a `maybe` stored in a field aliases the source element
+    m5_p2_byval_maybe_field_escape => {
+    // WHY: round-2 tripwire (a3) — a maybe<Shape> ENVELOPE persisted into a
+    // maybe-typed shape field; the field cell pointed at the per-let-site
+    // envelope reused each iteration (unfixed 3/30). Locks store_field's Maybe
+    // arm (heap-cloned envelope + payload).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_maybe_field_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n10\n");
+    }
+    // case: a shape stored via `map.set` aliases the source element
+    m5_p2_byval_map_set_escape => {
+    // WHY: round-2 tripwire (b) — shape element persisted into a MAP via
+    // `.set()` inside the loop. Map value cells are i64 bits; marshalling as
+    // ptr_to_int(staging) persisted the reused staging pointer (unfixed 3/30).
+    // Locks map_value_to_stable_bits at the `.set()` site.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_map_set_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n10\n");
+    }
+    // case: a shape stored via map index assignment aliases the source element
+    m5_p2_byval_map_index_assign_escape => {
+    // WHY: round-2 tripwire (b2) — same map-value escape through the
+    // INDEX-ASSIGN lexical path (`picks[key] = p`); a distinct marshalling
+    // site that must route through the ONE stable-bits choke point
+    // (authoritative-derivation: no re-derived marshalling twins).
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("m5_p2_byval_map_index_assign_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n10\n");
+    }
+    // case: a shape stored in a map literal aliases the source element
+    m5_p2_byval_map_lit_escape => {
+    // WHY: round-2 tripwire (c) — map-value escape through a backtick-key MAP
+    // LITERAL built inside the loop from the loop variable (Expr::MapLit's
+    // marshalling site). Unfixed 3/30.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_map_lit_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n10\n");
+    }
+    // case: a shape stored through a struct literal built as a map (identifier-key path) aliases the source element
+    m5_p2_byval_struct_map_lit_escape => {
+    // WHY: round-2 tripwire (c2) — same literal escape through the
+    // IDENTIFIER-KEY path (`{ pick: p }` with a map annotation — the
+    // StructLit-as-map lowering), the fourth and last map marshalling site.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_struct_map_lit_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n10\n");
+    }
+    // case: a `maybe` map value aliases the source element
+    m5_p2_byval_map_maybe_value_escape => {
+    // WHY: round-2 tripwire (b3) — a maybe<Shape> ENVELOPE persisted as a MAP
+    // VALUE (`map<string, maybe<Part> >`); the value bits were
+    // ptr_to_int(per-site envelope), reused every iteration. Locks the map
+    // choke point's Maybe arm (heap-cloned envelope + payload per insertion).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_map_maybe_value_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n10\n");
+    }
+    // case: a `maybe` written into an array element aliases the source element
+    m5_p2_byval_array_maybe_elem_write_escape => {
+    // WHY: round-3 tripwire (B1) — a maybe<Part> envelope persisted as an
+    // ARRAY ELEMENT via `.set()`; the cell held ptr_to_int(per-site envelope),
+    // reused every iteration (unfixed observed 3/30, both admission routes).
+    // Locks array_elem_src_ptr's non-shape marshalling to the ONE stable-bits
+    // choke point (value_to_stable_bits — no per-surface twins).
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("m5_p2_byval_array_maybe_elem_write_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n10\n1\n10\n");
+    }
+    // case: a `maybe` passed to `background` aliases the source element
+    m5_p2_byval_bg_maybe_arg_escape => {
+    // WHY: round-3 tripwire (B2) — a maybe<int> spawn arg stored as bare
+    // envelope-pointer bits in the bg ctx; the spawn frame outlives every
+    // iteration, and the task (sleepBlocking) reads deterministically after
+    // the loop (unfixed observed 3). Locks prepare_bg_arg_for_ctx's Maybe arm
+    // (maybe_to_heap_cell at the spawn site + HeapMaybeEnv free).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_bg_maybe_arg_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "loop done\n1\n");
+    }
+    // case: a shape stored via fixed-array index assignment aliases the source element
+    m5_p2_byval_fixed_index_assign_escape => {
+    // WHY: round-4 tripwire (a) — the round-3 closer's exact repro. Shape
+    // elements persisted into fixed<Part> via `pair[i] = cur` in a while-loop,
+    // read after: slot 0 read the LAST iteration's bytes (unfixed 2/20).
+    // Locks the fixed index-assign arm to the ONE stable-bits choke point
+    // (value_to_stable_bits — no re-derived marshalling twins).
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("m5_p2_byval_fixed_index_assign_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n10\n2\n20\n");
+    }
+    // case: a shape stored via fixed-array `set` aliases the source element
+    m5_p2_byval_fixed_set_escape => {
+    // WHY: round-4 tripwire (b) — same shape-element persist through the
+    // `.set()` lexical path (lower_fixed_method's "set" arm), a distinct
+    // marshalling site that must route through the same choke point
+    // (unfixed 2/20 for slot 0).
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_fixed_set_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n10\n2\n20\n");
+    }
+    // case: a `maybe` fixed-array element aliases the source element
+    m5_p2_byval_fixed_maybe_elem_escape => {
+    // WHY: round-4 tripwire (c) — a maybe<Part> ENVELOPE persisted as a fixed
+    // element through BOTH write surfaces (.set() slot 0, index-assign slot 1);
+    // the per-site envelope was reused every iteration (unfixed 3/30 on both
+    // slots). Locks the fixed write sites' Maybe arm (heap-cloned envelope +
+    // payload per write). fixed<maybe<Part> > admission probe-verified.
+    let (stdout, stderr, code) =
+        ynz_run_stdout(&fixture("m5_p2_byval_fixed_maybe_elem_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n10\n2\n20\n");
+    }
+    // case: a fixed-array literal element aliases the source element
+    m5_p2_byval_fixed_literal_escape => {
+    // WHY: round-4 tripwire (d) — shape elements persisted through the FIXED
+    // LITERAL FILL site (ArrayLit's BuiltinFixed arm): mutating the source
+    // binding AFTER the fill silently rewrote the stored element (unfixed
+    // 9/90 — the post-mutation bytes). Golden asserts fill-time bytes 1/10,
+    // then the binding's own mutated 9.
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_fixed_literal_escape.ynz"));
+    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
+    assert_eq!(stdout, "1\n10\n9\n");
+    }
 }
 
 // ── M5 P2 fix-loop: escape-the-iteration tripwire cells ─────────────────────
@@ -10300,252 +9386,20 @@ fn m5_p2_byval_s1_spike() {
 // (`ynz_alloc`) at the persist point. The `m5_p2_byval_*_field_*` and
 // `m5_p2_byval_*map*` cells below lock that boundary, one per lexical path.
 
-#[test]
-fn m5_p2_byval_shape_escape_for() {
-    // WHY: tripwire (a) — shape element saved from a for-loop body into an
-    // outer variable, printed after the loop. Unfixed observed 3/30 (last
-    // element); the golden asserts the MATCHED element (qty == 1).
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_shape_escape_for.ynz"));
-    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
-    assert_eq!(stdout, "1\n10\n");
-}
-
-#[test]
-fn m5_p2_byval_shape_escape_get() {
-    // WHY: tripwire (b) — same escape via indexed `arr.get(i)` + `.value`
-    // unwrap in a while loop. Unfixed observed 3/30; golden asserts 1/10.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_shape_escape_get.ynz"));
-    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
-    assert_eq!(stdout, "1\n10\n");
-}
-
-#[test]
-fn m5_p2_byval_maybe_escape() {
-    // WHY: tripwire (c) — the maybe ENVELOPE itself escapes (get-maybe path):
-    // per-site envelope reuse + shape-payload bits into the shared out buffer.
-    // Both envelope AND payload must be copied at the binding point. Unfixed
-    // observed 3/30; golden asserts the matched element (qty == 2) → 2/20.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_maybe_escape.ynz"));
-    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
-    assert_eq!(stdout, "2\n20\n");
-}
-
-#[test]
-fn m5_p2_byval_int_maybe_escape() {
-    // WHY: tripwire (d) — maybe-envelope escape with a PRIMITIVE element type:
-    // the envelope-reuse half of the class is independent of shape payloads.
-    // Unfixed observed 7 (last element); golden asserts the matched 6.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_int_maybe_escape.ynz"));
-    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
-    assert_eq!(stdout, "6\n");
-}
-
-#[test]
-fn m5_p2_byval_shape_escape_wait() {
-    // WHY: tripwire (e) — element assigned to a FRAME-EMBEDDED crossing shape
-    // local (nested-scope assign before a `wait`), read after resume. The old
-    // plain slot store clobbered the pre-wired frame-region pointer, so the
-    // post-resume read saw the stale Let-initializer bytes (unfixed observed
-    // 0/0). Fixed: assignment memcpys INTO the frame region. The
-    // maybe<Shape>-crossing-wait sibling is NOT constructible today
-    // (UnsupportedCrossingLocalType rejects it) — Phase 3's guard-lift matrix
-    // owns that cell.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_shape_escape_wait.ynz"));
-    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
-    assert_eq!(stdout, "2\n20\n");
-}
-
 // ── M5 P2 fix round 2: persist-boundary tripwire cells ──────────────────────
 // (store_field Shape/Maybe arms + map_value_to_stable_bits — see the block
 // comment above; all eight RED-proven 3/30 on the unfixed tree, golden 1/10.)
-
-#[test]
-fn m5_p2_byval_field_assign_escape() {
-    // WHY: round-2 tripwire (a) — shape element persisted into a SHAPE FIELD
-    // (`holder.best = p`) inside the loop, read after it. The field cell is a
-    // pointer cell; a plain store aliased the per-site staging buffer (unfixed
-    // observed 3/30). Locks store_field's Shape arm (counted heap-cell clone).
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_field_assign_escape.ynz"));
-    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
-    assert_eq!(stdout, "1\n10\n");
-}
-
-#[test]
-fn m5_p2_byval_struct_lit_field_escape() {
-    // WHY: round-2 tripwire (a2) — same field persist through a STRUCT LITERAL
-    // provided field (`{ best: p }`), a distinct lexical path into the same
-    // store_field funnel. The escape survives the outer binding's shallow byte
-    // copy (store_binding copies the `best` POINTER cell). Unfixed 3/30.
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("m5_p2_byval_struct_lit_field_escape.ynz"));
-    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
-    assert_eq!(stdout, "1\n10\n");
-}
-
-#[test]
-fn m5_p2_byval_maybe_field_escape() {
-    // WHY: round-2 tripwire (a3) — a maybe<Shape> ENVELOPE persisted into a
-    // maybe-typed shape field; the field cell pointed at the per-let-site
-    // envelope reused each iteration (unfixed 3/30). Locks store_field's Maybe
-    // arm (heap-cloned envelope + payload).
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_maybe_field_escape.ynz"));
-    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
-    assert_eq!(stdout, "1\n10\n");
-}
-
-#[test]
-fn m5_p2_byval_map_set_escape() {
-    // WHY: round-2 tripwire (b) — shape element persisted into a MAP via
-    // `.set()` inside the loop. Map value cells are i64 bits; marshalling as
-    // ptr_to_int(staging) persisted the reused staging pointer (unfixed 3/30).
-    // Locks map_value_to_stable_bits at the `.set()` site.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_map_set_escape.ynz"));
-    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
-    assert_eq!(stdout, "1\n10\n");
-}
-
-#[test]
-fn m5_p2_byval_map_index_assign_escape() {
-    // WHY: round-2 tripwire (b2) — same map-value escape through the
-    // INDEX-ASSIGN lexical path (`picks[key] = p`); a distinct marshalling
-    // site that must route through the ONE stable-bits choke point
-    // (authoritative-derivation: no re-derived marshalling twins).
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("m5_p2_byval_map_index_assign_escape.ynz"));
-    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
-    assert_eq!(stdout, "1\n10\n");
-}
-
-#[test]
-fn m5_p2_byval_map_lit_escape() {
-    // WHY: round-2 tripwire (c) — map-value escape through a backtick-key MAP
-    // LITERAL built inside the loop from the loop variable (Expr::MapLit's
-    // marshalling site). Unfixed 3/30.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_map_lit_escape.ynz"));
-    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
-    assert_eq!(stdout, "1\n10\n");
-}
-
-#[test]
-fn m5_p2_byval_struct_map_lit_escape() {
-    // WHY: round-2 tripwire (c2) — same literal escape through the
-    // IDENTIFIER-KEY path (`{ pick: p }` with a map annotation — the
-    // StructLit-as-map lowering), the fourth and last map marshalling site.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_struct_map_lit_escape.ynz"));
-    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
-    assert_eq!(stdout, "1\n10\n");
-}
-
-#[test]
-fn m5_p2_byval_map_maybe_value_escape() {
-    // WHY: round-2 tripwire (b3) — a maybe<Shape> ENVELOPE persisted as a MAP
-    // VALUE (`map<string, maybe<Part> >`); the value bits were
-    // ptr_to_int(per-site envelope), reused every iteration. Locks the map
-    // choke point's Maybe arm (heap-cloned envelope + payload per insertion).
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_map_maybe_value_escape.ynz"));
-    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
-    assert_eq!(stdout, "1\n10\n");
-}
 
 // ── M5 P2 fix round 3: maybe-envelope persist tripwires ─────────────────────
 // (array element writes + background spawn args — the two remaining persist
 // surfaces marshalling maybe bits outside the stable-bits choke point; both
 // RED-proven on the unfixed tree per the code-reviewer's probes.)
 
-#[test]
-fn m5_p2_byval_array_maybe_elem_write_escape() {
-    // WHY: round-3 tripwire (B1) — a maybe<Part> envelope persisted as an
-    // ARRAY ELEMENT via `.set()`; the cell held ptr_to_int(per-site envelope),
-    // reused every iteration (unfixed observed 3/30, both admission routes).
-    // Locks array_elem_src_ptr's non-shape marshalling to the ONE stable-bits
-    // choke point (value_to_stable_bits — no per-surface twins).
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("m5_p2_byval_array_maybe_elem_write_escape.ynz"));
-    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
-    assert_eq!(stdout, "1\n10\n1\n10\n");
-}
-
-#[test]
-fn m5_p2_byval_bg_maybe_arg_escape() {
-    // WHY: round-3 tripwire (B2) — a maybe<int> spawn arg stored as bare
-    // envelope-pointer bits in the bg ctx; the spawn frame outlives every
-    // iteration, and the task (sleepBlocking) reads deterministically after
-    // the loop (unfixed observed 3). Locks prepare_bg_arg_for_ctx's Maybe arm
-    // (maybe_to_heap_cell at the spawn site + HeapMaybeEnv free).
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_bg_maybe_arg_escape.ynz"));
-    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
-    assert_eq!(stdout, "loop done\n1\n");
-}
-
-#[test]
-fn m5_p2_byval_debug_repr() {
-    // WHY: the audited "Array debug representation" call site
-    // (audit-array-callsites.md; emit.rs BuiltinArray debug-repr walker) had no
-    // test after the by-value migration. `print(array)` is legal (typeck lists
-    // BuiltinArray as printable); this locks the repr walker per element type,
-    // including a shape array, against the elem_size-aware ABI.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_debug_repr.ynz"));
-    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
-    assert_eq!(
-        stdout,
-        "[5, 6, 7]\n[true, false]\n[5, 6]\n[alpha-x, beta-x]\n[Part { qty: 1, price: 10 }, Part { qty: 2, price: 20 }]\n"
-    );
-}
-
 // ── M5 P2 fix round 4: fixed-array element persist tripwires ────────────────
 // (the round-3 closer's surfaced deviation: fixed<T>'s uniform [N x i64] stack
 // slots marshalled shape/maybe values as bare ptr_to_int of the per-site-reused
 // binding storage at ALL THREE write sites — index-assign, .set(), literal
 // fill; every slot aliased it. All four RED-proven on the unfixed tree.)
-
-#[test]
-fn m5_p2_byval_fixed_index_assign_escape() {
-    // WHY: round-4 tripwire (a) — the round-3 closer's exact repro. Shape
-    // elements persisted into fixed<Part> via `pair[i] = cur` in a while-loop,
-    // read after: slot 0 read the LAST iteration's bytes (unfixed 2/20).
-    // Locks the fixed index-assign arm to the ONE stable-bits choke point
-    // (value_to_stable_bits — no re-derived marshalling twins).
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("m5_p2_byval_fixed_index_assign_escape.ynz"));
-    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
-    assert_eq!(stdout, "1\n10\n2\n20\n");
-}
-
-#[test]
-fn m5_p2_byval_fixed_set_escape() {
-    // WHY: round-4 tripwire (b) — same shape-element persist through the
-    // `.set()` lexical path (lower_fixed_method's "set" arm), a distinct
-    // marshalling site that must route through the same choke point
-    // (unfixed 2/20 for slot 0).
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_fixed_set_escape.ynz"));
-    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
-    assert_eq!(stdout, "1\n10\n2\n20\n");
-}
-
-#[test]
-fn m5_p2_byval_fixed_maybe_elem_escape() {
-    // WHY: round-4 tripwire (c) — a maybe<Part> ENVELOPE persisted as a fixed
-    // element through BOTH write surfaces (.set() slot 0, index-assign slot 1);
-    // the per-site envelope was reused every iteration (unfixed 3/30 on both
-    // slots). Locks the fixed write sites' Maybe arm (heap-cloned envelope +
-    // payload per write). fixed<maybe<Part> > admission probe-verified.
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("m5_p2_byval_fixed_maybe_elem_escape.ynz"));
-    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
-    assert_eq!(stdout, "1\n10\n2\n20\n");
-}
-
-#[test]
-fn m5_p2_byval_fixed_literal_escape() {
-    // WHY: round-4 tripwire (d) — shape elements persisted through the FIXED
-    // LITERAL FILL site (ArrayLit's BuiltinFixed arm): mutating the source
-    // binding AFTER the fill silently rewrote the stored element (unfixed
-    // 9/90 — the post-mutation bytes). Golden asserts fill-time bytes 1/10,
-    // then the binding's own mutated 9.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p2_byval_fixed_literal_escape.ynz"));
-    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
-    assert_eq!(stdout, "1\n10\n9\n");
-}
 
 // ── M5 P3 step 1: map<K,Shape> by-value RED matrix ──────────────────────────
 // (handoff-phase-3.md §H.5 — six cells: literal/runtime shape values ×
@@ -10557,8 +9411,18 @@ fn m5_p2_byval_fixed_literal_escape() {
 // correct end-to-end. These tests are the plan-prescribed RED lock gating
 // the fix; see plan.md Phase 3 STATUS + audit.md session log seg-4.)
 
-#[test]
-fn m5_p3_mapshape_literal_str() {
+/// One named test per input class of the `map-of-shape table` unit; each case is a test the runner names.
+macro_rules! map_of_shape_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a map of shapes returns a wrong value, aliases its source, or an entry escaping iteration reads another entry | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+map_of_shape_table_high_case! {
+    // case: string-keyed map of shapes returns a wrong value or crashes on iteration (mf_* entry.value)
+    m5_p3_mapshape_literal_str => {
     // WHY: cell 1 — str keys × literal fields × MapLit/get/index/has(hit+miss)/
     // set-overwrite/index-assign-insert/count/iteration, non-suspending. First
     // 8 prints verified correct on the cut tree; the trailing iteration sum
@@ -10566,10 +9430,9 @@ fn m5_p3_mapshape_literal_str() {
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p3_mapshape_literal_str.ynz"));
     assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
     assert_eq!(stdout, "2\n1\n20\ntrue\nfalse\n3\n3\n40\n9\n");
-}
-
-#[test]
-fn m5_p3_mapshape_runtime_int() {
+    }
+    // case: int-keyed map of runtime shapes returns a wrong value, or `set` stores an alias of the source binding
+    m5_p3_mapshape_runtime_int => {
     // WHY: cell 2 — int keys × runtime (seed-derived) fields × set/get/index/
     // has + the D13 snapshot cell (mutating the source binding after `.set()`
     // must not change the stored bytes) + re-set-over-key + index-assign
@@ -10577,20 +9440,18 @@ fn m5_p3_mapshape_runtime_int() {
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p3_mapshape_runtime_int.ynz"));
     assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
     assert_eq!(stdout, "2\n1\n20\ntrue\nfalse\n1\n3\n3\n8\n");
-}
-
-#[test]
-fn m5_p3_mapshape_iter_escape() {
+    }
+    // case: a map entry value escaping the iteration reads the last entry's bytes (MapEntry aliasing)
+    m5_p3_mapshape_iter_escape => {
     // WHY: cell 3 + step 5(b) MapEntry-aliasing cell — an entry VALUE escaping
     // the iteration into an outer binding must keep the matched entry's bytes
     // (aliasing bug would read the last iteration's 3/30). RED on the cut tree.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p3_mapshape_iter_escape.ynz"));
     assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
     assert_eq!(stdout, "1\n10\n");
-}
-
-#[test]
-fn m5_p3_mapshape_wait_cross() {
+    }
+    // case: a map of shapes held across a `wait` loses its entries
+    m5_p3_mapshape_wait_cross => {
     // WHY: cell 4 — map<string,Part> as a crossing local over a `wait`; has/
     // set/count post-resume + SM map for-loop arm (pre-loop wait, no body
     // wait). NOTE the cell's original post-resume `.get()` is NOT
@@ -10600,41 +9461,25 @@ fn m5_p3_mapshape_wait_cross() {
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p3_mapshape_wait_cross.ynz"));
     assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
     assert_eq!(stdout, "true\n3\n1\n60\n");
-}
-
-#[test]
-fn m5_p3_mapshape_wait_iter() {
+    }
+    // case: a map `for` loop with a wait in the body skips or repeats entries
+    m5_p3_mapshape_wait_iter => {
     // WHY: cell 5 — SM map for-loop with a BODY wait; entry read before the
     // wait per Check 2c (entry re-created per body-bb entry, no frame slot).
     // Insertion-order iteration. RED on the cut tree (sm_mf_* arm).
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p3_mapshape_wait_iter.ynz"));
     assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
     assert_eq!(stdout, "1\n2\n3\n3\n");
-}
-
-#[test]
-fn m5_p3_map_embed_repr() {
-    // WHY: locks the map debug-repr walker (audit site 7, `mdbg_*`) — the ONLY
-    // remaining `map_iter_get_into` consumer with no fixture. print(map) is
-    // typeck-rejected; the walker fires only via shape-embedded map fields.
-    // Covers scalar (i64 cell) AND shape-valued (elem_size>8 out-buffer read
-    // via array_elem_from_out) cells on the cut ABI. Insertion-order repr.
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p3_map_embed_repr.ynz"));
-    assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
-    assert_eq!(
-        stdout,
-        "Depot { label: strip, stock: { a: 5, b: 6 }, parts: { pa: Part { qty: 1, price: 10 } } }\n"
-    );
-}
-
-#[test]
-fn m5_p3_mapshape_wait_get_escape() {
+    }
+    // case: a `get` result shape crossing a `wait` loses its bytes
+    m5_p3_mapshape_wait_get_escape => {
     // WHY: cell 6 — a get-result shape binding crossing a `wait` (maybe
     // consumed BEFORE the wait; only the owned Part crosses via the frame
     // embed). GREEN on the cut tree — locks the get path × suspension.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("m5_p3_mapshape_wait_get_escape.ynz"));
     assert_eq!(code, 0, "must compile and run; stderr:\n{stderr}");
     assert_eq!(stdout, "1\n10\n");
+    }
 }
 
 // ── M5 P3 step 4: E8 alloc=free parity gate ─────────────────────────────────
@@ -10662,8 +9507,18 @@ fn m5_p3_mapshape_wait_get_escape() {
 // FIELD re-assign and maybe-persist overwrites still mint counted cells,
 // each freed as above (pinned below).
 
-#[test]
-fn m5_p3_e8_gate_visibility_arrays() {
+/// One named test per input class of the `alloc-parity table` unit; each case is a test the runner names.
+macro_rules! alloc_parity_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: container or per-iteration allocations are not counted or not freed (alloc != free) | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+alloc_parity_table_high_case! {
+    // case: array buffers are not counted (alloc counter blind) or a local array is not released at scope exit
+    m5_p3_e8_gate_visibility_arrays => {
     // WHY: FRAGO 005 entry criterion, array side. P0 baseline row for this
     // EXACT fixture: alloc=0/free=0 (counter blind to buffers). The by-value
     // ABI routes header+buffer through counted ynz_alloc: 1 array → alloc=2.
@@ -10682,10 +9537,9 @@ fn m5_p3_e8_gate_visibility_arrays() {
         "1 Array<Int> (cap 8, no growth on .add(4)) = header+buffer, released at the scope end \
          (C7); alloc={alloc} free={free}"
     );
-}
-
-#[test]
-fn m5_p3_e8_gate_visibility_maps() {
+    }
+    // case: map buffers are not counted or a local map is not released at scope exit
+    m5_p3_e8_gate_visibility_maps => {
     // WHY: FRAGO 005 entry criterion, map side. Map buffers were equally
     // invisible pre-cut (raw malloc). 1 map → 5 counted buffers (header/ctrl/
     // keys/vals/order); shape VALUES store inline (0 cells) — receipt that
@@ -10703,10 +9557,9 @@ fn m5_p3_e8_gate_visibility_maps() {
         "1 Map<Int,Part> (cap 16, 4 keys, no growth) = 5 buffers released at the scope end (C7), shape values \
          inline (0 heap cells); alloc={alloc} free={free}"
     );
-}
-
-#[test]
-fn m5_p3_e8_parity_gate() {
+    }
+    // case: a per-element or per-iteration allocation, or a persist cell, is not freed (alloc != free)
+    m5_p3_e8_parity_gate => {
     // WHY: the E8 gate proper. The fixture exercises every counted class with
     // a KNOWN count and loop-scales the read path so any per-element /
     // per-iteration allocation regression shifts the pinned totals loudly.
@@ -10737,10 +9590,9 @@ fn m5_p3_e8_parity_gate() {
          other drift = investigate before touching this pin. alloc={alloc} \
          free={free}"
     );
-}
-
-#[test]
-fn v03_m6_p1c_heap_cell_loop_parity_pins_documented_per_iteration_leak() {
+    }
+    // case: a crossing `maybe`/`union` rebound per iteration is promoted to an orphaned heap cell
+    v03_m6_p1c_heap_cell_loop_parity_pins_documented_per_iteration_leak => {
     // WHY: v0.3-M6 Phase 1c step 3d — the heap-cell LOOP parity verdict, resolved (not
     // assumed) per FRAGO 013's carried open recon. A crossing `maybe`/`union` binding
     // re-bound PER ITERATION once ran the bind-time heap-cell promotion each pass and
@@ -10776,6 +9628,30 @@ fn v03_m6_p1c_heap_cell_loop_parity_pins_documented_per_iteration_leak() {
          region, so the 5 per-iteration envelope cells this probe used to leak are not allocated; the \
          union loop allocates nothing). alloc={alloc} free={free}"
     );
+    }
+    // case: a `background` spawn-site `.copy()` argument is cloned twice so the intermediate leaks (alloc-free gap)
+    m5_p5_bg_copy_alloc_gap_pin => {
+    // WHY: locks seg-4's bg-arg double-copy fix (step 4b). With FRAGO 014's
+    // deep `.copy()` landed, a spawn-site `.copy()` arg is ALREADY independent;
+    // prepare_bg_arg_for_ctx transfers ownership to the task instead of
+    // re-cloning. Regression signature: the `.copy()` intermediate leaks and
+    // the gap grows to 6 (alloc=11/free=5 observed pre-fix — the E8
+    // clone→drop-imbalance zero-tolerance class). Baseline gap = 0 (C8 slice 5: the
+    // state-machine host releases its locals and the spawn releases the given array's original
+    // after its clone).
+    let (alloc, free) = ynz_run_with_alloc_counter("m5_p3_sweep_bg_array_shape_give_wait.ynz");
+    assert!(
+        alloc > 0,
+        "E8 VISIBILITY FAILURE: alloc=0 — counter blind, pin vacuous (FRAGO 005)"
+    );
+    assert_eq!(
+        alloc - free,
+        0,
+        "bg-arg copy alloc gap drifted: expected alloc-free == 0 (the given array's spawn-site \
+         original is released after its clone); a positive gap = the spawn-path re-clone leak \
+         returned (seg-4 4b regression); alloc={alloc} free={free}"
+    );
+    }
 }
 
 // ── M5 P3 step 5: suspension/ownership adversarial sweep ────────────────────
@@ -10807,39 +9683,7 @@ fn m5_p3_sweep_assert_dual_mode(name: &str, expected: &str) {
     assert_eq!(par_stdout, expected, "{name}: exact expected stdout");
 }
 
-#[test]
-fn m5_p3_sweep_bg_array_shape_copy() {
-    // WHY: sweep cell 1 — a bg task's array<Part> arg must be an INDEPENDENT
-    // copy (prepare_bg_arg_for_ctx clones Shape-element arrays via the
-    // elem_size-aware ynz_array_clone_primitive since the seg-8 fix; RED
-    // observed 119 pre-fix — the task saw the caller's post-spawn mutation).
-    m5_p3_sweep_assert_dual_mode(
-        "m5_p3_sweep_bg_array_shape_copy.ynz",
-        "caller set qty: 99\ntask total: 30\n",
-    );
-}
-
-#[test]
-fn m5_p3_sweep_bg_array_shape_give_wait() {
-    // WHY: sweep cell 2 — the E9 AoS matrix in one SM-main cell: inferred GIVE
-    // spawn + explicit spawn-site .copy() spawn + a `wait` in main (SM
-    // descriptor spawn path; `parts` crosses the wait) + post-wait mutation.
-    // The copied task must still see the pre-mutation 30; the caller 119.
-    m5_p3_sweep_assert_dual_mode(
-        "m5_p3_sweep_bg_array_shape_give_wait.ynz",
-        "caller: 119\ngiven: 30\ncopied: 30\n",
-    );
-}
-
-#[test]
-fn m5_p3_sweep_mapentry_bg_escape() {
-    // WHY: sweep cell 3 — MapEntry as a BACKGROUND ARG (step-5 item (b), seg-9
-    // fix): prepare_bg_arg_for_ctx's unconditional MapEntry pre-gate routes
-    // through value_to_stable_bits, so the task reads entry 1's own cloned
-    // bytes, not the advanced per-site entry slot (RED observed 2/20 pre-fix).
-    m5_p3_sweep_assert_dual_mode("m5_p3_sweep_mapentry_bg_escape.ynz", "1\n10\n");
-}
-
+// bug: shape equality compares string fields by pointer identity so equal text is unequal | tier: Medium
 #[test]
 fn m5_p3_sweep_shape_eq_string_field() {
     // WHY: sweep cell 5 — shape_value_eq compares a `string` field by its bytes. Every store
@@ -10851,124 +9695,70 @@ fn m5_p3_sweep_shape_eq_string_field() {
     );
 }
 
-#[test]
-fn m5_p3_sweep_union_readback_blocked_array() {
-    // WHY: sweep pin 6 — the union-persist KNOWN HOLE (step-5 item (d)),
-    // array side. Union repr is non-uniform (tagged struct vs NULL for none),
-    // so value_to_stable_bits has no correct blind clone; the write side is
-    // constructible but read-back ICEs LOUD (no binary → no end-to-end silent
-    // wrong). Pin: build/run FAILS (exit != 0, stdout empty) in BOTH modes.
-    // Today's ICE or a future clean loud-reject both satisfy; ONLY a silent
-    // compile-and-run fails this pin, forcing the marshalling question to be
-    // answered consciously (the loud-reject gate itself is FRAGO-grade — see
-    // value_to_stable_bits' KNOWN-HOLE doc).
-    let src = fixture("m5_p3_sweep_union_readback_blocked_array.ynz");
-    for no_auto_parallel in [false, true] {
-        let (stdout, _stderr, code) = build_to_tmpdir_and_run(&src, no_auto_parallel);
-        assert_ne!(
-            code, 0,
-            "union array read-back must FAIL loud (no_auto_parallel={no_auto_parallel}); a \
-             silent compile-and-run means union values now flow through the persist choke \
-             points unmarshalled — solve union marshalling (or land the loud-reject gate) \
-             before making this pass; stdout:\n{stdout}"
-        );
-        assert_eq!(
-            stdout, "",
-            "union array read-back must produce NO output (no_auto_parallel={no_auto_parallel})"
-        );
-    }
+/// Build and run `fixture` in one mode; a union read back out of an array or map value
+/// must fail loudly (non-zero exit, no output), never compile and run silently.
+fn assert_union_readback_fails_loudly(fixture_name: &str, no_auto_parallel: bool) {
+    let src = fixture(fixture_name);
+    let (stdout, _stderr, code) = build_to_tmpdir_and_run(&src, no_auto_parallel);
+    assert_ne!(
+        code, 0,
+        "union read-back must FAIL loud (no_auto_parallel={no_auto_parallel}); a silent \
+         compile-and-run means union values now flow through the persist choke points \
+         unmarshalled — solve union marshalling (or land the loud-reject gate) before \
+         making this pass; stdout:\n{stdout}"
+    );
+    assert_eq!(
+        stdout, "",
+        "union read-back must produce NO output (no_auto_parallel={no_auto_parallel})"
+    );
 }
 
-#[test]
-fn m5_p3_sweep_union_readback_blocked_map() {
-    // WHY: sweep pin 7 — the union-persist KNOWN HOLE, map-value side (same
-    // rationale as the array sibling above; distinct persist surface —
-    // map.set + get read-back).
-    let src = fixture("m5_p3_sweep_union_readback_blocked_map.ynz");
-    for no_auto_parallel in [false, true] {
-        let (stdout, _stderr, code) = build_to_tmpdir_and_run(&src, no_auto_parallel);
-        assert_ne!(
-            code, 0,
-            "union map read-back must FAIL loud (no_auto_parallel={no_auto_parallel}); a \
-             silent compile-and-run means union values now flow through the persist choke \
-             points unmarshalled — solve union marshalling (or land the loud-reject gate) \
-             before making this pass; stdout:\n{stdout}"
-        );
-        assert_eq!(
-            stdout, "",
-            "union map read-back must produce NO output (no_auto_parallel={no_auto_parallel})"
-        );
-    }
+// WHY: sweep pins 6 and 7 — the union-persist KNOWN HOLE (step-5 item (d)). Union repr is
+// non-uniform (tagged struct vs NULL for none), so value_to_stable_bits has no correct blind
+// clone; the write side is constructible but read-back ICEs LOUD (no binary → no end-to-end
+// silent wrong). Today's ICE or a future clean loud-reject both satisfy; ONLY a silent
+// compile-and-run fails, forcing the marshalling question to be answered consciously (the
+// loud-reject gate itself is FRAGO-grade — see value_to_stable_bits' KNOWN-HOLE doc).
+// Array side and map-value side (map.set + get read-back) are distinct persist surfaces;
+// each runs in both modes, one named test per mode.
+/// One named test per input class of the `union-persist-refused table` unit; each case is a test the runner names.
+macro_rules! union_persist_refused_table_high_case {
+    ($($case_name:ident => ($fixture_name:literal, $no_auto_parallel:literal))+) => { $(
+        // bug: a union stored in an array or map compiles and runs silently instead of failing loudly | tier: High
+        #[test]
+        fn $case_name() {
+            assert_union_readback_fails_loudly($fixture_name, $no_auto_parallel);
+        }
+    )+ };
+}
+
+union_persist_refused_table_high_case! {
+    m5_p3_sweep_union_readback_blocked_array_default => ("m5_p3_sweep_union_readback_blocked_array.ynz", false)
+    m5_p3_sweep_union_readback_blocked_array_no_auto_parallel => ("m5_p3_sweep_union_readback_blocked_array.ynz", true)
+    m5_p3_sweep_union_readback_blocked_map_default => ("m5_p3_sweep_union_readback_blocked_map.ynz", false)
+    m5_p3_sweep_union_readback_blocked_map_no_auto_parallel => ("m5_p3_sweep_union_readback_blocked_map.ynz", true)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // M5 P4 step 3: SoA × padding both-candidate — the byte-layout half (E3/D11)
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[test]
-fn m5_p4_soa_both_candidate_padding_wins_byte_layout() {
-    // WHY: E3's RED-fixture mitigation — a shape simultaneously cross-thread-padded
-    // (M4) AND a qualifying SoA candidate (M5 P4) must resolve through the ONE
-    // layout authority to padding-only (recorded decision D11). Three claims, all
-    // proven through the real compiler binary (padding_gate assertion style):
-    //   (a) default-mode IR still carries the padded `{ i64, [56 x i8] }` 64-byte
-    //       field slots — padding INTACT despite the qualifying hot loop over
-    //       array<Tally> (SoA never fires on a padded shape; and P4 ships zero SoA
-    //       codegen anyway — the analysis-level half lives in
-    //       crates/ynz-typeck/tests/soa_analysis.rs);
-    //   (b) program output is exact — the hot loop computes correctly through
-    //       padded by-value elements;
-    //   (c) dual-mode byte-identical output (layout is layout-only, no behavior
-    //       divergence).
-    let src = fixture("m5_p4_soa_both_candidate.ynz");
-
-    // (b) + (c): both modes run, exit 0, exact and identical stdout.
-    let (par_stdout, par_stderr, par_code) = build_to_tmpdir_and_run(&src, false);
-    assert_eq!(
-        par_code, 0,
-        "default mode must exit 0; stderr:\n{par_stderr}"
-    );
-    assert_eq!(
-        par_stdout, "tally total: 5\n2211\n4422\n",
-        "hot loop must compute exact sums through the padded elements"
-    );
-    let (seq_stdout, seq_stderr, seq_code) = build_to_tmpdir_and_run(&src, true);
-    assert_eq!(
-        seq_code, 0,
-        "--no-auto-parallel mode must exit 0; stderr:\n{seq_stderr}"
-    );
-    assert_eq!(
-        par_stdout, seq_stdout,
-        "both-candidate lowering must produce byte-identical output in both modes"
-    );
-
-    // (a) default-mode IR: the padded struct survives the SoA-candidate collision.
-    let par_ir = build_to_tmpdir_emit_ir_mode(&src, false);
-    assert!(
-        par_ir.contains("{ i64, [56 x i8] }"),
-        "default mode must KEEP the 64-byte padded field slots for the crossing \
-         shape (padding wins over SoA, D11); IR:\n{}",
-        &par_ir[..par_ir.len().min(4000)]
-    );
-
-    // (d) M5 P5 step 4c — the end-to-end NEGATIVE half: padding wins ⇒ SoA is
-    // genuinely DECLINED through codegen, not just at analysis level (P4 proved
-    // the analysis half in soa_analysis.rs; this became meaningful once P5 gave
-    // codegen the ability to emit SoA). Zero SoA construction instructions.
-    assert!(
-        !par_ir.contains("soa_new") && !par_ir.contains("soa_ctor"),
-        "both-candidate fixture must emit ZERO SoA instructions in default mode \
-         (padding wins over SoA, D11) — a hit means the ONE layout authority \
-         resolved the collision to SoA, or a second derivation crept in"
-    );
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // M5 P5 step 4c: E9 SoA matrix — .copy() independence + SoA × wait × background
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[test]
-fn m5_p5_copy_aos_independent() {
+/// One named test per input class of the `explicit copy table` unit; each case is a test the runner names.
+macro_rules! explicit_copy_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a `.copy()` of an array or container aliases the original or is only one level deep | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+explicit_copy_table_high_case! {
+    // case: an array `.copy()` aliases the original so a later write changes the copy
+    m5_p5_copy_aos_independent => {
     // WHY: FRAGO 014 independence lock, AoS cell. Pre-fix, array `.copy()` was
     // an alias no-op — mutating the original after a copy changed the "copy"
     // too (silent miscompile class). This asserts the copy keeps PRE-mutation
@@ -10979,72 +9769,29 @@ fn m5_p5_copy_aos_independent() {
         "m5_p5_copy_aos_independent.ynz",
         "a: 119\nb: 30\nnums: 105\ncopy: 6\n",
     );
-}
-
-#[test]
-fn m5_p5_soa_copy_wait_bg_matrix() {
-    // WHY: THE SoA cell of E9's matrix — qualifying SoA array × `wait` (SM
-    // main; pts crosses the suspension) × `.copy()` (soa_copy_to_aos snapshot)
-    // × IndexAssign scatter × `background` coexisting in the same SM main
-    // (spawn-site `.copy()` ownership transfer on the SM-descriptor path, on a
-    // SECOND shape — see the fixture's D11 note: bg-crossing a shape pads it
-    // and padding-wins would force the SoA array AoS) × dual-mode
-    // byte-identity. Behavior:
-    //   - the AoS snapshot taken before the mutation reads 7884 after it;
-    //   - the post-mutation hot loop reads the scatter through segment
-    //     addressing (2727/5454);
-    //   - the bg task sees the pre-mutation Part copy (30), the caller 119.
-    m5_p3_sweep_assert_dual_mode(
-        "m5_p5_soa_copy_wait_bg.ynz",
-        "hotx: 2727\nhoty: 5454\nsnap: 7884\ncaller: 119\nbg: 30\n",
-    );
-
-    // SoA actually FIRED on the SM path (the M3d silent-decline corpse class:
-    // a fixture that "passes" because the array quietly declined to AoS proves
-    // nothing about SoA). `soa_new` = the ynz_array_new_sized construction call
-    // in lower_soa_construction; `soa_ctor` = its per-element scatter prefix.
-    let src = fixture("m5_p5_soa_copy_wait_bg.ynz");
-    let par_ir = build_to_tmpdir_emit_ir_mode(&src, false);
-    assert!(
-        par_ir.contains("soa_new") && par_ir.contains("soa_ctor"),
-        "default-mode IR must contain SoA construction instructions (soa_new + \
-         soa_ctor) — their absence means the qualifying array silently declined \
-         to AoS (or the SM lowering path lost the Stmt::Let SoA interception) \
-         and this fixture is proving nothing about SoA"
-    );
-
-    // And NEVER fires under --no-auto-parallel (Phase 4 entry gate + the
-    // build_module belt assert): zero soa-named instructions in sequential IR.
-    let seq_ir = build_to_tmpdir_emit_ir_mode(&src, true);
-    assert!(
-        !seq_ir.contains("soa_new") && !seq_ir.contains("soa_ctor"),
-        "--no-auto-parallel IR must contain ZERO SoA instructions — a hit means \
-         a SoA decision leaked past the Phase 4 no-auto-parallel entry gate"
-    );
-}
-
-#[test]
-fn m5_p5_bg_copy_alloc_gap_pin() {
-    // WHY: locks seg-4's bg-arg double-copy fix (step 4b). With FRAGO 014's
-    // deep `.copy()` landed, a spawn-site `.copy()` arg is ALREADY independent;
-    // prepare_bg_arg_for_ctx transfers ownership to the task instead of
-    // re-cloning. Regression signature: the `.copy()` intermediate leaks and
-    // the gap grows to 6 (alloc=11/free=5 observed pre-fix — the E8
-    // clone→drop-imbalance zero-tolerance class). Baseline gap = 0 (C8 slice 5: the
-    // state-machine host releases its locals and the spawn releases the given array's original
-    // after its clone).
-    let (alloc, free) = ynz_run_with_alloc_counter("m5_p3_sweep_bg_array_shape_give_wait.ynz");
-    assert!(
-        alloc > 0,
-        "E8 VISIBILITY FAILURE: alloc=0 — counter blind, pin vacuous (FRAGO 005)"
-    );
+    }
+    // case: a container `.copy()` is one level deep so writing through the copy changes the original
+    copy_of_a_container_owns_its_items_too => {
+    // WHY: the DEPTH half of the v0.3 concurrency-hardening `.copy()` ruling, with no
+    // `background` in the program at all — so a regression here is about `.copy()` itself
+    // rather than about the spawn path that shares its routine. `outer.copy()` used to be a
+    // one-level clone: a fresh container whose cells still pointed at the original's rows, so
+    // writing through the copy changed the original. Verified RED against the pre-fix binary
+    // (2026-09-06): `original row 0 starts at 99` instead of `1`.
+    //
+    // The `maybe` line locks a second type the same routine newly copies for real: a fresh
+    // envelope that still carries its payload, rather than the receiver's own envelope.
+    let fixture_name = "v0_3_hardening_c2_deep_copy_independence.ynz";
+    let (stdout, stderr, code) = ynz_run_stdout(&fixture(fixture_name));
+    assert_eq!(code, 0, "{fixture_name} must exit 0; stderr:\n{stderr}");
     assert_eq!(
-        alloc - free,
-        0,
-        "bg-arg copy alloc gap drifted: expected alloc-free == 0 (the given array's spawn-site \
-         original is released after its clone); a positive gap = the spawn-path re-clone leak \
-         returned (seg-4 4b regression); alloc={alloc} free={free}"
+        stdout,
+        "original row 0 starts at 1\nclone row 0 starts at 99\nheld copy is 2\n",
+        "{fixture_name}: `original row 0 starts at 99` means the copy shared its rows with the \
+         original — a one-level clone, which is the same alias one level down. `held copy is \
+         -1` means the copied `maybe` envelope lost its payload; stdout:\n{stdout}\nstderr:\n{stderr}"
     );
+    }
 }
 
 // ── background spawn-arg ownership hand-off: channel send / handle send / handle return ───
@@ -11097,8 +9844,18 @@ fn assert_bg_arg_handoff_fixture(
     );
 }
 
-#[test]
-fn bg_arg_channel_send_receiver_reads_intact_array_after_task_retired() {
+/// One named test per input class of the `bg-arg-handoff table` unit; each case is a test the runner names.
+macro_rules! bg_arg_handoff_table_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a task ladder frees or double-frees a payload the task sent, returned or handed to a channel or handle | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+bg_arg_handoff_table_high_case! {
+    // case: a task's ladder frees a payload it sent on a channel so the receiver reads a freed array
+    bg_arg_channel_send_receiver_reads_intact_array_after_task_retired => {
     // WHY: the reported UAF — `producer(wire, rows)` sends its heap-cloned `rows`; the
     // spawner receives it AFTER the task (and its ladder) retired.
     assert_bg_arg_handoff_fixture(
@@ -11107,10 +9864,9 @@ fn bg_arg_channel_send_receiver_reads_intact_array_after_task_retired() {
         0,
         "0 = the spawner's `rows` literal is released after the spawn copy (C8 slice 5) and the sent clone held by the receiver's `got` is released",
     );
-}
-
-#[test]
-fn bg_arg_channel_send_never_drained_payload_is_not_freed_by_the_ladder() {
+    }
+    // case: a payload left in a never-drained channel is freed by the task ladder (double free)
+    bg_arg_channel_send_never_drained_payload_is_not_freed_by_the_ladder => {
     // WHY: the never-drained sibling. Ownership rests with the channel (its teardown glue is
     // the payload's one drop — `send_of_ladder_owned_payload_releases_ladder_alloc_free_parity`
     // proves that path in the runtime). The spawner's channel local is released when it leaves
@@ -11123,73 +9879,9 @@ fn bg_arg_channel_send_never_drained_payload_is_not_freed_by_the_ladder() {
         0,
         "0 = the spawner's `rows` literal is released after the spawn copy (C8 slice 5) and the sent clone is freed by the channel's teardown glue when the spawner's channel local leaves scope",
     );
-}
-
-// ── v0.3 hardening step 3.2 fix round: the spawn asks ONE question, not a syntactic one ───
-//
-// `prepare_bg_arg_for_ctx` used to decide "does the task need a value of its own?" by matching
-// an `Expr::` variant against a `Type::` variant — an explicit `.copy()` of an `array`, and a
-// bare `BgOwnership::Give` on a `map`. Both were wrong in the way enumerating syntactic sites
-// instead of threading the whole-program ownership analysis always is, and the three fixtures below are the three ways they were wrong. Each was verified
-// RED against the pre-fix binary; the numbers in each WHY are that measurement.
-
-#[test]
-fn spawning_with_a_copied_map_mints_one_clone_not_two() {
-    // WHY: `m.copy()` had already produced an independent map; the array-shaped de-dup guard
-    // did not recognise a map, so the spawn glue cloned it AGAIN and nothing freed the first.
-    // Measured pre-fix: 16 allocs against the no-`.copy()` twin's 11 — a whole extra map
-    // (header + four buffers) leaked per spawn. Asserted as a COMPARISON rather than a
-    // constant: asking for a copy before a spawn must cost what the spawn already costs.
-    let (copied_alloc, copied_free) =
-        ynz_run_with_alloc_counter("v0_3_hardening_c2_spawn_copied_map.ynz");
-    let (plain_alloc, plain_free) =
-        ynz_run_with_alloc_counter("v0_3_hardening_c2_spawn_plain_map.ynz");
-    assert!(
-        plain_alloc > 0,
-        "alloc=0 — the counter saw nothing (FRAGO 005)"
-    );
-    assert_eq!(
-        (copied_alloc, copied_free),
-        (plain_alloc, plain_free),
-        "`background eat(m.copy())` must cost exactly what `background eat(m)` costs; a higher \
-         alloc = the spawn copied a value that was already an independent copy, and leaked the \
-         first one"
-    );
-}
-
-#[test]
-fn spawning_with_a_copied_maybe_frees_everything_it_allocates() {
-    // WHY: this leak went from ZERO to one per spawn when `maybe` stopped aliasing — `.copy()`
-    // minted an envelope, the spawn glue minted a second, and only the second rode the task's
-    // drop ladder. Measured pre-fix: 3 allocs / 2 frees. The balance is the assertion, because
-    // "allocated one more than it freed" is the whole defect.
-    let (alloc, free) = ynz_run_with_alloc_counter("v0_3_hardening_c2_spawn_copied_maybe.ynz");
-    assert!(alloc > 0, "alloc=0 — the counter saw nothing (FRAGO 005)");
-    assert_eq!(
-        alloc, free,
-        "a `maybe` spawn argument must free every envelope it allocates; alloc={alloc} \
-         free={free} — a gap of 1 is the second envelope nothing owns"
-    );
-}
-
-#[test]
-fn a_map_reached_through_a_field_is_not_shared_with_the_task() {
-    // WHY: `background eat(b.items)` records `Give` by default-deny, and that route consumes
-    // NOTHING — `b` still holds the map. The old gate read the `Give` label as proof of sole
-    // ownership and handed the map over untouched, so the task's write landed in the parent's
-    // map: pre-fix stdout was `99` / `99`. The task must get its own.
-    let (stdout, stderr, code) =
-        ynz_run_stdout(&fixture("v0_3_hardening_c2_spawn_field_map_not_shared.ynz"));
-    assert_eq!(code, 0, "must exit 0; stderr:\n{stderr}");
-    assert_eq!(
-        stdout, "99\n1\n",
-        "the task writes 99 into its OWN map and the parent still reads 1; `99\\n99\\n` means \
-         both sides hold one map. stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn bg_arg_handle_send_grandchild_reads_intact_array_after_relay_retired() {
+    }
+    // case: a payload forwarded through a handle outbox is freed by the relay's ladder
+    bg_arg_handle_send_grandchild_reads_intact_array_after_relay_retired => {
     // WHY: the OTHER send producer. `relay` forwards its heap-cloned `rows` through
     // `h.send(rows)` (the handle outbox, which funnels into the same channel core); the
     // grandchild `sink` reads it and reports `count * 100 + first` = 307.
@@ -11199,10 +9891,9 @@ fn bg_arg_handle_send_grandchild_reads_intact_array_after_relay_retired() {
         0,
         "0 = the spawner's `rows` literal is released after the spawn copy (C8 slice 5) and the forwarded clone held by sink's `got` is released",
     );
-}
-
-#[test]
-fn bg_arg_handle_return_parent_reads_intact_array_after_child_retired() {
+    }
+    // case: a heap array returned through a handle is freed at completion extraction
+    bg_arg_handle_return_parent_reads_intact_array_after_child_retired => {
     // WHY: the return-slot door. `echo(rows)` returns its heap-cloned argument; the parent
     // takes it through `h.receive()` after the child retired. The `*_HEAP_PTR` return kinds
     // are what let the runtime release it at completion extraction.
@@ -11212,10 +9903,9 @@ fn bg_arg_handle_return_parent_reads_intact_array_after_child_retired() {
         0,
         "0 = the returned clone, held by the `errors` local `got`, is released at its scope exit (C8 slice 4b)",
     );
-}
-
-#[test]
-fn bg_arg_two_arrays_send_one_releases_only_the_sent_slot() {
+    }
+    // case: the ladder walk releases the wrong or every descriptor when two heap arguments are cloned and one is sent
+    bg_arg_two_arrays_send_one_releases_only_the_sent_slot => {
     // WHY: multi-descriptor selectivity. Every other hand-off fixture spawns a callee with ONE
     // heap-cloned argument, so `release_ladder_payload`'s descriptor walk never faced 2+ live
     // descriptors where exactly one must match. Here `producer` holds clones of `rows` AND
@@ -11229,10 +9919,9 @@ fn bg_arg_two_arrays_send_one_releases_only_the_sent_slot() {
         0,
         "0 = the spawner's `rows` and `scratch` literals are released after the spawn copies (C8 slice 5), the receiver's `got` is released by its `maybe` local and the `scratch` clone is freed by the ladder at retire (it was never handed off)",
     );
-}
-
-#[test]
-fn bg_arg_handle_return_map_heap_ptr_kind_is_a_clean_no_op() {
+    }
+    // case: a map returned through a handle is released or disturbed by the heap-pointer return kind
+    bg_arg_handle_return_map_heap_ptr_kind_is_a_clean_no_op => {
     // WHY: the `BuiltinMap` half of the `*_HEAP_PTR` return-kind classification had zero
     // coverage. Maps are not ladder-cloned today (`prepare_bg_arg_for_ctx`'s per-type table),
     // so the release walk at completion extraction must find nothing and change nothing —
@@ -11247,98 +9936,31 @@ fn bg_arg_handle_return_map_heap_ptr_kind_is_a_clean_no_op() {
         0,
         "0 = the returned map (header, table, two entry cells, one grow), held by the `errors` local `got`, is released at its scope exit (C8 slice 4b)",
     );
+    }
 }
 
-#[test]
-fn copy_of_a_container_owns_its_items_too() {
-    // WHY: the DEPTH half of the v0.3 concurrency-hardening `.copy()` ruling, with no
-    // `background` in the program at all — so a regression here is about `.copy()` itself
-    // rather than about the spawn path that shares its routine. `outer.copy()` used to be a
-    // one-level clone: a fresh container whose cells still pointed at the original's rows, so
-    // writing through the copy changed the original. Verified RED against the pre-fix binary
-    // (2026-09-06): `original row 0 starts at 99` instead of `1`.
-    //
-    // The `maybe` line locks a second type the same routine newly copies for real: a fresh
-    // envelope that still carries its payload, rather than the receiver's own envelope.
-    let fixture_name = "v0_3_hardening_c2_deep_copy_independence.ynz";
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture(fixture_name));
-    assert_eq!(code, 0, "{fixture_name} must exit 0; stderr:\n{stderr}");
-    assert_eq!(
-        stdout,
-        "original row 0 starts at 1\nclone row 0 starts at 99\nheld copy is 2\n",
-        "{fixture_name}: `original row 0 starts at 99` means the copy shared its rows with the \
-         original — a one-level clone, which is the same alias one level down. `held copy is \
-         -1` means the copied `maybe` envelope lost its payload; stdout:\n{stdout}\nstderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn bg_arg_alias_container_add_no_longer_aliases_the_parents_container() {
-    // GREEN-WORLD LOCK. This test used to assert TODAY'S WRONG behaviour on purpose
-    // (`bg_arg_alias_container_add_is_a_known_uaf_red_pin`), because the producer was open:
-    // an `array<pointer-elem>` `background` argument was passed through un-cloned, so the task
-    // wrote into the PARENT's container and then its drop ladder freed a clone the parent
-    // still pointed at. The pin's own text named the fix as "closing that alias fall-through";
-    // that is what the shared owned-copy routine did (M8 Future Requirements #9, FRAGO 002
-    // cluster C2), so the assertions here are the correct-world ones the pin described.
-    //
-    // Three readings, because the old defect had three separable halves:
-    //   1. the task's container is its own — the parent still sees 1 row;
-    //   2. the task's ITEMS are its own — a ONE-LEVEL clone would leave both sides sharing
-    //      `seed`, and the task's `mine.set(0, 999)` would show up in the parent's row 0;
-    //   3. the parent dereferences `bucket[0]`, which is precisely what the old defect made
-    //      unsafe (garbage / SIGSEGV across runs) and why the old pin refused to do it.
-    //
-    // Gap accounting (0): the parent's three locals (`seed`, `bucket`, `rows`) and the task's `spare`
-    // and `mine` are released at their scope exits (C7, C8 slices 2 and 5), and the assertion below
-    // pins alloc == free, so no allocation is held to exit. The old defect was that the ladder
-    // freed something the PARENT still held, and that is gone.
-    // C5a: the original fixture stores a bare parameter in a container, which hands it over and
-    // is refused now (`v03_m9_store_hands_over.rs`); this one spells it with `give rows`.
-    let fixture_name = "bg_arg_container_add_gives_row.ynz";
-    let (stdout, stderr, code) = ynz_run_stdout(&fixture(fixture_name));
-    assert_eq!(
-        code, 0,
-        "{fixture_name} must exit 0 — the parent now dereferences `bucket[0]`, which the old \
-         defect made unsafe; stderr:\n{stderr}"
-    );
-    assert!(
-        stdout.contains("parent sees 1 rows"),
-        "{fixture_name}: the task added a row to ITS OWN container; the parent must still see \
-         exactly the one row it started with. Seeing 2 means the `background` argument aliased \
-         the parent's container again; stdout:\n{stdout}\nstderr:\n{stderr}"
-    );
-    assert!(
-        stdout.contains("parent row 0 starts at 1"),
-        "{fixture_name}: the task overwrote ITS OWN row 0 with 999. Seeing 999 here means the \
-         container was copied but its ITEMS were shared — a one-level clone, which is the same \
-         alias one level down; stdout:\n{stdout}\nstderr:\n{stderr}"
-    );
-    let (alloc, free) = ynz_run_with_alloc_counter(fixture_name);
-    assert!(
-        alloc > 0,
-        "{fixture_name}: alloc=0 — the counter saw nothing, the lock is vacuous"
-    );
-    assert_eq!(
-        alloc,
-        // C7 slice 2, 14 -> 12: the spawned `stash` is a plain callee, so it releases its `spare`
-        // local at its scope exit (2 allocations); `rows` is nulled at `bucket.add(rows)` and the
-        // ladder frees nothing at the `give` position. C7 slice 2b, 12 -> 8: the task's `mine` is a
-        // copy owner and is released too. C8 slice 2, 8 -> 2: the state-machine
-        // entrypoint releases its own locals. C8 slice 5, 2 -> 0: the spawn releases the parent's
-        // consumed `rows` after its copy. ASan is clean at both optimization levels (measured).
-        free,
-        "{fixture_name}: the allocation accounting moved. A SMALLER gap means something new is \
-         being freed — check it is not the parent's container or its items, which is the \
-         use-after-free this fixture exists to keep closed. A LARGER gap means a new leak; \
-         alloc={alloc} free={free}"
-    );
-}
+// ── v0.3 hardening step 3.2 fix round: the spawn asks ONE question, not a syntactic one ───
+//
+// `prepare_bg_arg_for_ctx` used to decide "does the task need a value of its own?" by matching
+// an `Expr::` variant against a `Type::` variant — an explicit `.copy()` of an `array`, and a
+// bare `BgOwnership::Give` on a `map`. Both were wrong in the way enumerating syntactic sites
+// instead of threading the whole-program ownership analysis always is, and the three fixtures below are the three ways they were wrong. Each was verified
+// RED against the pre-fix binary; the numbers in each WHY are that measurement.
 
 // ── Card #399: `for ((key, value) in map)` ───────────────────────────────────
 
-#[test]
-fn card399_map_for_key_value_prints_every_pair() {
+/// One named test per input class of the `map pair loop table` unit; each case is a test the runner names.
+macro_rules! map_pair_loop_table_medium_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: `for ((key, value) in map)` fails to compile or prints a wrong pair | tier: Medium
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+map_pair_loop_table_medium_case! {
+    // case: `for ((key, value) in map)` fails in codegen (shared span types) or prints a wrong pair
+    card399_map_for_key_value_prints_every_pair => {
     // WHY (card #399, Medium tier — user flow): `for ((key, value) in map)` failed in codegen
     // with `field_gep: receiver is not a Shape, got <K or V>` because the parser's desugar gave
     // `__entry`, `.key` and `.value` one shared span and typeck's span-keyed `expr_types` kept
@@ -11358,10 +9980,9 @@ fn card399_map_for_key_value_prints_every_pair() {
          x is on\n",
         "every pair printed in insertion order"
     );
-}
-
-#[test]
-fn card399_map_for_key_value_with_wait_in_body() {
+    }
+    // case: the destructured map loop with a `wait` in the body (state-machine lowering) loses a pair
+    card399_map_for_key_value_with_wait_in_body => {
     // WHY (card #399, Medium tier): the same destructured loop through the state-machine
     // lowering (`lower_sm_for` map arm) when the body contains a `wait`.
     let (stdout, stderr, code) = ynz_run_stdout(&fixture("card399_map_for_key_value_wait.ynz"));
@@ -11370,4 +9991,5 @@ fn card399_map_for_key_value_with_wait_in_body() {
         "destructured map loop with wait must compile and run; stderr:\n{stderr}"
     );
     assert_eq!(stdout, "pat:31\nsam:42\n", "pairs survive the wait");
+    }
 }

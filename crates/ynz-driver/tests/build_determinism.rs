@@ -112,6 +112,7 @@ fn assert_independent_builds_identical(
     }
 }
 
+// bug: repeated `ynz build` of the pirates-roster project yields a different binary or IR run to run (unordered iteration reaches emission order) | tier: Medium
 #[test]
 fn multi_file_build_is_deterministic_across_independent_processes() {
     let project_src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/pirates-roster");
@@ -132,6 +133,7 @@ fn multi_file_build_is_deterministic_across_independent_processes() {
 // WHY: locks the vtable-global emission order (vtable.rs sorted iteration, FRAGO 013)
 // under `--no-optimize`, where DCE cannot strip the vtable globals and mask an ordering
 // flap. Three (shape, contract) pairs → six possible emission orderings pre-fix.
+// bug: repeated `ynz build --no-optimize` of a multi-vtable module yields a different binary or IR run to run (vtable global emission order) | tier: Medium
 #[test]
 fn multi_vtable_no_optimize_build_is_deterministic_across_independent_processes() {
     let fixture =

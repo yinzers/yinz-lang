@@ -24,7 +24,9 @@ usage: pascalcase-codemod [--dry-run] [--leftovers] [--lenient] [--mode ynz|mark
 
   A file is processed by its extension (.ynz/.formatted, .md, .rs).
   A directory is searched recursively for files of --mode (default: ynz); .git, .claude,
-  target, node_modules, marketing and this tool's own crate are never entered.
+  target, node_modules, marketing and this tool's own crate are never entered, and two test
+  files that hold old spellings on purpose are never rewritten (builtin_type_names.rs,
+  old_builtin_type_name_quick_fix.rs).
   --dry-run    count renames, write nothing
   --leftovers  (ynz mode) also list every old built-in spelling that was NOT renamed, with
                the neighbouring tokens, for spot-checking
@@ -66,8 +68,51 @@ const DIRECTORIES_NEVER_ENTERED: &[&str] = &[
     "ynz-pascalcase-codemod",
 ];
 
+/// Repo-relative files never rewritten, for the same reason as `ynz-pascalcase-codemod` above:
+/// their tests hold old spellings on purpose.
+const FILES_NEVER_REWRITTEN: &[&str] = &[
+    "crates/ynz-typeck/tests/builtin_type_names.rs",
+    "crates/ynz-lsp/tests/old_builtin_type_name_quick_fix.rs",
+];
+
+/// Matches by whole trailing path components, so it holds however the root argument was given
+/// (`crates`, `.`, `./crates`, an absolute path). The path is made absolute first so a root
+/// that starts below the repo root (`crates/ynz-typeck`) still carries the full suffix.
+///
+/// A path that cannot be made absolute is an error, never `false`: guessing "not protected"
+/// could rewrite a protected file.
+fn is_never_rewritten(path: &Path) -> Result<bool, String> {
+    let absolute = std::fs::canonicalize(path).map_err(|error| {
+        format!(
+            "{}: cannot resolve its absolute path: {error}",
+            path.display()
+        )
+    })?;
+    Ok(ends_with_never_rewritten_file(&absolute))
+}
+
+fn ends_with_never_rewritten_file(absolute: &Path) -> bool {
+    FILES_NEVER_REWRITTEN
+        .iter()
+        .any(|never_rewritten| absolute.ends_with(never_rewritten))
+}
+
 fn collect_files(root: &Path, wanted_mode: Mode, files: &mut Vec<(PathBuf, Mode)>) {
     if root.is_file() {
+        match is_never_rewritten(root) {
+            Ok(true) => {
+                eprintln!(
+                    "skipping {}: its tests hold old spellings on purpose",
+                    root.display()
+                );
+                return;
+            }
+            Ok(false) => {}
+            Err(reason) => {
+                eprintln!("skipping {reason}");
+                return;
+            }
+        }
         if let Some(mode) = mode_of_extension(root) {
             files.push((root.to_path_buf(), mode));
         } else {
@@ -87,7 +132,11 @@ fn collect_files(root: &Path, wanted_mode: Mode, files: &mut Vec<(PathBuf, Mode)
                 collect_files(&path, wanted_mode, files);
             }
         } else if mode_of_extension(&path) == Some(wanted_mode) {
-            files.push((path, wanted_mode));
+            match is_never_rewritten(&path) {
+                Ok(false) => files.push((path, wanted_mode)),
+                Ok(true) => {}
+                Err(reason) => eprintln!("skipping {reason}"),
+            }
         }
     }
 }

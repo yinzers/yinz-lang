@@ -269,6 +269,7 @@ fn assert_o0_and_optimized_agree(fixture_name: &str, stage: OptStage) {
 // background-section output is deliberately order-relaxed and the demo is a multi-file
 // project the single-file differential harness does not cover.)
 
+// bug: an optimized build faults (movaps on an 8-aligned frame slot) for a decimal128 local propagated across a wait | tier: High
 #[test]
 fn red_opt_alignment_ec_crossing_local_propagated_number() {
     // WHY: the bisected primary repro — an EC-crossing decimal128 local propagated across
@@ -279,6 +280,7 @@ fn red_opt_alignment_ec_crossing_local_propagated_number() {
     );
 }
 
+// bug: an optimized build faults on a misaligned decimal128 slot in the inline-poll parallel number+EC collection | tier: High
 #[test]
 fn red_opt_alignment_parallel_number_ec_inline_collect() {
     // WHY: the inline-poll parallel number+EC collection — same alignment class through
@@ -289,6 +291,7 @@ fn red_opt_alignment_parallel_number_ec_inline_collect() {
     );
 }
 
+// bug: an optimized build faults on a misaligned decimal128 slot in the mixed CPU+I/O group trampoline packing | tier: High
 #[test]
 fn red_opt_alignment_danger_mixed_number_declines() {
     // WHY: the mixed CPU+I/O group with a decimal128 CPU child — same alignment class
@@ -299,6 +302,7 @@ fn red_opt_alignment_danger_mixed_number_declines() {
     );
 }
 
+// bug: an optimized build faults on a misaligned decimal128 slot in the per-binding stable-storage copies of three live bindings | tier: High
 #[test]
 fn red_opt_alignment_ec_three_bindings() {
     // WHY: three live bindings of the same `-> number errors` callee — same alignment
@@ -308,6 +312,7 @@ fn red_opt_alignment_ec_three_bindings() {
 
 // ── Class 2: false ownership attributes from `declare_function` ──────────────────────
 
+// bug: the optimizer deletes the store of a bare param the body mutates (false `readonly`), printing 1,1 instead of 1,42 | tier: High
 #[test]
 fn red_opt_bare_param_mutation_dropped() {
     // WHY: a bare param the body mutates is declared `readonly` (codegen defaults
@@ -341,6 +346,7 @@ fn red_opt_bare_param_mutation_dropped() {
 // ynz-codegen/src/emit.rs). Un-ignored per the Phase 1 RED-set precedent; this gate is
 // now a permanent regression lock.
 
+// bug: an optimized `maybe<int>`-returning iterator reads a dead stack slot and never terminates or prints garbage instead of 3,2,1 | tier: High
 #[test] // test-ratchet: #[ignore] removed by the fixing phase (v0.3-M7 P3 Step 4c) — the planned-RED contract this mark carried is fulfilled, not weakened
 fn red_opt_dangling_stack_return_maybe_iterable() {
     // WHY: locks the dangling-stack-return class end-to-end — a user-iterable `next`
@@ -353,6 +359,7 @@ fn red_opt_dangling_stack_return_maybe_iterable() {
     );
 }
 
+// bug: an optimized plain return of a shape, nested shape, number or maybe/ok-word payload reads a dead callee frame (garbage or SIGSEGV) | tier: High
 #[test] // test-ratchet: NEW regression lock, born green with the Step-4b ABI fix — locks the sweep-confirmed sibling members of Class 3 (shape / nested-shape / number / EC ok-word returns), not just the maybe-iterable anchor the class was discovered on
 fn red_opt_dangling_stack_return_sibling_sweep() {
     // WHY: locks the NON-SM (plain-return) members of the dangling-stack-return
@@ -371,6 +378,7 @@ fn red_opt_dangling_stack_return_sibling_sweep() {
     );
 }
 
+// bug: an optimized `maybe<number>` payload returned by value points into the callee's dead 16-byte slot and reads zeros | tier: High
 #[test] // test-ratchet: planned-RED lock authored BEFORE its fix (FRAGO 009 blocker, RED-then-green receipt) — the 8th member of Class 3
 fn red_opt_dangling_stack_return_maybe_number_payload() {
     // WHY: locks the maybe<number> PAYLOAD member of the dangling-stack-return
@@ -387,6 +395,7 @@ fn red_opt_dangling_stack_return_maybe_number_payload() {
     );
 }
 
+// bug: an optimized state-machine return (number, maybe<T>, ok-word behind a wait) rides a dead resume-stack pointer and reads garbage | tier: High
 #[test] // test-ratchet: NEW regression lock (FRAGO 009 / test-quality SF1) — SM-tier members 5-7 of Class 3, previously unlocked while the sibling-sweep comment claimed full coverage
 fn red_opt_dangling_stack_return_sm_tier() {
     // WHY: locks the SM-tier members of the dangling-stack-return class — the
@@ -408,6 +417,7 @@ fn red_opt_dangling_stack_return_sm_tier() {
 // was decided by Patrick as TYPECK REJECTION, so the differential O0-vs-optimized shape is
 // structurally impossible now: the program no longer compiles. The test is reshaped (not
 // weakened) to lock the rejection + its teaching diagnostic instead.
+// bug: a call passing one value as both `share` and `lend` is accepted again, re-opening the false-`noalias` miscompile | tier: High
 #[test]
 fn red_opt_share_lend_alias_rejected_at_compile_time() {
     // WHY: the Phase-2 resolution for this class (FRAGO 002, Patrick-directed
