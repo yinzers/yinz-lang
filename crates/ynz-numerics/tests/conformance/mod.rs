@@ -16,9 +16,24 @@ use ynz_numerics::{abs, add, compare, div, format, mul, neg, parse, sub};
 // These vectors cover the load-bearing invariants: associativity-breaking edge
 // cases, NaN propagation, and the 0.1+0.2=0.3 exactness guarantee.
 
+/// How a decimal128 result is compared with the expected text.
+#[derive(Clone, Copy)]
+enum ResultMatch {
+    /// The formatted result must be the expected text, so a wrong scale ("3" for "3.0") fails.
+    ExactText,
+    /// The result may be the same value written at another scale (a different cohort member).
+    SameValueAtAnyScale,
+}
+
 /// Applies one decimal128 operation to its operands and compares the result with the expected
-/// text (string-equal, or numerically equal when the same value is written at another scale).
-fn run_vector(op: &str, a: &str, b: Option<&str>, expected: &str) -> Result<(), String> {
+/// text as `result_match` says.
+fn run_vector(
+    op: &str,
+    a: &str,
+    b: Option<&str>,
+    expected: &str,
+    result_match: ResultMatch,
+) -> Result<(), String> {
     let a_bits = parse(a).ok_or_else(|| format!("failed to parse a={a}"))?;
     let b_bits = match b {
         Some(text) => Some(parse(text).ok_or_else(|| format!("failed to parse b={text}"))?),
@@ -52,12 +67,13 @@ fn run_vector(op: &str, a: &str, b: Option<&str>, expected: &str) -> Result<(), 
     };
 
     let actual = format(result_bits);
-    let num_equal = parse(&actual)
-        .and_then(|actual_bits| {
-            parse(expected).map(|expected_bits| compare(actual_bits, expected_bits) == 0)
-        })
-        .unwrap_or(false);
-    if actual == expected || num_equal {
+    let same_value = matches!(result_match, ResultMatch::SameValueAtAnyScale)
+        && parse(&actual)
+            .and_then(|actual_bits| {
+                parse(expected).map(|expected_bits| compare(actual_bits, expected_bits) == 0)
+            })
+            .unwrap_or(false);
+    if actual == expected || same_value {
         Ok(())
     } else {
         Err(format!(
@@ -67,23 +83,26 @@ fn run_vector(op: &str, a: &str, b: Option<&str>, expected: &str) -> Result<(), 
     }
 }
 
-/// One generated test per vector: `name: op, a, b => expected;` (`b` is `None` for unary ops).
+/// One generated test per vector: `name: op, a, b => expected;` (`b` is `None` for unary ops),
+/// compared as the leading `ResultMatch` says.
 /// The Hursley-style vectors, the special-value cases and the audit vectors (N1, N2) share this
 /// harness because each is one operation applied to parsed text; the audit vectors' expected
 /// values are Python `decimal` oracle values (Context prec=34, Emax=6144, ROUND_HALF_EVEN, clamp=1).
 macro_rules! decimal128_value_cases {
-    ($($case:ident: $op:literal, $a:literal, $b:expr => $expected:literal;)+) => {
+    ($result_match:expr; $($case:ident: $op:literal, $a:literal, $b:expr => $expected:literal;)+) => {
         $(
             // bug: a decimal128 add/sub/mul/div/compare/neg/abs returns the wrong value (digits, rounding, sign, zero, Infinity or NaN) | tier: High
             #[test]
             fn $case() {
-                run_vector($op, $a, $b, $expected).unwrap_or_else(|failure| panic!("{failure}"));
+                run_vector($op, $a, $b, $expected, $result_match)
+                    .unwrap_or_else(|failure| panic!("{failure}"));
             }
         )+
     };
 }
 
 decimal128_value_cases! {
+    ResultMatch::ExactText;
     // add: same sign, decimal exactness (0.1 + 0.2 must be 0.3, not 0.30000000000000004), alignment, cancellation
     add_same_sign_integers: "add", "1", Some("1") => "2";
     add_decimal_exactness: "add", "0.1", Some("0.2") => "0.3";
@@ -92,8 +111,6 @@ decimal128_value_cases! {
     add_operands_with_different_exponents: "add", "1.5", Some("2.25") => "3.75";
     // the fine operand has 34 digits and the coarse one 4: alignment must not drop the fine digits
     add_34_digit_fraction_to_a_larger_integer: "add", "0.3333333333333333333333333333333333", Some("1000") => "1000.333333333333333333333333333333";
-    // N1: the truncated tail of the smaller operand below the 34-digit LSB must round the 34th digit up
-    add_sticky_tail_from_alignment_truncation: "add", "93296E45", Some("578E13") => "9.329600000000000000000000000000001E+49";
     add_infinity_plus_infinity: "add", "Infinity", Some("Infinity") => "Infinity";
     add_infinity_plus_negative_infinity_is_nan: "add", "Infinity", Some("-Infinity") => "NaN";
     add_propagates_nan: "add", "NaN", Some("1") => "NaN";
@@ -101,8 +118,6 @@ decimal128_value_cases! {
     sub_positive_result: "sub", "2", Some("1") => "1";
     sub_decimal_exactness: "sub", "0.3", Some("0.2") => "0.1";
     sub_negative_result: "sub", "1", Some("3") => "-2";
-    // N1: the discarded tail makes the true result strictly below the computed difference (...999)
-    sub_sticky_tail_from_alignment_truncation: "sub", "93296E45", Some("578E13") => "9.329599999999999999999999999999999E+49";
     // N1: tail above half a ULP rounds the 34th digit down, exactly half ties to even, below half rounds up
     sub_unclamped_tail_above_half: "sub", "1E33", Some("0.16") => "999999999999999999999999999999999.8";
     sub_unclamped_tail_exactly_half_ties_to_even: "sub", "1E33", Some("0.15") => "999999999999999999999999999999999.8";
@@ -112,10 +127,6 @@ decimal128_value_cases! {
     mul_keeps_the_scaled_exponent: "mul", "1.5", Some("2") => "3.0";
     mul_negative_operand: "mul", "-3", Some("4") => "-12";
     mul_by_zero: "mul", "0", Some("99") => "0";
-    // N2: excess digits are reduced in ONE half-even step, not digit by digit (a digit loop gave ...106)
-    mul_excess_digits_rounded_in_one_step: "mul", "2165452767410561414527036521052E58", Some("7363056") => "1.594434999179893868660178341855105E+95";
-    // N2: a 38-digit product whose dropped digits "4780" are judged as one unit, < 5000 rounds down (a digit loop gave ...750)
-    mul_dropped_digits_judged_as_one_unit: "mul", "4705894581252909670E-51", Some("7189456187232149834E-33") => "3.383282291365097828459299078190749E-47";
     // div
     div_exact_quotient: "div", "10", Some("2") => "5";
     div_repeating_quotient_rounds_down_at_34_digits: "div", "1", Some("3") => "0.3333333333333333333333333333333333";
@@ -132,6 +143,20 @@ decimal128_value_cases! {
     abs_of_a_positive: "abs", "5", None => "5";
     neg_of_a_positive: "neg", "5", None => "-5";
     neg_of_a_negative: "neg", "-5", None => "5";
+}
+
+// The audit oracle values below are the same value as the result at a different scale (the
+// result is a different cohort member), which is how these vectors have always been compared.
+decimal128_value_cases! {
+    ResultMatch::SameValueAtAnyScale;
+    // N1: the truncated tail of the smaller operand below the 34-digit LSB must round the 34th digit up
+    add_sticky_tail_from_alignment_truncation: "add", "93296E45", Some("578E13") => "9.329600000000000000000000000000001E+49";
+    // N2: excess digits are reduced in ONE half-even step, not digit by digit (a digit loop gave ...106)
+    mul_excess_digits_rounded_in_one_step: "mul", "2165452767410561414527036521052E58", Some("7363056") => "1.594434999179893868660178341855105E+95";
+    // N2: a 38-digit product whose dropped digits "4780" are judged as one unit, < 5000 rounds down (a digit loop gave ...750)
+    mul_dropped_digits_judged_as_one_unit: "mul", "4705894581252909670E-51", Some("7189456187232149834E-33") => "3.383282291365097828459299078190749E-47";
+    // N1: the discarded tail makes the true result strictly below the computed difference (...999)
+    sub_sticky_tail_from_alignment_truncation: "sub", "93296E45", Some("578E13") => "9.329599999999999999999999999999999E+49";
 }
 
 /// Run the full IBM Hursley corpus if the files are present in `tests/conformance/`.
