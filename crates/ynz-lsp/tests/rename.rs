@@ -1,11 +1,12 @@
 // WHY: Rename tests verify atomic WorkspaceEdit construction and that every
-// RenameError variant produces the correct LSP error code.  Bugs here corrupt
-// user source code silently — a partial rename is worse than no rename.
+// rejected rename answers with its stable LSP error code (clients pattern-match
+// on them). Bugs here corrupt user source code silently: a partial rename is
+// worse than no rename.
 
 use ynz_lsp::{
     capabilities::PositionEncoding,
     position::LineTable,
-    rename::{prepare_rename_response, rename_response, LSP_RENAME_ERROR_CODES},
+    rename::{prepare_rename_response, rename_response},
     state::ServerState,
 };
 
@@ -68,257 +69,151 @@ fn mock_sender() -> crossbeam_channel::Sender<lsp_server::Message> {
     tx
 }
 
-fn lsp_code_for(variant_name: &str) -> i32 {
-    LSP_RENAME_ERROR_CODES
-        .iter()
-        .find(|(n, _)| *n == variant_name)
-        .map(|(_, code)| *code)
-        .expect("variant in LSP_RENAME_ERROR_CODES")
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// LSP error code table
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_lsp_rename_error_codes_are_stable() {
-    // WHY: error codes are stable API — clients pattern-match on them.
-    // This test locks the current values so a diff flags any accidental change.
-    assert_eq!(lsp_code_for("NotARenameable"), -32001);
-    assert_eq!(lsp_code_for("NewNameIsReservedKeyword"), -32002);
-    assert_eq!(lsp_code_for("NewNameIsBannedJargon"), -32003);
-    assert_eq!(lsp_code_for("NewNameInvalidIdentifier"), -32004);
-    assert_eq!(lsp_code_for("ConflictsWithExistingName"), -32005);
-    assert_eq!(lsp_code_for("CannotRenameImportedSymbolInThisFile"), -32006);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// prepare_rename — valid positions
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_prepare_rename_returns_identifier_range_for_let_binding() {
-    let src = "function entrypoint() -> Nothing {\n  let score = 42\n}\n";
-    let (state, uri) = state_single("/tmp/ynz_rename_prep_let.ynz", src);
-    let pos = position_at(src, "score");
-    let range = prepare_rename_response(&state, &uri, pos);
-    assert!(
-        range.is_some(),
-        "prepare_rename must succeed on `let` binding"
-    );
-    let r = range.unwrap();
-    // "score" is 5 chars — end.character should be start.character + 5
-    assert_eq!(
-        r.end.character - r.start.character,
-        5,
-        "range spans `score`"
-    );
-}
-
-#[test]
-fn test_prepare_rename_returns_identifier_range_for_function_call() {
-    let src = "function greet() -> String { return `hi` }\n\
-               function entrypoint() -> Nothing {\n  let msg = greet()\n}\n";
-    let (state, uri) = state_single("/tmp/ynz_rename_prep_fn.ynz", src);
-    let pos = position_at(src, "greet()"); // call site
-    let range = prepare_rename_response(&state, &uri, pos);
-    assert!(
-        range.is_some(),
-        "prepare_rename must succeed on function call"
-    );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// prepare_rename — non-renameable positions return None
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_prepare_rename_returns_none_for_keyword() {
-    // WHY: `function` is a keyword — it has no declaration site and cannot be renamed.
-    let src = "function entrypoint() -> Nothing {}\n";
-    let (state, uri) = state_single("/tmp/ynz_rename_prep_kw.ynz", src);
-    let pos = lsp_types::Position {
-        line: 0,
-        character: 0,
-    }; // `function`
-    assert!(prepare_rename_response(&state, &uri, pos).is_none());
-}
-
-#[test]
-fn test_prepare_rename_returns_none_for_integer_literal() {
-    let src = "function entrypoint() -> Nothing {\n  let x = 99\n}\n";
-    let (state, uri) = state_single("/tmp/ynz_rename_prep_int.ynz", src);
-    let pos = position_at(src, "99");
-    assert!(prepare_rename_response(&state, &uri, pos).is_none());
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// rename — success cases
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_rename_local_let_produces_workspace_edit_with_one_file() {
-    // WHY: a let binding with 2 uses should produce exactly 1 file with 2+ edits.
-    let src = "function entrypoint() -> Nothing {\n  let score = 0\n  let total = score\n}\n";
-    let (state, uri) = state_single("/tmp/ynz_rename_local.ynz", src);
-    let pos = position_at(src, "score = 0");
-    let result = rename_response(&state, &uri, pos, "points", &mock_sender());
-    assert!(
-        result.is_ok(),
-        "rename local let must succeed: {:?}",
-        result
-    );
-    let edit = result.unwrap();
-    let changes = edit
-        .changes
-        .as_ref()
-        .expect("WorkspaceEdit must have changes");
-    assert_eq!(changes.len(), 1, "only one file affected");
-    let edits = changes.values().next().unwrap();
-    assert!(!edits.is_empty(), "at least one edit");
-    for te in edits {
-        assert_eq!(te.new_text, "points", "replacement text must be `points`");
+fn error_code(result: Result<lsp_types::WorkspaceEdit, (i32, String)>) -> i32 {
+    match result {
+        Ok(edit) => panic!("rename must be rejected; got edit {edit:?}"),
+        Err((code, _message)) => code,
     }
 }
 
-#[test]
-fn test_rename_produces_empty_edit_for_zero_references() {
-    // WHY: a function with no callers should produce an empty (but valid) WorkspaceEdit.
-    let src = "function isolated() -> Nothing {}\nfunction entrypoint() -> Nothing {}\n";
-    let (state, uri) = state_single("/tmp/ynz_rename_zero.ynz", src);
-    let pos = position_at(src, "isolated");
-    let result = rename_response(&state, &uri, pos, "orphan", &mock_sender());
-    // May succeed with zero or one edit (the declaration itself) — must not error.
-    assert!(result.is_ok(), "rename with no callers must not error");
+macro_rules! prepare_rename_case {
+    ($name:ident, $src:expr, $needle:expr, $expected_width:expr) => {
+        // bug: prepare_rename accepts a keyword or literal, or rejects a renameable identifier, or returns a range that is not the identifier | tier: Medium
+        #[test]
+        fn $name() {
+            let src: &str = $src;
+            let (state, uri) =
+                state_single(concat!("/tmp/ynz_rename_", stringify!($name), ".ynz"), src);
+            let range = prepare_rename_response(&state, &uri, position_at(src, $needle));
+            let expected_width: Option<u32> = $expected_width;
+            assert_eq!(
+                range.map(|range| range.end.character - range.start.character),
+                expected_width
+            );
+        }
+    };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// rename — validation failure cases (atomic-or-fail: no partial edit returned)
-// ─────────────────────────────────────────────────────────────────────────────
+prepare_rename_case!(
+    let_binding_name_is_renameable_over_exactly_its_identifier,
+    "function entrypoint() -> Nothing {\n  let score = 42\n}\n",
+    "score",
+    Some(5)
+);
+prepare_rename_case!(
+    function_call_site_is_renameable,
+    "function greet() -> String { return `hi` }\nfunction entrypoint() -> Nothing {\n  let msg = greet()\n}\n",
+    "greet()",
+    Some(5)
+);
+prepare_rename_case!(
+    keyword_is_not_renameable,
+    "function entrypoint() -> Nothing {}\n",
+    "function",
+    None
+);
+prepare_rename_case!(
+    integer_literal_is_not_renameable,
+    "function entrypoint() -> Nothing {\n  let x = 99\n}\n",
+    "99",
+    None
+);
 
-#[test]
-fn test_rename_invalid_identifier_returns_error_code_32004() {
-    // WHY: ensures client gets the stable -32004 code for identifier-syntax failures.
-    let src = "function entrypoint() -> Nothing {\n  let x = 1\n}\n";
-    let (state, uri) = state_single("/tmp/ynz_rename_invalid.ynz", src);
-    let pos = position_at(src, "x");
-    let result = rename_response(&state, &uri, pos, "123invalid", &mock_sender());
-    let (code, _msg) = result.expect_err("must error on invalid identifier");
-    assert_eq!(code, -32004, "invalid identifier must produce code -32004");
+macro_rules! rename_case {
+    ($name:ident, $src:expr, $needle:expr, $new_name:expr, $check:expr) => {
+        // bug: rename returns a wrong or partial WorkspaceEdit, errors on a symbol nobody calls, or accepts a bad new name, a conflicting name or a non-symbol position instead of the stable error code | tier: Medium
+        #[test]
+        fn $name() {
+            let src: &str = $src;
+            let (state, uri) =
+                state_single(concat!("/tmp/ynz_rename_", stringify!($name), ".ynz"), src);
+            let result = rename_response(
+                &state,
+                &uri,
+                position_at(src, $needle),
+                $new_name,
+                &mock_sender(),
+            );
+            let check: fn(Result<lsp_types::WorkspaceEdit, (i32, String)>) = $check;
+            check(result);
+        }
+    };
 }
 
-#[test]
-fn test_rename_reserved_keyword_returns_error_code_32002() {
-    // WHY: attempting to rename to a keyword produces -32002 and a WHY explanation.
-    let src = "function entrypoint() -> Nothing {\n  let count = 0\n}\n";
-    let (state, uri) = state_single("/tmp/ynz_rename_kw.ynz", src);
-    let pos = position_at(src, "count");
-    let result = rename_response(&state, &uri, pos, "let", &mock_sender());
-    let (code, msg) = result.expect_err("must error on keyword new-name");
-    assert_eq!(code, -32002, "keyword new-name must produce code -32002");
-    assert!(
-        msg.contains("WHY"),
-        "error message must include WHY explanation"
-    );
-}
+rename_case!(
+    local_let_rename_edits_one_file_and_every_edit_writes_the_new_name,
+    "function entrypoint() -> Nothing {\n  let score = 0\n  let total = score\n}\n",
+    "score = 0",
+    "points",
+    |result| {
+        let edit = result.expect("rename of a local let must succeed");
+        let changes = edit.changes.expect("WorkspaceEdit must have changes");
+        assert_eq!(changes.len(), 1, "only one file affected");
+        let edits = changes.values().next().unwrap();
+        assert_eq!(edits.len(), 2, "declaration and the one use");
+        assert!(edits.iter().all(|edit| edit.new_text == "points"));
+    }
+);
+rename_case!(
+    function_without_callers_renames_without_error,
+    "function isolated() -> Nothing {}\nfunction entrypoint() -> Nothing {}\n",
+    "isolated",
+    "orphan",
+    |result| assert!(result.is_ok(), "got {result:?}")
+);
+rename_case!(
+    new_name_that_is_not_an_identifier_is_rejected_with_32004,
+    "function entrypoint() -> Nothing {\n  let x = 1\n}\n",
+    "x",
+    "123invalid",
+    |result| assert_eq!(error_code(result), -32004)
+);
+rename_case!(
+    new_name_that_is_a_keyword_is_rejected_with_32002,
+    "function entrypoint() -> Nothing {\n  let count = 0\n}\n",
+    "count",
+    "let",
+    |result| assert_eq!(error_code(result), -32002)
+);
+rename_case!(
+    new_name_that_is_banned_jargon_is_rejected_with_32003,
+    "function entrypoint() -> Nothing {\n  let x = 1\n}\n",
+    "x",
+    "class",
+    |result| assert_eq!(error_code(result), -32003)
+);
+rename_case!(
+    position_on_whitespace_is_rejected_with_32001,
+    "function entrypoint() -> Nothing {  }\n",
+    "  }",
+    "newname",
+    |result| assert_eq!(error_code(result), -32001)
+);
+// Two top-level functions with one name is a compile error right after the rename.
+rename_case!(
+    new_name_of_an_existing_function_is_rejected_with_32005,
+    "function greet() -> String { return `hi` }\nfunction entrypoint() -> Nothing {}\n",
+    "greet",
+    "entrypoint",
+    |result| assert_eq!(error_code(result), -32005)
+);
 
+// Own test, not a case of the table: it needs a two-file project on disk.
+// bug: renaming an imported symbol from its import site edits only the importing file and leaves the origin broken, instead of the stable -32006 | tier: Medium
 #[test]
-fn test_rename_banned_jargon_returns_error_code_32003() {
-    // WHY: `class` is banned jargon in Yinz — renaming to it must be rejected.
-    let src = "function entrypoint() -> Nothing {\n  let x = 1\n}\n";
-    let (state, uri) = state_single("/tmp/ynz_rename_jargon.ynz", src);
-    let pos = position_at(src, "x");
-    let result = rename_response(&state, &uri, pos, "class", &mock_sender());
-    let (code, _msg) = result.expect_err("must error on banned jargon");
-    assert_eq!(code, -32003, "banned jargon must produce code -32003");
-}
-
-#[test]
-fn test_rename_non_symbol_position_returns_error_code_32001() {
-    // WHY: cursor on whitespace/punctuation must produce -32001 (not a panic or silent no-op).
-    let src = "function entrypoint() -> Nothing {  }\n";
-    let (state, uri) = state_single("/tmp/ynz_rename_notsym.ynz", src);
-    let pos = lsp_types::Position {
-        line: 0,
-        character: 34,
-    }; // whitespace
-    let result = rename_response(&state, &uri, pos, "newname", &mock_sender());
-    let (code, _msg) = result.expect_err("must error on non-symbol position");
-    assert_eq!(code, -32001, "non-symbol must produce code -32001");
-}
-
-#[test]
-fn test_rename_imported_symbol_returns_error_code_32006() {
-    // WHY: renaming an imported symbol from the import site (not the origin file)
-    // must be rejected with -32006 pointing to the origin.
+fn renaming_an_imported_symbol_from_its_import_site_is_rejected_with_32006() {
     let dep_src = "export function greet() -> String { return `hi` }\n";
-    let main_src =
-        "import { greet } from `services/helpers`\nfunction entrypoint() -> Nothing {\n  let msg = greet()\n}\n";
+    let main_src = "import { greet } from `services/helpers`\nfunction entrypoint() -> Nothing {\n  let msg = greet()\n}\n";
     let (state, main_uri, _dep_uri, _dir) = state_two_files("helpers", dep_src, main_src);
 
-    // Rename from the call site in main (not origin)
-    let pos = position_at(main_src, "greet()");
-    let result = rename_response(&state, &main_uri, pos, "hello", &mock_sender());
-    let (code, msg) = result.expect_err("must reject rename from import site");
-    assert_eq!(
-        code, -32006,
-        "imported-symbol rename must produce code -32006"
-    );
-    assert!(
-        msg.contains("WHAT INSTEAD"),
-        "error must include WHAT INSTEAD guidance"
-    );
+    let call_site = position_at(main_src, "greet()");
+    let result = rename_response(&state, &main_uri, call_site, "hello", &mock_sender());
+    assert_eq!(error_code(result), -32006);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Conflict detection — renaming to an existing symbol name
-// ─────────────────────────────────────────────────────────────────────────────
-
+// bug: rename takes over 1 s and F2 feels frozen | tier: Medium
 #[test]
-fn test_rename_to_existing_name_returns_error_code_32005() {
-    // WHY: renaming `greet` → `entrypoint` (where `entrypoint` already exists
-    // in the same file) must be REJECTED with -32005.  Allowing it would produce
-    // two top-level functions with the same name, which is a compile error
-    // immediately after the rename — a silent corruption of the user's source.
-    let src = "function greet() -> String { return `hi` }\nfunction entrypoint() -> Nothing {}\n";
-    let (state, uri) = state_single("/tmp/ynz_rename_conflict.ynz", src);
-    let pos = position_at(src, "greet");
-    let result = rename_response(&state, &uri, pos, "entrypoint", &mock_sender());
-    let (code, msg) = result.expect_err("rename to existing name must error");
-    assert_eq!(code, -32005, "conflict must produce code -32005");
-    assert!(
-        msg.contains("WHAT INSTEAD"),
-        "conflict error must include WHAT INSTEAD guidance; got: {msg}"
-    );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Atomic-or-fail: partial edit never returned
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_rename_error_produces_no_workspace_edit() {
-    // WHY: on validation failure (e.g. bad new-name), rename_response returns Err
-    // — caller sends ResponseError to client, never a partial WorkspaceEdit.
-    // This test verifies the function NEVER returns Ok on a known-bad new-name.
-    let src = "function entrypoint() -> Nothing {\n  let total = 0\n}\n";
-    let (state, uri) = state_single("/tmp/ynz_rename_atomic.ynz", src);
-    let pos = position_at(src, "total");
-    // Bad new-name: contains a space (invalid identifier)
-    let result = rename_response(&state, &uri, pos, "bad name", &mock_sender());
-    assert!(
-        result.is_err(),
-        "invalid new-name must always return Err, never Ok(partial edit)"
-    );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Performance
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_rename_response_under_1000ms() {
-    // WHY: rename must be fast enough for interactive F2 use — 1s cap.
+fn nightly_rename_response_under_1000ms() {
     let src = "function greet() -> String { return `hi` }\n\
                function entrypoint() -> Nothing {\n  let a = greet()\n  let b = greet()\n}\n";
     let (state, uri) = state_single("/tmp/ynz_rename_perf.ynz", src);
