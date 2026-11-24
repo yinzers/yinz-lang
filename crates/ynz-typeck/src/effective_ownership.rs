@@ -2446,11 +2446,19 @@ mod value_like_parity {
     /// must be bits here too.
     ///
     /// One named test per sampled type, so the runner names the failing type. A type the copy table
-    /// does not call bits passes: only a type whose copy is the receiver's bits must be value-like.
+    /// does not call bits passes the parity check: only a type whose copy is the receiver's bits must
+    /// be value-like. The `owns_heap` form adds the other direction: a type that owns heap storage is
+    /// handed over when stored, so it is never value-like.
     macro_rules! copy_bits_is_value_like_case {
         ($test_name:ident, $sample:expr) => {
+            copy_bits_is_value_like_case!(@test $test_name, $sample, false);
+        };
+        ($test_name:ident, $sample:expr, owns_heap) => {
+            copy_bits_is_value_like_case!(@test $test_name, $sample, true);
+        };
+        (@test $test_name:ident, $sample:expr, $owns_heap:expr) => {
             // Survives as a private-function parity (`value_like` is pub(crate)): the two tables are compared per `Type` value, which no program text reaches uniformly (rubric 4 parity keep).
-            // bug: value_like and owned_copy_plan answer one question ("storing it hands nothing over") two ways and drift apart (the `range` store refusal was exactly that), so a program the copy table calls bits is refused or double-freed on store | tier: High
+            // bug: value_like and owned_copy_plan answer one question ("storing it hands nothing over") two ways and drift apart (the `range` store refusal was exactly that), or call a heap-owning type value-like so storing it skips the hand-over and two owners free it | tier: High
             #[test]
             fn $test_name() {
                 let sample: Type = $sample;
@@ -2462,6 +2470,12 @@ mod value_like_parity {
                     assert!(
                         value_like(&sample),
                         "{sample:?}: its copy is the receiver's bits, so storing it must hand nothing over"
+                    );
+                }
+                if $owns_heap {
+                    assert!(
+                        !value_like(&sample),
+                        "{sample:?}: owns heap storage, so storing it must hand it over"
                     );
                 }
             }
@@ -2502,19 +2516,20 @@ mod value_like_parity {
         }
     );
 
-    /// The other direction: a type that owns heap storage is handed over when stored.
-    // Survives with the parity above: same private `value_like`, other direction; no public query returns its verdict alone.
-    // bug: a heap-owning type is called value-like, so storing it skips the hand-over and two owners free it | tier: High
-    #[test]
-    fn a_heap_type_is_not_value_like() {
-        let array_of_ints = Type::BuiltinArray {
-            elem: Box::new(Type::Int),
-        };
-        assert!(!value_like(&array_of_ints));
-        assert!(!value_like(&Type::Shape {
+    copy_bits_is_value_like_case!(
+        an_array_of_ints_is_not_value_like,
+        Type::BuiltinArray {
+            elem: Box::new(Type::Int)
+        },
+        owns_heap
+    );
+    copy_bits_is_value_like_case!(
+        a_shape_is_not_value_like,
+        Type::Shape {
             name: "Order".to_string()
-        }));
-    }
+        },
+        owns_heap
+    );
 }
 
 /// True when position `index` of a call to `name` only READS what is passed there: a method call's
