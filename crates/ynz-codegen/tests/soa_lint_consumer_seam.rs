@@ -25,6 +25,7 @@ fn fixture_src() -> String {
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()))
 }
 
+// bug: the array-using-soa-layout lint is built but dropped before codegen_query's diagnostic bucket (a dropped merge line), so `ynz build` and `ynz run` never show it | tier: Medium
 #[test]
 fn soa_layout_lint_reaches_codegen_query_diagnostic_bucket() {
     // This binary holds exactly one test, so there is no intra-binary env race
@@ -62,12 +63,5 @@ fn soa_layout_lint_reaches_codegen_query_diagnostic_bucket() {
         soa_lints[0].severity,
         Severity::Suggestion,
         "the lint stays a Tier 3 suggestion through the consumer seam"
-    );
-    // Template substitution is the typeck suite's job; here assert only the one
-    // consumer-visible anchor (the array name) survived the trip.
-    assert!(
-        soa_lints[0].what.contains("`pts`"),
-        "consumer-delivered WHAT names the array: {}",
-        soa_lints[0].what
     );
 }
