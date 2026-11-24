@@ -10,58 +10,46 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
-# Least-privilege GITHUB_TOKEN for every job in this workflow (fix-loop round, M6 Phase
-# 6b): none of `build-and-test`, `fuzz` (v0.3-M8 Phase 8) or `sanitizers` needs anything
-# beyond read-only repo access (checkout + actions/cache read/write on the cache API, which
-# does not require the `contents` write scope; actions/upload-artifact authenticates with the
-# runtime token, not GITHUB_TOKEN) — no PR comments, no releases, no pushes.
-# Workflow-level so it covers every job without duplicating the block per-job.
+# Least-privilege GITHUB_TOKEN for every job in this workflow: no job needs anything beyond
+# read-only repo access (checkout, plus actions/cache and the artifact actions, which
+# authenticate with the runtime token, not GITHUB_TOKEN). No PR comments, no releases, no pushes.
+# Workflow-level so it covers every job without duplicating the block per job.
 permissions:
   contents: read
 
+# Lane layout (plan #19, card #681). Every job is its own required check and none has a path
+# filter. Jobs run in parallel on free `ubuntu-24.04` runners (4 vCPU):
+#   lint            fmt + clippy
+#   release         release build + Loom
+#   archive         builds every test binary once, archives them, checks the test count
+#   test            the archived tests, split over N runners by `cargo nextest --partition`
+#   fuzz            generated-corpus mode matrix (non-blocking, see below)
+#   miri            Miri, one runner per ynz-runtime test target
+#   sanitizers      ThreadSanitizer and AddressSanitizer
+# Third-party actions are pinned to a commit SHA, the toolchains to an exact version, and the
+# runner image to a release, so a build today equals a build tomorrow.
+
 jobs:
-  build-and-test:
-    name: Build and test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        # Linux only for now. macOS was removed because ynz-codegen's golden tests
-        # (IR-text snapshots + object-file SHA-256) are recorded for x86_64-linux and
-        # some macOS failures hinted at real codegen differences that can't be verified
-        # without a Mac. Re-add `macos-latest` once macOS codegen is validated and
-        # per-triple goldens are recorded. See design/future/macos-platform-support.md.
-        os: [ubuntu-latest]
-
+  lint:
+    name: Lint (fmt + clippy)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - name: Install LLVM 18 (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y llvm-18 llvm-18-dev libclang-18-dev clang-18
-          echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> $GITHUB_ENV
+      - name: Install LLVM 18
+        uses: ./.github/actions/install-apt
+        with:
+          packages: llvm-18 llvm-18-dev libclang-18-dev clang-18
 
-      - name: Install LLVM 18 (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew install llvm@18
-          echo "LLVM_SYS_181_PREFIX=$(brew --prefix llvm@18)" >> $GITHUB_ENV
+      - name: Point the build at LLVM 18
+        run: echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> "$GITHUB_ENV"
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust
+        uses: ./.github/actions/setup-rust
         with:
           components: clippy, rustfmt
-
-      - name: Cache Cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          cache-name: lint
 
       - name: Check formatting
         run: cargo fmt --check
@@ -69,54 +57,42 @@ jobs:
       # ynz-driver and ynz-watch embed the runtime static archive at compile time via
       # `include_bytes!(env!("YNZ_RT_LIB_PATH"))` (target/debug/libynz_runtime.a). `cargo
       # clippy`/`cargo check` are check-only and never produce that archive, so on a clean
-      # checkout the Clippy and Test steps fail with "couldn't read libynz_runtime.a". A
-      # real `cargo build` of ynz-runtime emits the staticlib first, satisfying the embed
-      # for the dev-profile Clippy + Test steps below. (Release step builds its own.)
+      # checkout Clippy fails with "couldn't read libynz_runtime.a". A real `cargo build` of
+      # ynz-runtime emits the staticlib first.
       - name: Build runtime archive (required by include_bytes! in driver/watch)
         run: cargo build -p ynz-runtime
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+  release:
+    name: Release build + Loom
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install LLVM 18
+        uses: ./.github/actions/install-apt
+        with:
+          packages: llvm-18 llvm-18-dev libclang-18-dev clang-18
+
+      - name: Point the build at LLVM 18
+        run: echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> "$GITHUB_ENV"
+
+      - name: Install Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-name: release
+
+      # Pre-build the release-profile runtime staticlib first, for the same reason as the debug
+      # step in `lint`: `cargo build --workspace --release` can compile the embedding consumers
+      # (driver/watch) before ynz-runtime emits target/release/libynz_runtime.a, since the
+      # include_bytes! dependency is invisible to cargo's unit graph.
       - name: Build (release)
-        # Pre-build the release-profile runtime staticlib first, for the same reason as the
-        # debug step above: `cargo build --workspace --release` can compile the embedding
-        # consumers (driver/watch) before ynz-runtime emits target/release/libynz_runtime.a,
-        # since the include_bytes! dependency is invisible to cargo's unit graph.
         run: |
           cargo build -p ynz-runtime --release
           cargo build --workspace --release
-
-      # TRIAL (spike S1, card #676): the baseline `cargo test` is split into a compile-only
-      # step and the run step below, so the job log shows how the Test time divides between
-      # compiling the test binaries and running them. Total work is unchanged: the run step
-      # reuses what this step built. Remove with the rest of the trial if nextest is not adopted.
-      - name: Test (compile only, timing split)
-        run: cargo test --workspace --no-run
-
-      # TRIAL (spike S1): resource evidence for "CPU, disk or locks?". Prints the runner's
-      # shape, then samples vmstat every 5 s into vmstat.log while the Test step runs.
-      # Kernel PSI counters (cumulative stall microseconds) are read before and after.
-      - name: Sample resources (start)
-        shell: bash
-        run: |
-          echo "nproc=$(nproc)"; free -m; df -h / /tmp; mount | grep -E ' / | /tmp ' || true
-          echo "--- PSI at start"; grep -H . /proc/pressure/cpu /proc/pressure/io /proc/pressure/memory || echo "PSI unavailable"
-          nohup vmstat -w -n 5 > vmstat.log 2>&1 &
-
-      - name: Test
-        run: cargo test --workspace
-
-      - name: Sample resources (summary)
-        if: always()
-        shell: bash
-        run: |
-          echo "--- PSI at end"; grep -H . /proc/pressure/cpu /proc/pressure/io /proc/pressure/memory || echo "PSI unavailable"
-          # vmstat -w columns: r b swpd free buff cache si so bi bo in cs us sy id wa st
-          # (+ guest column on newer procps). Skip the two header lines and the since-boot row.
-          awk 'NR>3 { r+=$1; b+=$2; us+=$13; sy+=$14; id+=$15; wa+=$16; n++ }
-               END { if (n) printf "samples=%d avg_runnable=%.1f avg_blocked=%.1f us=%.1f sy=%.1f id=%.1f wa=%.1f\n", n, r/n, b/n, us/n, sy/n, id/n, wa/n }' vmstat.log
-          echo "--- vmstat.log (every 5 s)"; cat vmstat.log
 
       # Loom model-checking harness (v0.3-M8 Phase 3). `--cfg loom` swaps ynz-runtime's
       # `crate::sync` primitives to loom's and compiles `src/loom_tests.rs`; nothing else in the
@@ -125,14 +101,14 @@ jobs:
       # cache. Unbounded (exhaustive) on purpose — the whole lane is ~2s; `LOOM_MAX_PREEMPTIONS`
       # is a local bisecting knob, not a CI setting: every model completes exhaustively
       # unbounded, and a preemption bound only PRUNES schedules from that same exploration, so
-      # a bounded run explores a strict subset of what this step already covers — a second,
-      # bounded run would add wall time and no coverage. The trailing grep is a vacuity guard:
-      # a drifted `loom_` filter would otherwise "pass" by matching zero tests.
+      # a bounded run explores a strict subset of what this step already covers. The trailing
+      # grep is a vacuity guard: a drifted `loom_` filter would otherwise "pass" by matching
+      # zero tests.
       #
       # `pipefail` is load-bearing: without it the `tee` pipe discarded cargo's exit status and
       # the grep was the accidental sole failure gate (a crashed lane with a stale "ok" line
-      # would have passed). Patrick ruled 2026-09-03 that this lane stays BLOCKING on the main
-      # job — no `continue-on-error`.
+      # would have passed). Patrick ruled 2026-09-03 that this lane stays BLOCKING — no
+      # `continue-on-error`.
       - name: Loom (ynz-runtime model-checking harness, --cfg loom)
         shell: bash
         run: |
@@ -144,48 +120,60 @@ jobs:
       - name: Verify --version
         run: ./target/release/ynz --version
 
-  # TRIAL (spike S1, card #676): build every test binary once, archive it, then run the
-  # archive split across N runners with cargo-nextest partitions. `build-and-test` above keeps
-  # its `cargo test --workspace` step during the trial so both are measured on one commit.
-  # nextest is pinned to an exact version (same version as the local spike measurement).
-  nextest-archive:
-    name: Nextest archive (build tests once)
-    runs-on: ubuntu-latest
+  # Builds every test binary once and archives them; `test` and the trial jobs run the archive.
+  archive:
+    name: Build and archive the tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install LLVM 18
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y llvm-18 llvm-18-dev libclang-18-dev clang-18
-          echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> $GITHUB_ENV
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install cargo-nextest (pinned)
-        run: curl -LsSf https://get.nexte.st/0.9.152/linux | tar zxf - -C "$HOME/.cargo/bin"
-
-      - name: Cache Cargo registry
-        uses: actions/cache@v4
+        uses: ./.github/actions/install-apt
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-nextest-cargo-${{ hashFiles('**/Cargo.lock') }}
+          packages: llvm-18 llvm-18-dev libclang-18-dev clang-18
 
-      # Same reason as in build-and-test: driver/watch include_bytes! the runtime staticlib.
+      - name: Point the build at LLVM 18
+        run: echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> "$GITHUB_ENV"
+
+      - name: Install Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-name: archive
+
+      - name: Install cargo-nextest
+        uses: ./.github/actions/install-nextest
+
+      # Same reason as in `lint`: driver/watch include_bytes! the runtime staticlib.
       - name: Build runtime archive (required by include_bytes! in driver/watch)
         run: cargo build -p ynz-runtime
 
-      - name: Archive test binaries
-        # `--profile ci` adds target/debug/libynz_runtime.a to the archive (see
-        # .config/nextest.toml): the ASan harness links it into programs at test run time.
+      # `--profile ci` adds target/debug/libynz_runtime.a to the archive (see
+      # .config/nextest.toml): the ASan harness links it into programs at test run time.
+      - name: Archive the test binaries
         run: cargo nextest archive --workspace --profile ci --archive-file nextest-archive.tar.zst
 
-      - name: Upload archive
-        uses: actions/upload-artifact@v4
+      # Exit check: nextest must run at least as many tests as `cargo test --workspace`. Both
+      # sides leave out the nightly lane (names starting `nightly_`): the ci profile's
+      # default-filter does it for nextest, the grep for `cargo test`. Ignored tests count on
+      # both sides (`--run-ignored all`); `cargo test -- --list` prints them too.
+      - name: Count tests, nextest against cargo test
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --workspace -- --list 2> /dev/null > cargo-test-list.txt
+          cargo_test_count="$(grep -E ': test$' cargo-test-list.txt | grep -Evc '(^|::)nightly_' || true)"
+          cargo nextest list --workspace --profile ci --run-ignored all --message-format oneline > nextest-list.txt
+          nextest_count="$(wc -l < nextest-list.txt)"
+          echo "cargo test --workspace -- --list (without nightly_): ${cargo_test_count}"
+          echo "cargo nextest list --workspace --profile ci --run-ignored all: ${nextest_count}"
+          if [ "${nextest_count}" -lt "${cargo_test_count}" ]; then
+            echo "::error::nextest lists fewer tests (${nextest_count}) than cargo test (${cargo_test_count})"
+            exit 1
+          fi
+
+      - name: Upload the archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: nextest-archive
           path: nextest-archive.tar.zst
@@ -194,10 +182,11 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
-  nextest-test:
-    name: Nextest partition ${{ matrix.partition }}/4
-    needs: nextest-archive
-    runs-on: ubuntu-latest
+  test:
+    name: Tests, partition ${{ matrix.partition }}/4
+    needs: archive
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -206,35 +195,13 @@ jobs:
     steps:
       # Checkout is still needed: tests read fixtures and sources through paths remapped to
       # the workspace (`--workspace-remap .`).
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      # The archived tests spawn `ynz`, which links with clang-18, and call opt-18/llc-18 and
-      # load libLLVM at run time, so the runtime packages are needed here; the -dev packages
-      # (headers, libclang) are only needed to BUILD, which the archive job already did.
-      # libclang-rt-18-dev is named explicitly: the ASan fixtures link against its
-      # libclang_rt.asan, and the install must not depend on apt's Recommends.
-      - name: Install LLVM 18 runtime tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends llvm-18 clang-18 libclang-rt-18-dev
-          echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> $GITHUB_ENV
+      - name: Prepare the runner
+        uses: ./.github/actions/prepare-test-runner
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install cargo-nextest (pinned)
-        run: curl -LsSf https://get.nexte.st/0.9.152/linux | tar zxf - -C "$HOME/.cargo/bin"
-
-      - name: Download archive
-        uses: actions/download-artifact@v4
-        with:
-          name: nextest-archive
-
-      - name: Runner shape
-        run: |
-          echo "nproc=$(nproc)"; free -m; df -h / /tmp
-          echo "--- PSI at start"; grep -H . /proc/pressure/cpu /proc/pressure/io /proc/pressure/memory || echo "PSI unavailable"
-          nohup vmstat -w -n 5 > vmstat.log 2>&1 &
+      - name: Start resource sampling
+        run: .github/scripts/resources.sh start
 
       # `--extract-to .` puts the archive's target/ back at <checkout>/target, the same absolute
       # path the archive job built at. Some tests read files by a path baked in at compile time
@@ -247,43 +214,70 @@ jobs:
             --workspace-remap . --partition count:${{ matrix.partition }}/4 --profile ci \
             --failure-output immediate-final
 
-      - name: Sample resources (summary)
+      - name: Resource summary
         if: always()
-        shell: bash
-        run: |
-          echo "--- PSI at end"; grep -H . /proc/pressure/cpu /proc/pressure/io /proc/pressure/memory || echo "PSI unavailable"
-          awk 'NR>3 { r+=$1; b+=$2; us+=$13; sy+=$14; id+=$15; wa+=$16; n++ }
-               END { if (n) printf "samples=%d avg_runnable=%.1f avg_blocked=%.1f us=%.1f sy=%.1f id=%.1f wa=%.1f\n", n, r/n, b/n, us/n, sy/n, id/n, wa/n }' vmstat.log
+        run: .github/scripts/resources.sh summary
 
-      # The job log keeps only its last lines in the log reader, so print the slowest tests and
-      # binaries (summed test time per nextest binary id) from the JUnit file here, once.
-      - name: Slowest tests and binaries (top 10)
+      - name: Slowest tests and binaries
         if: always()
-        shell: bash
-        run: |
-          junit=target/nextest/ci/junit.xml
-          testcases() { grep -o '<testcase name="[^"]*" classname="[^"]*"[^>]*time="[^"]*"' "$junit"; }
-          echo "--- 10 slowest tests (seconds, binary, test)"
-          testcases | sed -E 's/<testcase name="([^"]*)" classname="([^"]*)".*time="([^"]*)"/\3\t\2\t\1/' \
-            | sort -t$'\t' -k1,1 -rn | awk 'NR<=10'
-          echo "--- 10 binaries by summed test time (seconds, tests, binary)"
-          testcases | sed -E 's/<testcase name="([^"]*)" classname="([^"]*)".*time="([^"]*)"/\2\t\3/' \
-            | awk -F'\t' '{ seconds[$1] += $2; tests[$1]++ } END { for (binary in seconds) printf "%.1f\t%d\t%s\n", seconds[binary], tests[binary], binary }' \
-            | sort -rn | awk 'NR<=10'
+        run: .github/scripts/slowest-tests.sh target/nextest/ci/junit.xml
 
       - name: Upload JUnit report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: nextest-junit-${{ matrix.partition }}
-          path: |
-            target/nextest/ci/junit.xml
-            vmstat.log
+          path: target/nextest/ci/junit.xml
           if-no-files-found: warn
+
+  # TRIAL (spike S1, card #676, draft PR only): the two corpus sweeps, alone on a runner, with
+  # /tmp on disk and on tmpfs. Each `ynz run` writes the 53 MB runtime library and links it, so
+  # scratch IO is the suspect. Remove when the card's findings are filed.
+  sweep-trial:
+    name: Sweep trial, ${{ matrix.test }}, tmpfs=${{ matrix.tmpfs }}
+    needs: archive
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        test:
+          - corpus_byte_identical_across_mode_matrix
+          - corpus_produces_deterministic_output_across_runs
+        tmpfs: [false, true]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Prepare the runner
+        uses: ./.github/actions/prepare-test-runner
+
+      # Docker mounts tmpfs noexec; `exec` keeps spawned binaries runnable (the sweep runs the
+      # programs it links in /tmp). 8 GB is the cap, not a reservation: pages are used on demand,
+      # and the sampler below reports the peak.
+      - name: Mount /tmp as tmpfs
+        if: matrix.tmpfs
+        run: |
+          sudo mount -t tmpfs -o size=8g,mode=1777,exec,nosuid,nodev tmpfs /tmp
+          mount | grep ' /tmp '
+
+      - name: Start resource sampling
+        run: .github/scripts/resources.sh start
+
+      - name: Run the sweep
+        run: |
+          start_seconds="${SECONDS}"
+          cargo nextest run --archive-file nextest-archive.tar.zst --extract-to . --extract-overwrite \
+            --workspace-remap . --profile ci --failure-output immediate-final \
+            -E 'binary(cross_impl_consistency) & test(=${{ matrix.test }})'
+          echo "SWEEP WALL CLOCK: ${{ matrix.test }} tmpfs=${{ matrix.tmpfs }}: $(( SECONDS - start_seconds )) s"
+
+      - name: Resource summary
+        if: always()
+        run: .github/scripts/resources.sh summary
 
   fuzz:
     name: Structured fuzzing lane (generated .ynz corpus × mode matrix)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # NON-BLOCKING on first landing, by v0.3-M8 Phase 8 step 4's design. A genuine finding here
     # routes through the plan-amendment/FRAGO seam (risk R5), not an immediate red build, until
     # the lane has proven it does not flake.
@@ -299,28 +293,23 @@ jobs:
     # below is fixed at 96 and the rest of this budget is build time.
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install LLVM 18
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y llvm-18 llvm-18-dev libclang-18-dev clang-18
-          echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> $GITHUB_ENV
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Cargo registry
-        uses: actions/cache@v4
+        uses: ./.github/actions/install-apt
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-fuzz-cargo-${{ hashFiles('**/Cargo.lock') }}
+          packages: llvm-18 llvm-18-dev libclang-18-dev clang-18
 
-      # Same reason as the main job's equivalent step: ynz-driver embeds the runtime staticlib
-      # via include_bytes!, which a check-only invocation never produces.
+      - name: Point the build at LLVM 18
+        run: echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> "$GITHUB_ENV"
+
+      - name: Install Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-name: fuzz
+
+      # Same reason as in `lint`: ynz-driver embeds the runtime staticlib via include_bytes!,
+      # which a check-only invocation never produces.
       - name: Build runtime archive (required by include_bytes! in driver)
         run: cargo build -p ynz-runtime
 
@@ -358,7 +347,7 @@ jobs:
 
       - name: Upload fuzz.log on failure (the summary + embedded finding sources)
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: fuzz-log
           path: fuzz.log
@@ -373,52 +362,108 @@ jobs:
       # claim and what CI actually keeps agree.
       - name: Upload kept fuzz corpus on failure (full per-mode capture files, replay input)
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: fuzz-corpus
           path: /tmp/ynz-fuzz-*
           if-no-files-found: warn
 
-  sanitizers:
-    name: Sanitizer lane (Miri / TSan / ASan) — ynz-runtime
-    runs-on: ubuntu-latest
+  # One Miri runner per ynz-runtime test target. The matrix comes from `cargo metadata`, so a
+  # new test file is picked up without editing this workflow and cannot be left out silently.
+  # Same test set as the former single `cargo miri test -p ynz-runtime`, which ran the lib and
+  # every integration-test file (the doctest count is zero, see the TSan note below).
+  miri-plan:
+    name: Miri plan (one job per ynz-runtime test target)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      targets: ${{ steps.plan.outputs.targets }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-name: none
+          cache: "false"
+
+      - name: List the test targets
+        id: plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          targets="$(cargo metadata --no-deps --format-version 1 --locked \
+            | jq -c '[.packages[] | select(.name == "ynz-runtime") | .targets[]
+                      | select(.test == true)
+                      | if (.kind | index("test")) then {flag: "--test \(.name)", name: .name}
+                        elif (.kind | index("bin")) then {flag: "--bin \(.name)", name: .name}
+                        else {flag: "--lib", name: "lib"} end]')"
+          echo "${targets}"
+          if [ "$(echo "${targets}" | jq length)" -lt 2 ]; then
+            echo "::error::expected the lib and at least one integration test, got: ${targets}"
+            exit 1
+          fi
+          echo "targets=${targets}" >> "$GITHUB_OUTPUT"
+
+  miri:
+    name: Miri, ${{ matrix.target.name }}
+    needs: miri-plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.miri-plan.outputs.targets) }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install Rust nightly (rust-src + miri)
-        uses: dtolnay/rust-toolchain@nightly
+        uses: ./.github/actions/setup-rust
         with:
+          toolchain: nightly-2026-11-20
           components: rust-src, miri
+          cache-name: miri
 
-      - name: Cache Cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-sanitizers-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-      # Sanitizer stack traces are unreadable raw addresses without a symbolizer on PATH
-      # (confirmed locally, M6 Phase 6b — the dev container needed ASAN_SYMBOLIZER_PATH
-      # pointed at llvm-symbolizer-18 explicitly). Best-effort: install whatever llvm
-      # package the runner's apt repo has and probe for the binary under either name.
-      - name: Install llvm-symbolizer (readable sanitizer stack traces)
+      # Miri — single atomic invocation per target, zero MIRIFLAGS. The files with
+      # fs::read_to_string source-text audits and the pure wall-clock/ns-per-call benchmarks are
+      # individually `#[cfg_attr(miri, ignore = "...")]`-gated in source with cited reasons —
+      # nothing is silently skipped here.
+      - name: Miri (ynz-runtime ${{ matrix.target.flag }})
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y llvm
-          SYMBOLIZER="$(command -v llvm-symbolizer-18 || command -v llvm-symbolizer || true)"
-          echo "Resolved symbolizer: ${SYMBOLIZER:-<none found>}"
-          echo "ASAN_SYMBOLIZER_PATH=$SYMBOLIZER" >> "$GITHUB_ENV"
-          echo "TSAN_SYMBOLIZER_PATH=$SYMBOLIZER" >> "$GITHUB_ENV"
+          set -euo pipefail
+          cargo miri test -p ynz-runtime ${{ matrix.target.flag }} 2>&1 | tee miri.log
+          .github/scripts/sum-test-results.sh miri.log
 
-      # Miri — whole-crate, single atomic invocation, zero MIRIFLAGS. Confirmed-working
-      # invocation, M6 Phase 6b (lib + all 6 integration-test files all pass; the 3 files
-      # with fs::read_to_string source-text audits and the pure wall-clock/ns-per-call
-      # benchmarks are individually `#[cfg_attr(miri, ignore = "...")]`-gated in source with
-      # cited reasons — nothing is silently skipped here).
-      - name: Miri (ynz-runtime, whole crate)
-        run: cargo +nightly miri test -p ynz-runtime
+  sanitizers:
+    name: Sanitizers (TSan / ASan) — ynz-runtime
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install Rust nightly (rust-src)
+        uses: ./.github/actions/setup-rust
+        with:
+          toolchain: nightly-2026-11-20
+          components: rust-src
+          cache-name: sanitizers
+
+      # Sanitizer stack traces are unreadable raw addresses without a symbolizer (confirmed
+      # locally, M6 Phase 6b — the dev container needed ASAN_SYMBOLIZER_PATH pointed at
+      # llvm-symbolizer-18 explicitly).
+      - name: Install llvm-symbolizer (readable sanitizer stack traces)
+        uses: ./.github/actions/install-apt
+        with:
+          packages: llvm-18
+          recommends: "false"
+
+      - name: Point the sanitizers at the symbolizer
+        run: |
+          symbolizer="/usr/lib/llvm-18/bin/llvm-symbolizer"
+          test -x "${symbolizer}"
+          echo "ASAN_SYMBOLIZER_PATH=${symbolizer}" >> "$GITHUB_ENV"
+          echo "TSAN_SYMBOLIZER_PATH=${symbolizer}" >> "$GITHUB_ENV"
 
       # ThreadSanitizer — confirmed-working invocation, M6 Phase 6b. `--lib --tests` (no
       # `--doc`) because rustdoc's own driver doesn't forward `-Zsanitizer` the same way
@@ -426,26 +471,24 @@ jobs:
       # (a documented rustc/rustdoc limitation, not a finding in our code) — moot in
       # practice since ynz-runtime ships zero actual doctests.
       #
-      # NOTE (assumption flagged for the first real run to confirm): the local dev
-      # container needed `cap_add: SYS_PTRACE` + `security_opt: seccomp:unconfined` for
-      # TSan to run at all (Docker's default seccomp profile denies TSan's own
-      # `personality(ADDR_NO_RANDOMIZE)` self-call — see docker-compose.yml). GitHub-hosted
-      # runners are unrestricted VMs, not seccomp-locked containers, so this step is not
-      # expected to need an equivalent workaround — but that could not be exercised from
-      # this milestone's own dev sandbox (no bare, non-containerized Rust toolchain
-      # available to probe against). If this step ever aborts with the same "unable to
-      # disable ASLR (perhaps sandboxing is enabled?)" error, that is the tell to
-      # investigate a runner-level seccomp/ptrace restriction.
+      # GitHub-hosted runners are unrestricted VMs, not seccomp-locked containers, so TSan
+      # needs no ptrace/seccomp workaround here (docker-compose.yml has one for the dev
+      # container). If this step ever aborts with "unable to disable ASLR (perhaps sandboxing
+      # is enabled?)", investigate a runner-level seccomp/ptrace restriction.
       - name: ThreadSanitizer (ynz-runtime, lib + integration tests, excl. doctests)
+        shell: bash
         run: |
-          RUSTFLAGS='-Zsanitizer=thread' cargo +nightly test -p ynz-runtime \
-            --target x86_64-unknown-linux-gnu -Zbuild-std --lib --tests
+          set -euo pipefail
+          RUSTFLAGS='-Zsanitizer=thread' cargo test -p ynz-runtime \
+            --target x86_64-unknown-linux-gnu -Zbuild-std --lib --tests 2>&1 | tee tsan.log
+          .github/scripts/sum-test-results.sh tsan.log
 
-      # AddressSanitizer — confirmed-working invocation, M6 Phase 6b. `--doc` is excluded
-      # here too for parity/consistency with the TSan lane above, even though ASan's own
-      # doctest run was independently confirmed clean locally (0 doctests either way, so
-      # this is moot in practice).
+      # AddressSanitizer — confirmed-working invocation, M6 Phase 6b. `--doc` is excluded here
+      # too for parity with the TSan step (0 doctests either way).
       - name: AddressSanitizer (ynz-runtime, lib + integration tests, excl. doctests)
+        shell: bash
         run: |
-          RUSTFLAGS='-Zsanitizer=address' cargo +nightly test -p ynz-runtime \
-            --target x86_64-unknown-linux-gnu -Zbuild-std --lib --tests
+          set -euo pipefail
+          RUSTFLAGS='-Zsanitizer=address' cargo test -p ynz-runtime \
+            --target x86_64-unknown-linux-gnu -Zbuild-std --lib --tests 2>&1 | tee asan.log
+          .github/scripts/sum-test-results.sh asan.log
