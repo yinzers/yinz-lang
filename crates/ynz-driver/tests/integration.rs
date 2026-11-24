@@ -9295,64 +9295,48 @@ fn m5_p3_sweep_shape_eq_string_field() {
     );
 }
 
+/// Build and run `fixture` in one mode; a union read back out of an array or map value
+/// must fail loudly (non-zero exit, no output), never compile and run silently.
+fn assert_union_readback_fails_loudly(fixture_name: &str, no_auto_parallel: bool) {
+    let src = fixture(fixture_name);
+    let (stdout, _stderr, code) = build_to_tmpdir_and_run(&src, no_auto_parallel);
+    assert_ne!(
+        code, 0,
+        "union read-back must FAIL loud (no_auto_parallel={no_auto_parallel}); a silent \
+         compile-and-run means union values now flow through the persist choke points \
+         unmarshalled — solve union marshalling (or land the loud-reject gate) before \
+         making this pass; stdout:\n{stdout}"
+    );
+    assert_eq!(
+        stdout, "",
+        "union read-back must produce NO output (no_auto_parallel={no_auto_parallel})"
+    );
+}
+
+// WHY: sweep pins 6 and 7 — the union-persist KNOWN HOLE (step-5 item (d)). Union repr is
+// non-uniform (tagged struct vs NULL for none), so value_to_stable_bits has no correct blind
+// clone; the write side is constructible but read-back ICEs LOUD (no binary → no end-to-end
+// silent wrong). Today's ICE or a future clean loud-reject both satisfy; ONLY a silent
+// compile-and-run fails, forcing the marshalling question to be answered consciously (the
+// loud-reject gate itself is FRAGO-grade — see value_to_stable_bits' KNOWN-HOLE doc).
+// Array side and map-value side (map.set + get read-back) are distinct persist surfaces;
+// each runs in both modes, one named test per mode.
 /// One named test per input class of the `union-persist-refused table` unit; each case is a test the runner names.
 macro_rules! union_persist_refused_table_high_case {
-    ($($case_name:ident => $case_body:block)+) => { $(
+    ($($case_name:ident => ($fixture_name:literal, $no_auto_parallel:literal))+) => { $(
         // bug: a union stored in an array or map compiles and runs silently instead of failing loudly | tier: High
         #[test]
-        fn $case_name() $case_body
+        fn $case_name() {
+            assert_union_readback_fails_loudly($fixture_name, $no_auto_parallel);
+        }
     )+ };
 }
 
 union_persist_refused_table_high_case! {
-    // case: a union stored in an array compiles and runs silently instead of failing loudly (known hole pin; second mode dropped: same persist path)
-    m5_p3_sweep_union_readback_blocked_array => {
-    // WHY: sweep pin 6 — the union-persist KNOWN HOLE (step-5 item (d)),
-    // array side. Union repr is non-uniform (tagged struct vs NULL for none),
-    // so value_to_stable_bits has no correct blind clone; the write side is
-    // constructible but read-back ICEs LOUD (no binary → no end-to-end silent
-    // wrong). Pin: build/run FAILS (exit != 0, stdout empty) in BOTH modes.
-    // Today's ICE or a future clean loud-reject both satisfy; ONLY a silent
-    // compile-and-run fails this pin, forcing the marshalling question to be
-    // answered consciously (the loud-reject gate itself is FRAGO-grade — see
-    // value_to_stable_bits' KNOWN-HOLE doc).
-    let src = fixture("m5_p3_sweep_union_readback_blocked_array.ynz");
-    for no_auto_parallel in [false, true] {
-        let (stdout, _stderr, code) = build_to_tmpdir_and_run(&src, no_auto_parallel);
-        assert_ne!(
-            code, 0,
-            "union array read-back must FAIL loud (no_auto_parallel={no_auto_parallel}); a \
-             silent compile-and-run means union values now flow through the persist choke \
-             points unmarshalled — solve union marshalling (or land the loud-reject gate) \
-             before making this pass; stdout:\n{stdout}"
-        );
-        assert_eq!(
-            stdout, "",
-            "union array read-back must produce NO output (no_auto_parallel={no_auto_parallel})"
-        );
-    }
-    }
-    // case: a union stored as a map value compiles and runs silently instead of failing loudly (known hole pin)
-    m5_p3_sweep_union_readback_blocked_map => {
-    // WHY: sweep pin 7 — the union-persist KNOWN HOLE, map-value side (same
-    // rationale as the array sibling above; distinct persist surface —
-    // map.set + get read-back).
-    let src = fixture("m5_p3_sweep_union_readback_blocked_map.ynz");
-    for no_auto_parallel in [false, true] {
-        let (stdout, _stderr, code) = build_to_tmpdir_and_run(&src, no_auto_parallel);
-        assert_ne!(
-            code, 0,
-            "union map read-back must FAIL loud (no_auto_parallel={no_auto_parallel}); a \
-             silent compile-and-run means union values now flow through the persist choke \
-             points unmarshalled — solve union marshalling (or land the loud-reject gate) \
-             before making this pass; stdout:\n{stdout}"
-        );
-        assert_eq!(
-            stdout, "",
-            "union map read-back must produce NO output (no_auto_parallel={no_auto_parallel})"
-        );
-    }
-    }
+    m5_p3_sweep_union_readback_blocked_array_default => ("m5_p3_sweep_union_readback_blocked_array.ynz", false)
+    m5_p3_sweep_union_readback_blocked_array_no_auto_parallel => ("m5_p3_sweep_union_readback_blocked_array.ynz", true)
+    m5_p3_sweep_union_readback_blocked_map_default => ("m5_p3_sweep_union_readback_blocked_map.ynz", false)
+    m5_p3_sweep_union_readback_blocked_map_no_auto_parallel => ("m5_p3_sweep_union_readback_blocked_map.ynz", true)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
