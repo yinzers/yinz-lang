@@ -36958,44 +36958,41 @@ mod tests {
         }
     }
 
-    // Survives as a private-function test (`build_cpu_group_slots`): the offsets are an ABI contract
-    // with the runtime drop-shim `cleanup_spike_cpu_handles`, which reads handle slots at 32/40, so
-    // the numbers must be pinned independently of the code; no public query exposes them alone. A
-    // zero-member group (a non-promoted function reserves nothing) is guarded by the codegen goldens
-    // (frames stay byte-identical), so its two trivial cases are deleted.
-    // bug: the two-member CPU group's handle/result offsets drift from the runtime drop-shim's ABI (handles @ 32/40, results @ 48/64), silently mis-offsetting the join result or the freed handle (corpse-class corruption) | tier: High
-    #[test]
-    fn the_two_member_group_places_handles_and_results_at_the_abi_offsets() {
-        let slots = build_cpu_group_slots(2);
-        assert_eq!(
-            slots,
-            vec![
-                CpuGroupSlot {
-                    group_id: 0,
-                    member_index: 0,
-                    handle_offset: 32,
-                    result_offset: 48,
-                },
-                CpuGroupSlot {
-                    group_id: 0,
-                    member_index: 1,
-                    handle_offset: 40,
-                    result_offset: 64,
-                },
-            ],
-            "two-member CPU group must place handles @ 32/40 and results @ 48/64"
-        );
+    /// One named test per member count so the runner names the failing case. The offsets are an ABI
+    /// contract with the runtime drop-shim `cleanup_spike_cpu_handles`, which reads handle slots at
+    /// 32/40, so the numbers are pinned independently of the code.
+    macro_rules! cpu_group_offsets_case {
+        ($test_name:ident, members: $members:expr, offsets: [$(($handle:expr, $result:expr)),+]) => {
+            // Survives as a private-function test (`build_cpu_group_slots`): no public query exposes the offsets alone. A zero-member group (a non-promoted function reserves nothing) is guarded by the codegen goldens (frames stay byte-identical), so its two trivial cases are deleted.
+            // bug: a CPU group's handle/result offsets drift from the runtime drop-shim's ABI (two members: handles @ 32/40, results @ 48/64), or with three members the handle and result regions interleave, so a join result is mis-offset, a result lands on another member's handle, or a freed handle is the wrong slot (corpse-class corruption) | tier: High
+            #[test]
+            fn $test_name() {
+                let expected_offsets: Vec<(u64, u64)> = vec![$(($handle, $result)),+];
+                let expected: Vec<CpuGroupSlot> = expected_offsets
+                    .into_iter()
+                    .enumerate()
+                    .map(|(member_index, (handle_offset, result_offset))| CpuGroupSlot {
+                        group_id: 0,
+                        member_index,
+                        handle_offset,
+                        result_offset,
+                    })
+                    .collect();
+                assert_eq!(build_cpu_group_slots($members), expected);
+            }
+        };
     }
 
-    // bug: with three members the handle and result regions interleave instead of grouping (handles 32/40/48 then results 56/72/88), so a member's result lands on another's handle | tier: High
-    #[test]
-    fn three_members_keep_all_handles_before_all_results() {
-        let slots = build_cpu_group_slots(3);
-        let handle_offsets: Vec<u64> = slots.iter().map(|slot| slot.handle_offset).collect();
-        let result_offsets: Vec<u64> = slots.iter().map(|slot| slot.result_offset).collect();
-        assert_eq!(handle_offsets, vec![32, 40, 48]);
-        assert_eq!(result_offsets, vec![56, 72, 88]);
-    }
+    cpu_group_offsets_case!(
+        the_two_member_group_places_handles_and_results_at_the_abi_offsets,
+        members: 2,
+        offsets: [(32, 48), (40, 64)]
+    );
+    cpu_group_offsets_case!(
+        three_members_keep_all_handles_before_all_results,
+        members: 3,
+        offsets: [(32, 56), (40, 72), (48, 88)]
+    );
 
     // bug: an off-by-one in the reserved slot count (header to 80 = 6 eight-byte slots for two members) aliases a crossing-local slot onto a result slot: a silent wrong join value after a suspension | tier: High
     #[test]
