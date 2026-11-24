@@ -16,10 +16,11 @@ totals="$(cat "$@" | awk '
       if ($field == "passed;") passed += $(field - 1)
       if ($field == "failed;") failed += $(field - 1)
       if ($field == "ignored;") ignored += $(field - 1)
+      if ($field == "filtered") filtered += $(field - 1)
     }
     suites++
   }
-  END { printf "%d passed, %d failed, %d ignored across %d test suites", passed, failed, ignored, suites }')"
+  END { printf "%d passed, %d failed, %d ignored, %d filtered out across %d test suites", passed, failed, ignored, filtered, suites }')"
 
 echo "TEST TOTALS: ${totals}"
 echo "::notice title=test totals::${totals}"
