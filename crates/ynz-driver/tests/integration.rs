@@ -6406,6 +6406,22 @@ cpu_group_fires_table_high_case! {
         "9907",
     );
     }
+    // case: a suspending host that shares a module with a promoted pure-CPU host declines (2 spawns not 4) or leaks its frame
+    v03_m3g_mixed_host_with_promoted_sibling_fires_both_hosts_byte_identical => {
+    // WHY (v0.3-M3g Phase 3 FLIP): `pureCpuHost` is an ordinary, legitimately-promoted CPU host
+    // (no suspension); `mixedHost` is a suspending host (`wait sleep(0)`) that ALSO owns its own
+    // top-level CPU group, co-resident in a module with the promoted host. Both hosts admit and
+    // fire independently — `pureCpuHost`'s 2 spawns and `mixedHost`'s 2 spawns, 4 total.
+    // Invariant: exactly 4 spawns total, byte-identical to `--no-auto-parallel`, alloc == free.
+    // If this shows 2 spawns, `mixedHost` regressed back to declining; 0 spawns means BOTH
+    // stopped firing. Same assertions as the helper's fire-N check; the fixture file keeps its
+    // historical `_declines` name.
+    m3d_assert_fires_n_byte_identical_alloc_free(
+        "v0_3_m3g_mixed_host_with_promoted_sibling_declines.ynz",
+        "9907\n9911",
+        4,
+    );
+    }
     // case: a bare `sleep(0)` (no `wait`) host is not recognised as suspending so its CPU group misbehaves
     v03_m3g_top_level_group_in_suspending_host_bare_intrinsic_declines_byte_identical => {
     // WHY (v0.3-M3g Phase 3 FLIP, bare-intrinsic twin of the fixture above; test name retained
