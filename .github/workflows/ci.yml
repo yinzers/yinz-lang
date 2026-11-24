@@ -180,7 +180,9 @@ jobs:
         run: cargo build -p ynz-runtime
 
       - name: Archive test binaries
-        run: cargo nextest archive --workspace --archive-file nextest-archive.tar.zst
+        # `--profile ci` adds target/debug/libynz_runtime.a to the archive (see
+        # .config/nextest.toml): the ASan harness links it into programs at test run time.
+        run: cargo nextest archive --workspace --profile ci --archive-file nextest-archive.tar.zst
 
       - name: Upload archive
         uses: actions/upload-artifact@v4
@@ -234,10 +236,16 @@ jobs:
           echo "--- PSI at start"; grep -H . /proc/pressure/cpu /proc/pressure/io /proc/pressure/memory || echo "PSI unavailable"
           nohup vmstat -w -n 5 > vmstat.log 2>&1 &
 
+      # `--extract-to .` puts the archive's target/ back at <checkout>/target, the same absolute
+      # path the archive job built at. Some tests read files by a path baked in at compile time
+      # (YNZ_RT_LIB_PATH = <checkout>/target/debug/libynz_runtime.a), which a temp-dir extract
+      # would leave empty. `--failure-output immediate-final` prints a failing test's output in
+      # this job's log, where the log reader needs it.
       - name: Run partition
         run: |
-          cargo nextest run --archive-file nextest-archive.tar.zst --workspace-remap . \
-            --partition count:${{ matrix.partition }}/4 --profile ci
+          cargo nextest run --archive-file nextest-archive.tar.zst --extract-to . --extract-overwrite \
+            --workspace-remap . --partition count:${{ matrix.partition }}/4 --profile ci \
+            --failure-output immediate-final
 
       - name: Sample resources (summary)
         if: always()

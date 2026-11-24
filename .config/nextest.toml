@@ -13,6 +13,15 @@ fail-fast = false
 # ceiling is about 10x the slowest observed test. It only catches deadlocks.
 slow-timeout = { period = "600s", terminate-after = 12 }
 
+# ynz-driver's ASan harness and optimizer_red_gate hand `libynz_runtime.a` to clang at TEST RUN
+# time, by the absolute path build.rs baked in (YNZ_RT_LIB_PATH = <workspace>/target/debug/...).
+# The runtime is a dependency artifact, not a test binary, so `nextest archive` does not
+# include it by default and a partition job fails every such test at once.
+[[profile.ci.archive.include]]
+path = "debug/libynz_runtime.a"
+relative-to = "target"
+on-missing = "error"
+
 [profile.ci.junit]
 # Written to target/nextest/ci/junit.xml; uploaded as an artifact by the CI job.
 path = "junit.xml"
