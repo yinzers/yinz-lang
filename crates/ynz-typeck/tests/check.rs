@@ -6,7 +6,7 @@
 // through the same table (`run_project`, `run_kernel`, `run_kernel_project`); the re-check of a
 // program after an edit is its own table, `recheck_cases!`.
 
-use ynz_diagnostics::{Diagnostic, Severity};
+use ynz_diagnostics::{Diagnostic, DiagnosticKind, Severity};
 use ynz_parser::{CompilerDb, SourceFile};
 use ynz_typeck::check_with_kernel_mode;
 use ynz_typeck::{check_query, CheckOutput, Type};
@@ -176,6 +176,18 @@ fn assert_error_count(output: &CheckOutput, expected_count: usize) {
     );
 }
 
+/// The program has exactly one error and it carries `expected_kind`: the rule that refused it, not
+/// only that something did.
+fn assert_one_error_of_kind(output: &CheckOutput, expected_kind: DiagnosticKind) {
+    assert_error_count(output, 1);
+    let errors = error_diagnostics(output);
+    assert_eq!(
+        errors[0].kind,
+        Some(expected_kind.clone()),
+        "expected {expected_kind:?}; got: {errors:#?}"
+    );
+}
+
 /// The program is clean and typeck recorded `expected_type` for one of its expressions: type
 /// inference ran and stored its results, it did not merely stay silent.
 fn assert_infers(output: &CheckOutput, expected_type: Type) {
@@ -200,13 +212,16 @@ macro_rules! check_expectation {
     ($output:expr, (errors $count:literal)) => {
         assert_error_count(&$output, $count)
     };
+    ($output:expr, (one_error_of_kind $kind:expr)) => {
+        assert_one_error_of_kind(&$output, $kind)
+    };
     ($output:expr, (infers $inferred:expr)) => {
         assert_infers(&$output, $inferred)
     };
 }
 
 /// One named test per program: `check_cases!(name: run(source) => clean;)` (or `rejected`,
-/// `(errors N)`, `(infers Type)`); the output may come from `run`, `run_kernel`, `run_project`
+/// `(errors N)`, `(one_error_of_kind Kind)`, `(infers Type)`); the output may come from `run`, `run_kernel`, `run_project`
 /// or `run_kernel_project`.
 macro_rules! check_cases {
     ($($case:ident: $output:expr => $expected:tt;)+) => {
@@ -1302,6 +1317,45 @@ function entrypoint() -> Nothing {
   }
 }
 "#) => clean;
+    suggestions_read_inside_a_failed_check_is_refused: run(r#"
+function compute() -> Int errors {
+  return 42
+}
+
+function entrypoint() -> Nothing {
+  let x = compute()
+  if (x.failed()) {
+    const sug = x.suggestions
+    print(sug)
+  }
+}
+"#) => (one_error_of_kind DiagnosticKind::EcFieldNotYetAvailable);
+    trace_read_inside_a_failed_check_is_refused: run(r#"
+function compute() -> Int errors {
+  return 42
+}
+
+function entrypoint() -> Nothing {
+  let x = compute()
+  if (x.failed()) {
+    const t = x.trace
+    print(t)
+  }
+}
+"#) => (one_error_of_kind DiagnosticKind::EcFieldNotYetAvailable);
+    source_read_inside_a_failed_check_is_refused: run(r#"
+function compute() -> Int errors {
+  return 42
+}
+
+function entrypoint() -> Nothing {
+  let x = compute()
+  if (x.failed()) {
+    const src = x.source
+    print(src)
+  }
+}
+"#) => (one_error_of_kind DiagnosticKind::EcFieldNotYetAvailable);
     or_after_a_failed_guard_is_clean: run(r#"
 function compute() -> Int errors {
   return 42
