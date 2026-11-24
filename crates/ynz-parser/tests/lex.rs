@@ -11,6 +11,9 @@
 //   * `snapshot_cases!`   whole programs against insta snapshots (a different harness
 //                         from the inline-expected table above, hence its own macro)
 
+mod common;
+
+use common::{AtLeast, ExpectedDiagnosticCount};
 use insta::assert_debug_snapshot;
 use ynz_diagnostics::DiagnosticBucket;
 use ynz_parser::{lex_query, CompilerDb, SourceFile, Token};
@@ -29,26 +32,6 @@ fn lex_with_diags(source: &str) -> (Vec<Token>, DiagnosticBucket) {
         .map(|spanned| spanned.value.clone())
         .collect();
     (tokens, output.diagnostics.clone())
-}
-
-/// How many diagnostics a case expects: a plain number means exactly that many.
-trait ExpectedDiagnosticCount {
-    fn accepts(&self, actual: usize) -> bool;
-}
-
-impl ExpectedDiagnosticCount for usize {
-    fn accepts(&self, actual: usize) -> bool {
-        actual == *self
-    }
-}
-
-/// At least this many diagnostics; for inputs whose exact count is incidental.
-struct AtLeast(usize);
-
-impl ExpectedDiagnosticCount for AtLeast {
-    fn accepts(&self, actual: usize) -> bool {
-        actual >= self.0
-    }
 }
 
 fn doc_comment(content: &str, break_after: bool) -> Token {
