@@ -142,8 +142,6 @@ fn main_loop(connection: &Connection, state: &mut ServerState) {
 }
 
 /// Whether a dispatched request/notification completed normally or was caught mid-panic.
-/// Returned so tests can assert on the isolation outcome directly, instead of re-deriving
-/// it from side effects (the response sent, or lack of one).
 #[derive(Debug, PartialEq, Eq)]
 enum DispatchOutcome {
     Handled,
@@ -156,10 +154,6 @@ enum DispatchOutcome {
 /// unwinds through the dispatch loop and kills the whole server process — every open
 /// document's state gone. Catch it per-request instead: log it, answer that one request
 /// with an error, and keep serving every other open document.
-///
-/// Extracted out of `main_loop` (rather than inlined in the loop body) so the ISOLATION
-/// MECHANISM ITSELF — not just a hand-rolled `catch_unwind` in a test — is what a test
-/// drives a real request through. See `panic_isolation_tests::dispatch_request_isolates_a_panic_and_keeps_serving`.
 fn dispatch_request(
     connection: &Connection,
     state: &mut ServerState,
@@ -223,16 +217,6 @@ fn panic_payload_message(payload: &Box<dyn std::any::Any + Send>) -> String {
 }
 
 fn handle_request(connection: &Connection, state: &mut ServerState, req: Request) {
-    // Test-only injected panic hook — compiled ONLY under `#[cfg(test)]`, never present
-    // in a production binary. Lets `dispatch_request`'s panic-isolation test drive a
-    // REAL panic through the ACTUAL dispatch path (this function), instead of
-    // re-deriving the isolation behavior with a standalone `catch_unwind` that never
-    // touches `handle_request` at all — mirrors the `__testFallibleAsync` internal-only
-    // intrinsic precedent in `ynz-typeck`.
-    #[cfg(test)]
-    if req.method == "$/ynzTestPanicHook" {
-        panic!("synthetic ICE — proves dispatch_request's catch_unwind isolates this");
-    }
     if req.method == Shutdown::METHOD {
         state.shutdown_requested = true;
         let response = Response::new_ok(req.id, serde_json::Value::Null);
