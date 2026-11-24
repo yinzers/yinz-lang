@@ -128,9 +128,35 @@ fn keyword_has_no_definition() -> Scenario {
     }
 }
 
+fn whitespace_has_no_definition() -> Scenario {
+    let src = "function entrypoint() -> Nothing {   }\n";
+    let (state, uri) = state_single("/tmp/ynz_gotodef_ws.ynz", src);
+    // Inside the braces, on the spaces.
+    Scenario {
+        state,
+        cursor_uri: uri,
+        cursor: lsp_types::Position {
+            line: 0,
+            character: 35,
+        },
+        expected_definition: None,
+    }
+}
+
+fn integer_literal_has_no_definition() -> Scenario {
+    let src = "function entrypoint() -> Nothing {\n  let x = 42\n}\n";
+    let (state, uri) = state_single("/tmp/ynz_gotodef_int.ynz", src);
+    Scenario {
+        state,
+        cursor_uri: uri,
+        cursor: position_at(src, "42"),
+        expected_definition: None,
+    }
+}
+
 macro_rules! definition_case {
     ($name:ident, $scenario:ident) => {
-        // bug: go-to-definition returns no location, the wrong file or the wrong line for a function call, a shape annotation or an imported function, or invents one for a keyword | tier: Medium
+        // bug: go-to-definition returns no location, the wrong file or the wrong line for a function call, a shape annotation or an imported function, or invents one for a keyword, whitespace or a literal | tier: Medium
         #[test]
         fn $name() {
             let scenario = $scenario();
@@ -165,6 +191,14 @@ definition_case!(
 definition_case!(
     keyword_under_cursor_has_no_definition,
     keyword_has_no_definition
+);
+definition_case!(
+    whitespace_under_cursor_has_no_definition,
+    whitespace_has_no_definition
+);
+definition_case!(
+    integer_literal_under_cursor_has_no_definition,
+    integer_literal_has_no_definition
 );
 
 // bug: a cold go-to-definition takes over 100 ms | tier: Medium
