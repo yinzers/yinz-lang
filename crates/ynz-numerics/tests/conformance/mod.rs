@@ -107,6 +107,7 @@ decimal128_value_cases! {
     add_same_sign_integers: "add", "1", Some("1") => "2";
     add_decimal_exactness: "add", "0.1", Some("0.2") => "0.3";
     add_opposite_signs_cancel_to_zero: "add", "-1", Some("1") => "0";
+    add_opposite_signs_cancel_to_zero_at_a_positive_exponent: "add", "1e10", Some("-1e10") => "0";
     add_opposite_signs_with_a_larger_positive_operand: "add", "-1", Some("3") => "2";
     add_operands_with_different_exponents: "add", "1.5", Some("2.25") => "3.75";
     // the fine operand has 34 digits and the coarse one 4: alignment must not drop the fine digits
