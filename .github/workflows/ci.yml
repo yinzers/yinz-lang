@@ -429,16 +429,13 @@ jobs:
       # individually `#[cfg_attr(miri, ignore = "...")]`-gated in source with cited reasons —
       # nothing is silently skipped here. The nightly lane (`nightly_` tests: wall-clock and
       # soak tests) is left out: timing is meaningless under Miri's interpreter, and one of them
-      # alone ran over 20 minutes there. The `also_skip` line is an old-name skip of a test that
-      # lane 7 (#687) renames to `nightly_...`; delete it when that rename lands on main (the
-      # #689 integration merge).
+      # alone ran over 20 minutes there.
       - name: Miri (ynz-runtime ${{ matrix.target.flag }})
         shell: bash
         run: |
           set -euo pipefail
-          also_skip=(--skip string_map_build_plus_lookup_stays_within_constant_factor_of_int_map)
           cargo miri test -p ynz-runtime ${{ matrix.target.flag }} -- \
-            --skip nightly_ "${also_skip[@]}" 2>&1 | tee miri.log
+            --skip nightly_ 2>&1 | tee miri.log
           .github/scripts/sum-test-results.sh miri.log
 
   sanitizers:
