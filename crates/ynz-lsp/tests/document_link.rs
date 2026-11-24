@@ -13,7 +13,7 @@ const IMPORT_FREE_SOURCE: &str = "function entrypoint() -> Nothing { }\n";
 
 macro_rules! document_link_case {
     ($name:ident, $source:expr, $project_root:expr, $expected_link_count:expr) => {
-        // bug: documentLink returns a link for a file without imports or in single-file mode, or none for an import in a project | tier: Medium
+        // bug: documentLink returns a link for a file without imports or in single-file mode, none for an import in a project, or a target URL for a file that does not exist | tier: Medium
         #[test]
         fn $name() {
             let mut state = ServerState::new(PositionEncoding::Utf8);
@@ -24,6 +24,11 @@ macro_rules! document_link_case {
             state.open_document(uri.clone(), $source.to_string());
             let links = document_link_response(&state, &uri);
             assert_eq!(links.len(), $expected_link_count, "got: {links:?}");
+            // No target file exists under the root: a link must not point at a missing file.
+            assert!(
+                links.iter().all(|link| link.target.is_none()),
+                "a link to a missing file must have no target; got: {links:?}"
+            );
         }
     };
 }
