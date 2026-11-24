@@ -75,6 +75,7 @@ fn check_rs_source() -> String {
     std::fs::read_to_string(path).expect("crates/ynz-typeck/src/check.rs is readable")
 }
 
+// bug: a [[diagnostic_template]] names no DiagnosticKind variant and is on no pinned list (or sits on both), so a dead or unclassified template ships unnoticed | tier: Medium
 #[test]
 fn every_template_kind_name_is_classified() {
     let variants: BTreeSet<&str> = DiagnosticKind::TEMPLATE_KIND_NAMES
@@ -187,6 +188,7 @@ fn call_argument_text(src: &str, open: usize) -> String {
     panic!("unbalanced parentheses after byte {open} in check.rs");
 }
 
+// bug: a variant-backed template is rendered by no registry_diag call and is not on the shrinking ratchet, so its emit site hand-writes text that drifts from the registry | tier: Medium
 #[test]
 fn variant_backed_templates_are_rendered_from_the_registry_or_on_the_shrinking_ratchet() {
     let src = check_rs_source();
@@ -285,6 +287,7 @@ fn assert_template_rendered(
     );
 }
 
+// bug: typeck renders Consumed from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
 #[test]
 fn consumed_is_rendered_from_the_registry() {
     assert_rendered(
@@ -299,6 +302,7 @@ fn consumed_is_rendered_from_the_registry() {
     );
 }
 
+// bug: typeck renders Consumed from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
 #[test]
 fn consumed_through_an_alias_class_names_what_was_given_in_the_via_slot() {
     assert_rendered(
@@ -324,6 +328,7 @@ fn consumed_through_an_alias_class_names_what_was_given_in_the_via_slot() {
     );
 }
 
+// bug: typeck renders Consumed from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
 #[test]
 fn an_alias_pair_consumed_by_the_same_call_is_reported_at_the_later_position() {
     // WHY: v0.3-M8 Phase 4 fix round 2 (Producer C1). Every call form infers all arguments
@@ -348,6 +353,11 @@ fn an_alias_pair_consumed_by_the_same_call_is_reported_at_the_later_position() {
             ),
         ],
     );
+}
+
+// bug: typeck renders Consumed from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
+#[test]
+fn a_share_position_reading_what_a_give_position_consumed_is_reported() {
     // The mixed form: a `share` position reading what a `give` position of the same call
     // consumed is the same read after free.
     assert_rendered(
@@ -368,6 +378,11 @@ fn an_alias_pair_consumed_by_the_same_call_is_reported_at_the_later_position() {
             ),
         ],
     );
+}
+
+// bug: typeck renders Consumed from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
+#[test]
+fn the_same_name_given_twice_in_one_call_has_an_empty_via_slot() {
     // The same name twice: `{via}` is empty — it IS the name that was given.
     assert_rendered(
         DiagnosticKind::Consumed,
@@ -380,6 +395,7 @@ fn an_alias_pair_consumed_by_the_same_call_is_reported_at_the_later_position() {
     );
 }
 
+// bug: typeck reports one use-after-give twice (the read at inference and again at the transfer decision), so the user sees a duplicate diagnostic | tier: Low
 #[test]
 fn a_class_consumed_before_the_call_is_not_reported_twice() {
     // `resolve_ident` reports the read at inference; the transfer decision must stay quiet.
@@ -403,6 +419,7 @@ fn a_class_consumed_before_the_call_is_not_reported_twice() {
     );
 }
 
+// bug: typeck renders ConsumedBySend from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
 #[test]
 fn consumed_by_send_is_rendered_from_the_registry_with_the_via_slot() {
     assert_rendered(
@@ -427,6 +444,7 @@ fn consumed_by_send_is_rendered_from_the_registry_with_the_via_slot() {
     );
 }
 
+// bug: typeck renders ConsumedByStore from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
 #[test]
 fn consumed_by_store_is_rendered_from_the_registry() {
     assert_rendered(
@@ -447,6 +465,7 @@ fn consumed_by_store_is_rendered_from_the_registry() {
     );
 }
 
+// bug: typeck renders ConsumedByStore from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
 #[test]
 fn consumed_by_store_through_a_class_mate_names_what_was_stored_in_the_via_slot() {
     assert_rendered(
@@ -472,6 +491,7 @@ fn consumed_by_store_through_a_class_mate_names_what_was_stored_in_the_via_slot(
     );
 }
 
+// bug: typeck renders ParamNeedsGive from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
 #[test]
 fn param_needs_give_is_rendered_from_the_registry() {
     assert_rendered(
@@ -491,6 +511,7 @@ fn param_needs_give_is_rendered_from_the_registry() {
     );
 }
 
+// bug: typeck renders TransferNeedsCopy from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
 #[test]
 fn transfer_needs_copy_is_rendered_from_the_registry() {
     assert_rendered(
@@ -511,6 +532,7 @@ fn transfer_needs_copy_is_rendered_from_the_registry() {
     );
 }
 
+// bug: typeck renders HandleChannelArgNeedsBinding from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
 #[test]
 fn handle_channel_arg_needs_binding_is_rendered_from_the_registry() {
     assert_rendered(
@@ -532,6 +554,7 @@ fn handle_channel_arg_needs_binding_is_rendered_from_the_registry() {
     );
 }
 
+// bug: typeck renders MessageBeforeFailedCheck from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
 #[test]
 fn message_before_failed_check_is_rendered_from_the_registry() {
     // WHY: v0.3-M8 Phase 4 fix round 3, Producer A — `.message` read on an errors-capable
@@ -550,6 +573,7 @@ fn message_before_failed_check_is_rendered_from_the_registry() {
     );
 }
 
+// bug: typeck refuses a `.message` read inside the true branch of its own `.failed()` check, so a correct program is rejected | tier: High
 #[test]
 fn message_is_admitted_inside_its_own_failed_check() {
     // The one shape REF-errors.md documents as legal: `.message` read INSIDE the true
@@ -573,6 +597,7 @@ fn message_is_admitted_inside_its_own_failed_check() {
     );
 }
 
+// bug: typeck lets a shadowing `let x` inside a `.failed()` guard inherit the outer binding's checked status, so an unchecked `.message` read compiles and prints an empty string at run time | tier: High
 #[test]
 fn message_before_failed_check_fires_on_a_shadowed_rebinding_inside_the_guard() {
     // WHY: v0.3 concurrency hardening Phase 3 (FRAGO 002 cluster C3, closes parked 33). RED
@@ -596,6 +621,7 @@ fn message_before_failed_check_fires_on_a_shadowed_rebinding_inside_the_guard() 
     );
 }
 
+// bug: a for-destructure binding that shadows a `.failed()`-checked name disturbs the checked set, so the outer binding's `.message` read after the loop is refused | tier: High
 #[test]
 fn a_for_destructure_binding_shadows_by_identity_not_just_by_type_mismatch() {
     // WHY: the plan's own note — `for ((k, v) in m)` desugars its destructure names to
@@ -634,6 +660,7 @@ fn a_for_destructure_binding_shadows_by_identity_not_just_by_type_mismatch() {
     );
 }
 
+// bug: typeck forgets the outer binding's checked status once an inner shadow's block exits, so a correct `.message` read is refused | tier: High
 #[test]
 fn message_is_still_admitted_for_the_outer_binding_after_a_shadow_pops() {
     // WHY: the fix must not overcorrect — after the shadowing inner block exits and its
@@ -660,6 +687,7 @@ fn message_is_still_admitted_for_the_outer_binding_after_a_shadow_pops() {
     );
 }
 
+// bug: typeck renders EcFieldNotYetAvailable from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
 #[test]
 fn ec_field_not_yet_available_is_rendered_from_the_registry() {
     // WHY: v0.3 concurrency hardening Phase 3 (FRAGO 002 singleton S1, closes parked 34). RED
@@ -681,8 +709,9 @@ fn ec_field_not_yet_available_is_rendered_from_the_registry() {
     );
 }
 
+// bug: typeck renders EcFieldNotYetAvailable from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
 #[test]
-fn ec_field_not_yet_available_fires_for_suggestions_and_source_too() {
+fn ec_field_not_yet_available_fires_for_suggestions() {
     // WHY: same producer as `.trace` above — all three refused fields share ONE table
     // (`ynz_typeck::errors_fields::ec_field_lowering`). One example each closes the class
     // rather than leaving `.suggestions`/`.source` unverified.
@@ -697,6 +726,11 @@ fn ec_field_not_yet_available_fires_for_suggestions_and_source_too() {
          }",
         &[("field", "suggestions")],
     );
+}
+
+// bug: typeck renders EcFieldNotYetAvailable from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
+#[test]
+fn ec_field_not_yet_available_fires_for_source() {
     assert_rendered(
         DiagnosticKind::EcFieldNotYetAvailable,
         "function loadConfig() -> String errors { return `hello` }\n\
@@ -710,6 +744,7 @@ fn ec_field_not_yet_available_fires_for_suggestions_and_source_too() {
     );
 }
 
+// bug: typeck renders MessageBeforeFailedCheck from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
 #[test]
 fn ec_field_not_yet_available_does_not_shadow_the_failed_check_gate() {
     // WHY: ordering matters — an UNCHECKED read of `.trace` must still get
@@ -727,6 +762,7 @@ fn ec_field_not_yet_available_does_not_shadow_the_failed_check_gate() {
     );
 }
 
+// bug: typeck admits a `.message` read on a receiver that was never bound to a name, so an unchecked error value is read | tier: High
 #[test]
 fn message_before_failed_check_refuses_a_non_ident_receiver() {
     // A `.message` read on a receiver that was never bound to a name can never have been
@@ -742,6 +778,7 @@ fn message_before_failed_check_refuses_a_non_ident_receiver() {
     );
 }
 
+// bug: typeck renders UnionWhereVariantExpected from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
 #[test]
 fn union_where_variant_expected_is_rendered_from_the_registry() {
     // WHY: v0.3-M9 C1b — a union reaching a variant slot used to compile and crash; its refusal
@@ -816,6 +853,7 @@ fn assert_recovery_rendered(template_name: &str, source: &str, slots: &[(&str, &
     assert_eq!(hit.kind, Some(DiagnosticKind::UnionWhereVariantExpected));
 }
 
+// bug: the WHAT-INSTEAD of UnionWhereVariantExpected names code that does not compile, so typeck teaches a fix it refuses | tier: Low
 #[test]
 fn union_where_variant_expected_base_suggestion_compiles() {
     // The `is` arm on the name, with the other variant handled, is what the base text suggests.
@@ -835,6 +873,7 @@ fn union_where_variant_expected_base_suggestion_compiles() {
     );
 }
 
+// bug: typeck renders UnionWhereVariantExpectedNameIt from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
 #[test]
 fn union_where_variant_expected_for_a_field_read_asks_for_a_name_first() {
     // `holder.inner` is an expression: an `is` arm checks a named binding only.
@@ -858,6 +897,11 @@ fn union_where_variant_expected_for_a_field_read_asks_for_a_name_first() {
             ("needs", "`showBig` expects a `Big` here"),
         ],
     );
+}
+
+// bug: the WHAT-INSTEAD of None names code that does not compile, so typeck teaches a fix it refuses | tier: Low
+#[test]
+fn union_where_variant_expected_for_a_field_read_suggestion_compiles() {
     // The suggested code: name it, check the name, use it in the arm.
     assert_compiles(
         "shape Tiny { flag: Boolean }\n\
@@ -878,20 +922,22 @@ fn union_where_variant_expected_for_a_field_read_asks_for_a_name_first() {
     );
 }
 
+const MAP_UNION_SOURCE: &str =
+    "function takesTable(share table: Map<String, String>) -> String { return `ok` }\n\
+     function entrypoint() -> Nothing {\n\
+       let table: Map<String, String> = { `a`: `b` }\n\
+       let maybeTable: Map<String, String> | Nothing = table\n\
+       print(takesTable(maybeTable))\n\
+     }";
+
+// bug: typeck renders UnionWhereVariantExpectedNoIsArm from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
 #[test]
 fn union_where_variant_expected_for_a_union_with_no_shape_variant_suggests_no_is_arm() {
     // `Map<String, String> | Nothing` is the map's own pointer: no `is` arm can name `Map<..>`
     // (it does not even parse), and there is no tag box for the WHY to describe.
-    let source =
-        "function takesTable(share table: Map<String, String>) -> String { return `ok` }\n\
-         function entrypoint() -> Nothing {\n\
-           let table: Map<String, String> = { `a`: `b` }\n\
-           let maybeTable: Map<String, String> | Nothing = table\n\
-           print(takesTable(maybeTable))\n\
-         }";
     assert_recovery_rendered(
         "UnionWhereVariantExpectedNoIsArm",
-        source,
+        MAP_UNION_SOURCE,
         &[
             ("value", "maybeTable"),
             ("union", "Map<String, String> | Nothing"),
@@ -900,11 +946,21 @@ fn union_where_variant_expected_for_a_union_with_no_shape_variant_suggests_no_is
             ("others", "`Nothing`"),
         ],
     );
-    let diagnostic = errors_for(source).remove(0);
+}
+
+// bug: typeck suggests an `is` arm or describes a tag box for a raw-pointer union that has neither, so the user is taught code that does not parse | tier: Low
+#[test]
+fn a_raw_pointer_union_suggestion_names_no_is_arm_and_no_tag_box() {
+    let diagnostic = errors_for(MAP_UNION_SOURCE).remove(0);
     assert!(
         !diagnostic.what_instead.contains("if (maybeTable)") && !diagnostic.why.contains("a box"),
         "a raw-pointer union has no `is` arm to suggest and no tag box to describe: {diagnostic:?}"
     );
+}
+
+// bug: the WHAT-INSTEAD of UnionWhereVariantExpectedNoIsArm names code that does not compile, so typeck teaches a fix it refuses | tier: Low
+#[test]
+fn a_raw_pointer_union_suggestion_compiles() {
     // The suggested code: let the receiving slot take the union.
     assert_compiles(
         "function describeTable(share table: Map<String, String> | Nothing) -> String { return `ok` }\n\
@@ -916,17 +972,19 @@ fn union_where_variant_expected_for_a_union_with_no_shape_variant_suggests_no_is
     );
 }
 
+const INT_UNION_SOURCE: &str = "function takesInt(share number: Int) -> Int { return number }\n\
+     function entrypoint() -> Nothing {\n\
+       let v: Int | String = 5\n\
+       print(takesInt(v).toString())\n\
+     }";
+
+// bug: typeck renders UnionWhereVariantExpectedNoIsArm from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
 #[test]
 fn union_where_variant_expected_for_a_non_shape_variant_suggests_no_is_arm() {
     // `is Int =>` does not lower (#418): the suggestion must not name it.
-    let source = "function takesInt(share number: Int) -> Int { return number }\n\
-         function entrypoint() -> Nothing {\n\
-           let v: Int | String = 5\n\
-           print(takesInt(v).toString())\n\
-         }";
     assert_recovery_rendered(
         "UnionWhereVariantExpectedNoIsArm",
-        source,
+        INT_UNION_SOURCE,
         &[
             ("value", "v"),
             ("union", "Int | String"),
@@ -935,15 +993,26 @@ fn union_where_variant_expected_for_a_non_shape_variant_suggests_no_is_arm() {
             ("others", "`String`"),
         ],
     );
-    let diagnostic = errors_for(source).remove(0);
+}
+
+// bug: typeck suggests `is Int` or handling an `Int` variant in a receiving slot, so the user is taught code that does not lower | tier: Low
+#[test]
+fn a_non_shape_variant_suggestion_names_no_is_arm() {
+    let diagnostic = errors_for(INT_UNION_SOURCE).remove(0);
     assert!(
         !diagnostic.what_instead.contains("is Int")
             && !diagnostic.what_instead.contains("handle each variant"),
         "no `is Int` arm exists to suggest, and a receiving slot cannot handle an `Int` variant: {diagnostic:?}"
     );
+}
+
+// bug: the caret label of UnionWhereVariantExpected tells the reader to `is`-check a value that no `is` arm can hand over | tier: Low
+#[test]
+fn the_caret_label_of_a_non_shape_variant_names_no_is_check() {
     // The caret label comes from the kind alone and is shown for every recovery, so it must not
     // tell the reader to `is`-check a value that no `is` arm can hand over (it printed
     // "check it with `is` first" under this very diagnostic).
+    let diagnostic = errors_for(INT_UNION_SOURCE).remove(0);
     let caret_label = diagnostic
         .kind
         .as_ref()
@@ -953,6 +1022,11 @@ fn union_where_variant_expected_for_a_non_shape_variant_suggests_no_is_arm() {
         !caret_label.contains("`is`"),
         "the caret label names an `is` check no arm can offer here: {caret_label:?}"
     );
+}
+
+// bug: the WHAT-INSTEAD of UnionWhereVariantExpectedNoIsArm names code that does not compile, so typeck teaches a fix it refuses | tier: Low
+#[test]
+fn a_non_shape_variant_suggestion_compiles() {
     assert_compiles(
         "function takesEither(share either: Int | String) -> String { return `ok` }\n\
          function entrypoint() -> Nothing {\n\
@@ -967,6 +1041,7 @@ fn union_where_variant_expected_for_a_non_shape_variant_suggests_no_is_arm() {
 // renders its template from the registry and compiles the code its WHAT-INSTEAD names (Golden
 // Rule 3).
 
+// bug: typeck renders UnionVariantNotStorable from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
 #[test]
 fn a_variant_the_union_box_cannot_hold_is_refused_with_its_registry_text() {
     // WHY: `Circle | Number` passed typeck and died in codegen as "a compiler bug".
@@ -986,6 +1061,11 @@ fn a_variant_the_union_box_cannot_hold_is_refused_with_its_registry_text() {
             ("variant", "Number"),
         ],
     );
+}
+
+// bug: the WHAT-INSTEAD of UnionVariantNotStorable names code that does not compile, so typeck teaches a fix it refuses | tier: Low
+#[test]
+fn a_variant_the_union_box_cannot_hold_suggestion_compiles() {
     // The suggested code: the number in a shape, the shape as the variant.
     assert_compiles(
         "shape Circle { radius: Int }\n\
@@ -999,6 +1079,7 @@ fn a_variant_the_union_box_cannot_hold_is_refused_with_its_registry_text() {
     );
 }
 
+// bug: typeck renders UnionVariantNotStorableNumberPrecision from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
 #[test]
 fn a_shorter_number_in_a_wider_number_variant_is_refused_with_its_registry_text() {
     // WHY: typeck assigns `Number<10>` to `Number<40>`, and the union box stored the narrow
@@ -1019,6 +1100,11 @@ fn a_shorter_number_in_a_wider_number_variant_is_refused_with_its_registry_text(
             ("variant", "Number<40>"),
         ],
     );
+}
+
+// bug: the WHAT-INSTEAD of UnionVariantNotStorable names code that does not compile, so typeck teaches a fix it refuses | tier: Low
+#[test]
+fn a_shorter_number_in_a_wider_number_variant_suggestion_compiles() {
     assert_compiles(
         "shape Circle { radius: Int }\n\
          function describe(share value: Circle | Number<40>) -> String { return `ok` }\n\
@@ -1029,67 +1115,96 @@ fn a_shorter_number_in_a_wider_number_variant_is_refused_with_its_registry_text(
     );
 }
 
-#[test]
-fn a_suspending_result_into_a_union_let_is_refused_with_its_registry_text() {
-    // WHY: `let m: Mixed = wait count()` bound the raw int as the union's pointer and the first
-    // `is` check read its tag through address 0x4.
-    let program = |bind: &str| {
-        format!(
-            "shape Circle {{ name: String }}\n\
+fn suspending_union_let_program(bind: &str) -> String {
+    format!(
+        "shape Circle {{ name: String }}\n\
              shape Mixed = Circle | Int\n\
              function count() -> Int {{ wait sleep(1)\n return 4 }}\n\
              function entrypoint() -> Nothing {{\n\
                {bind}\n\
              }}"
-        )
-    };
+    )
+}
+
+// bug: typeck renders SuspendingResultIntoUnionLet from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
+#[test]
+fn a_suspending_result_into_a_union_let_is_refused_with_its_registry_text() {
+    // WHY: `let m: Mixed = wait count()` bound the raw int as the union's pointer and the first
+    // `is` check read its tag through address 0x4.
     assert_rendered(
         DiagnosticKind::SuspendingResultIntoUnionLet,
-        &program("let m: Mixed = wait count()"),
+        &suspending_union_let_program("let m: Mixed = wait count()"),
         &[
             ("name", "m"),
             ("call", "wait count()"),
             ("union", "Circle | Int"),
         ],
     );
-    assert_compiles(&program(
+}
+
+// bug: the WHAT-INSTEAD of SuspendingResultIntoUnionLet names code that does not compile, so typeck teaches a fix it refuses | tier: Low
+#[test]
+fn a_suspending_result_into_a_union_let_suggestion_compiles() {
+    assert_compiles(&suspending_union_let_program(
         "let got = wait count()\n let m: Circle | Int = got",
     ));
 }
 
-#[test]
-fn a_suspending_result_returned_as_a_union_is_refused_with_its_registry_text() {
-    // WHY: `return wait count()` from a union-returning pausing function stored the raw int in the
-    // return slot; the compiler then panicked instead of teaching the recovery.
-    let program = |returned: &str| {
-        format!(
-            "shape Circle {{ name: String }}\n\
+fn suspending_union_return_program(returned: &str) -> String {
+    format!(
+        "shape Circle {{ name: String }}\n\
              shape Mixed = Circle | Int\n\
              function count() -> Int {{ wait sleep(1)\n return 4 }}\n\
              function pick() -> Mixed {{ wait sleep(1)\n {returned} }}\n\
              function entrypoint() -> Nothing {{\n\
                let m = pick()\n\
              }}"
-        )
-    };
+    )
+}
+
+// bug: typeck renders SuspendingResultIntoUnionReturn from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
+#[test]
+fn a_suspending_result_returned_as_a_union_waiting_is_refused_with_its_registry_text() {
+    // WHY: `return wait count()` from a union-returning pausing function stored the raw int in the
+    // return slot; the compiler then panicked instead of teaching the recovery.
     assert_rendered(
         DiagnosticKind::SuspendingResultIntoUnionReturn,
-        &program("return wait count()"),
+        &suspending_union_return_program("return wait count()"),
         &[("call", "wait count()"), ("union", "Circle | Int")],
     );
+}
+
+// bug: typeck renders SuspendingResultIntoUnionReturn from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
+#[test]
+fn a_suspending_result_returned_as_a_union_without_waiting_is_refused_with_its_registry_text() {
     assert_rendered(
         DiagnosticKind::SuspendingResultIntoUnionReturn,
-        &program("return count()"),
+        &suspending_union_return_program("return count()"),
         &[("call", "count()"), ("union", "Circle | Int")],
     );
-    assert_compiles(&program("let got = count()\n return got"));
-    assert_compiles(&program("let got = wait count()\n return got"));
+}
+
+// bug: the WHAT-INSTEAD of SuspendingResultIntoUnionReturn names code that does not compile, so typeck teaches a fix it refuses | tier: Low
+#[test]
+fn a_suspending_result_returned_as_a_union_suggestion_compiles_without_waiting() {
+    assert_compiles(&suspending_union_return_program(
+        "let got = count()\n return got",
+    ));
+}
+
+// bug: the WHAT-INSTEAD of SuspendingResultIntoUnionReturn names code that does not compile, so typeck teaches a fix it refuses | tier: Low
+#[test]
+fn a_suspending_result_returned_as_a_union_suggestion_compiles_with_waiting() {
+    assert_compiles(&suspending_union_return_program(
+        "let got = wait count()\n return got",
+    ));
 }
 
 const SAME_TWO_SHAPES: &str = "shape Tiny { flag: Boolean }\n\
      shape Big { label: String }\n\
      function same<T>(share first: T, share second: T) -> T { return second }\n";
 
+// bug: typeck renders ArgumentConflictsWithTypeParameter from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
 #[test]
 fn argument_conflicts_with_type_parameter_is_rendered_from_the_registry() {
     // WHY: v0.3-M9 C1g — `same(big, tiny)` compiled and read a `Tiny` as a `Big`; the refusal's
@@ -1124,6 +1239,7 @@ fn argument_conflicts_with_type_parameter_is_rendered_from_the_registry() {
     );
 }
 
+// bug: the WHAT-INSTEAD of ArgumentConflictsWithTypeParameter names code that does not compile, so typeck teaches a fix it refuses | tier: Low
 #[test]
 fn argument_conflicts_with_type_parameter_suggestions_compile() {
     // WHY: Golden Rule 3 — each alternative the WHAT-INSTEAD names must compile today:
@@ -1138,8 +1254,9 @@ fn argument_conflicts_with_type_parameter_suggestions_compile() {
     ));
 }
 
-/// (High) The WHAT-INSTEAD of a store into a struct literal is a literal the reader can type:
+/// The WHAT-INSTEAD of a store into a struct literal is a literal the reader can type:
 /// every field is named, the stored part is `.copy()`, no `…` placeholder.
+// bug: typeck renders ConsumedByStore from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
 #[test]
 fn consumed_by_store_into_a_struct_literal_names_a_literal_that_compiles() {
     assert_rendered(
@@ -1168,7 +1285,8 @@ fn consumed_by_store_into_a_struct_literal_names_a_literal_that_compiles() {
     );
 }
 
-/// (High) The same for a map literal: keys and values both written out.
+/// The same for a map literal: keys and values both written out.
+// bug: typeck renders ConsumedByStore from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
 #[test]
 fn consumed_by_store_into_a_map_literal_names_a_literal_that_compiles() {
     assert_rendered(
@@ -1189,9 +1307,10 @@ fn consumed_by_store_into_a_map_literal_names_a_literal_that_compiles() {
     );
 }
 
-/// (High) A literal part that is an operator expression is written out, not replaced by a
+/// A literal part that is an operator expression is written out, not replaced by a
 /// placeholder: the WHAT-INSTEAD names `{ first: numbers.copy(), count: (factor + 1) * 2 }`, which
 /// a reader can type, not `{ first: numbers.copy(), count: this value }`.
+// bug: typeck renders ConsumedByStore from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
 #[test]
 fn consumed_by_store_literal_with_an_operator_part_names_a_literal_that_compiles() {
     assert_rendered(
@@ -1220,12 +1339,14 @@ fn consumed_by_store_literal_with_an_operator_part_names_a_literal_that_compiles
     );
 }
 
+// WHY: v0.3-M9 C6 follow-up — a shape key, a key of any other type and a `Number` of more than 34
+// digits each get their own true reason, from one registry home. A `Number` key of 34 digits is a
+// map key and gets no diagnostic. A `sensitive string` key is refused for its own reason (Product
+// Manager ruling A, C7 review r1).
+
+// bug: typeck renders MapKeyNotStorable for a shape key from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
 #[test]
-fn map_key_not_storable_is_rendered_from_the_registry() {
-    // WHY: v0.3-M9 C6 follow-up — a shape key, a key of any other type and a `Number` of more
-    // than 34 digits each get their own true reason, from one registry home. A `Number` key of
-    // 34 digits is a map key and gets no diagnostic. A `sensitive string` key is refused for its
-    // own reason (Product Manager ruling A, C7 review r1).
+fn map_key_not_storable_is_rendered_from_the_registry_for_a_shape_key() {
     assert_rendered(
         DiagnosticKind::MapKeyNotStorable,
         "shape Point { x: Int }\n\
@@ -1246,6 +1367,11 @@ fn map_key_not_storable_is_rendered_from_the_registry() {
             ),
         ],
     );
+}
+
+// bug: typeck renders MapKeyNotStorable for a non-scalar key from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
+#[test]
+fn map_key_not_storable_is_rendered_from_the_registry_for_an_array_key() {
     assert_rendered(
         DiagnosticKind::MapKeyNotStorable,
         "function entrypoint() -> Nothing {\n\
@@ -1262,6 +1388,11 @@ fn map_key_not_storable_is_rendered_from_the_registry() {
             ),
         ],
     );
+}
+
+// bug: typeck renders MapKeyNotStorableWideNumber from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
+#[test]
+fn map_key_not_storable_is_rendered_from_the_registry_for_a_wide_number_key() {
     assert_template_rendered(
         "MapKeyNotStorableWideNumber",
         DiagnosticKind::MapKeyNotStorable,
@@ -1271,6 +1402,11 @@ fn map_key_not_storable_is_rendered_from_the_registry() {
          }",
         &[("key", "Number<50>"), ("digits", "50")],
     );
+}
+
+// bug: typeck renders MapKeyNotStorableSensitive from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
+#[test]
+fn map_key_not_storable_is_rendered_from_the_registry_for_a_sensitive_key() {
     assert_template_rendered(
         "MapKeyNotStorableSensitive",
         DiagnosticKind::MapKeyNotStorable,
@@ -1280,29 +1416,41 @@ fn map_key_not_storable_is_rendered_from_the_registry() {
          }",
         &[("key", "sensitive String")],
     );
-    // The way out the sensitive-key refusal names, and the other keys a map holds.
-    for accepted in [
-        "Map<Number<34>, Int>",
-        "Map<String, sensitive String>",
-        "Map<String, Point>",
-    ] {
-        assert_compiles(&format!(
-            "shape Point {{ x: Int }}\n\
-             function entrypoint() -> Nothing {{\n\
-               let table: {accepted} = {{}}\n\
-               print(table.count())\n\
-             }}"
-        ));
-    }
 }
 
+/// The program the sensitive-key refusal's way out names, and the other keys a map holds: a map
+/// whose key (or value) type is `map_type`.
+fn accepted_map_program(map_type: &str) -> String {
+    format!(
+        "shape Point {{ x: Int }}\n\
+         function entrypoint() -> Nothing {{\n\
+           let table: {map_type} = {{}}\n\
+           print(table.count())\n\
+         }}"
+    )
+}
+
+// bug: typeck refuses a map keyed by a 34-digit `Number`, which is a legal key, so a correct program is rejected | tier: Low
 #[test]
-fn background_union_to_generic_parameter_is_rendered_from_the_registry() {
-    // WHY: v0.3-M9 C6 — the refusal's text comes from the registry, and both ways out it names
-    // (declare the union type, or pass a shape that holds the union) compile.
-    let program = |callee: &str, argument: &str| {
-        format!(
-            "shape Circle {{ radius: Float }}\n\
+fn a_map_keyed_by_a_34_digit_number_compiles() {
+    assert_compiles(&accepted_map_program("Map<Number<34>, Int>"));
+}
+
+// bug: typeck refuses a map holding `sensitive String` values, the way out the sensitive-key refusal names, so the suggested fix does not compile | tier: Low
+#[test]
+fn a_map_of_sensitive_string_values_compiles() {
+    assert_compiles(&accepted_map_program("Map<String, sensitive String>"));
+}
+
+// bug: typeck refuses a map holding shape values, the way out the shape-key refusal names, so the suggested fix does not compile | tier: Low
+#[test]
+fn a_map_of_shape_values_compiles() {
+    assert_compiles(&accepted_map_program("Map<String, Point>"));
+}
+
+fn background_union_program(callee: &str, argument: &str) -> String {
+    format!(
+        "shape Circle {{ radius: Float }}\n\
              shape Tag {{ name: String }}\n\
              shape Holder {{ choice: Circle | Tag }}\n\
              {callee}\n\
@@ -1313,23 +1461,40 @@ fn background_union_to_generic_parameter_is_rendered_from_the_registry() {
                let holder: Holder = {{ choice: other }}\n\
                background eat({argument})\n\
              }}"
-        )
-    };
+    )
+}
+
+// bug: typeck renders BackgroundUnionToGenericParameter from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
+#[test]
+fn background_union_to_generic_parameter_is_rendered_from_the_registry() {
+    // WHY: v0.3-M9 C6 — the refusal's text comes from the registry, and both ways out it names
+    // (declare the union type, or pass a shape that holds the union) compile.
     let generic = "function eat<T>(held: T) -> Nothing { print(`ate`) }";
     assert_rendered(
         DiagnosticKind::BackgroundUnionToGenericParameter,
-        &program(generic, "choice"),
+        &background_union_program(generic, "choice"),
         &[
             ("union", "Circle | Tag"),
             ("callee", "eat"),
             ("parameter", "held"),
         ],
     );
-    assert_compiles(&program(
+}
+
+// bug: the WHAT-INSTEAD of BackgroundUnionToGenericParameter names code that does not compile, so typeck teaches a fix it refuses | tier: Low
+#[test]
+fn background_union_suggestion_declaring_the_union_type_compiles() {
+    assert_compiles(&background_union_program(
         "function eat(held: Circle | Tag) -> Nothing { print(`ate`) }",
         "choice",
     ));
-    assert_compiles(&program(generic, "holder"));
+}
+
+// bug: the WHAT-INSTEAD of BackgroundUnionToGenericParameter names code that does not compile, so typeck teaches a fix it refuses | tier: Low
+#[test]
+fn background_union_suggestion_passing_a_shape_that_holds_the_union_compiles() {
+    let generic = "function eat<T>(held: T) -> Nothing { print(`ate`) }";
+    assert_compiles(&background_union_program(generic, "holder"));
 }
 
 // ── v0.3-M9 C1h (#433): `Fixed<T, N>` in signatures ─────────────────────────────────────────
@@ -1337,8 +1502,9 @@ fn background_union_to_generic_parameter_is_rendered_from_the_registry() {
 // Each refusal is rendered from its registry template (the slots are the ones the emit site
 // fills), and the code its WHAT-INSTEAD names compiles (Golden Rule 3).
 
+// bug: typeck renders FixedLengthNotUsable from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
 #[test]
-fn fixed_length_not_usable_is_rendered_from_the_registry_and_its_suggestion_compiles() {
+fn fixed_length_not_usable_is_rendered_from_the_registry() {
     // WHY: `Fixed<Int, N>` names a length the compiler cannot read; the refusal's text must come
     // from the registry, and both ways out (a whole number, no length) must compile.
     assert_rendered(
@@ -1357,6 +1523,11 @@ fn fixed_length_not_usable_is_rendered_from_the_registry_and_its_suggestion_comp
             ("limit", "4294967295"),
         ],
     );
+}
+
+// bug: the WHAT-INSTEAD of FixedLengthNotUsable names code that does not compile, so typeck teaches a fix it refuses | tier: Low
+#[test]
+fn fixed_length_not_usable_suggestion_compiles() {
     assert_compiles(
         "function total(share xs: Fixed<Int, 4>) -> Int { return xs.count() }\n\
          function again(share xs: Fixed<Int>) -> Int { return xs.count() }\n\
@@ -1368,8 +1539,9 @@ fn fixed_length_not_usable_is_rendered_from_the_registry_and_its_suggestion_comp
     );
 }
 
+// bug: typeck renders FixedLengthNotAllowedHere from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
 #[test]
-fn fixed_length_not_allowed_here_is_rendered_from_the_registry_and_its_suggestion_compiles() {
+fn fixed_length_not_allowed_here_is_rendered_from_the_registry() {
     assert_rendered(
         DiagnosticKind::FixedLengthNotAllowedHere,
         "function entrypoint() -> Nothing {\n\
@@ -1385,6 +1557,11 @@ fn fixed_length_not_allowed_here_is_rendered_from_the_registry_and_its_suggestio
             ),
         ],
     );
+}
+
+// bug: the WHAT-INSTEAD of FixedLengthNotAllowedHere names code that does not compile, so typeck teaches a fix it refuses | tier: Low
+#[test]
+fn fixed_length_not_allowed_here_suggestion_compiles() {
     assert_compiles(
         "function entrypoint() -> Nothing {\n\
            let xs: Fixed<Int> = [1, 2, 3]\n\
@@ -1393,8 +1570,9 @@ fn fixed_length_not_allowed_here_is_rendered_from_the_registry_and_its_suggestio
     );
 }
 
+// bug: typeck renders FixedLengthMismatch from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
 #[test]
-fn fixed_length_mismatch_is_rendered_from_the_registry_and_its_suggestion_compiles() {
+fn fixed_length_mismatch_is_rendered_from_the_registry() {
     assert_rendered(
         DiagnosticKind::FixedLengthMismatch,
         "function total(share xs: Fixed<Int, 4>) -> Int { return xs.count() }\n\
@@ -1416,6 +1594,11 @@ fn fixed_length_mismatch_is_rendered_from_the_registry_and_its_suggestion_compil
             ("expected", "4"),
         ],
     );
+}
+
+// bug: the WHAT-INSTEAD of FixedLengthMismatch names code that does not compile, so typeck teaches a fix it refuses | tier: Low
+#[test]
+fn fixed_length_mismatch_suggestion_compiles() {
     assert_compiles(
         "function total(share xs: Fixed<Int>) -> Int { return xs.count() }\n\
          function entrypoint() -> Nothing {\n\
@@ -1425,8 +1608,9 @@ fn fixed_length_mismatch_is_rendered_from_the_registry_and_its_suggestion_compil
     );
 }
 
+// bug: typeck renders FixedLengthMissingInExport from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
 #[test]
-fn fixed_length_missing_in_export_is_rendered_from_the_registry_and_its_suggestion_compiles() {
+fn fixed_length_missing_in_export_is_rendered_from_the_registry() {
     assert_rendered(
         DiagnosticKind::FixedLengthMissingInExport,
         "export function make() -> Fixed<Int> {\n\
@@ -1441,6 +1625,11 @@ fn fixed_length_missing_in_export_is_rendered_from_the_registry_and_its_suggesti
             ("suggested", "Fixed<Int, 4>"),
         ],
     );
+}
+
+// bug: the WHAT-INSTEAD of FixedLengthMissingInExport names code that does not compile, so typeck teaches a fix it refuses | tier: Low
+#[test]
+fn fixed_length_missing_in_export_suggestion_compiles() {
     assert_compiles(
         "export function make() -> Fixed<Int, 4> {\n\
            let xs: Fixed<Int> = [1, 2, 3, 4]\n\
@@ -1450,8 +1639,9 @@ fn fixed_length_missing_in_export_is_rendered_from_the_registry_and_its_suggesti
     );
 }
 
+// bug: typeck renders FixedReturnLengthsDiffer from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
 #[test]
-fn fixed_return_lengths_differ_is_rendered_from_the_registry_and_its_suggestion_compiles() {
+fn fixed_return_lengths_differ_is_rendered_from_the_registry() {
     assert_rendered(
         DiagnosticKind::FixedReturnLengthsDiffer,
         "function pick(share flag: Boolean) -> Fixed<Int> {\n\
@@ -1469,6 +1659,11 @@ fn fixed_return_lengths_differ_is_rendered_from_the_registry_and_its_suggestion_
             ("first", "2 items"),
         ],
     );
+}
+
+// bug: the WHAT-INSTEAD of FixedReturnLengthsDiffer names code that does not compile, so typeck teaches a fix it refuses | tier: Low
+#[test]
+fn fixed_return_lengths_differ_suggestion_compiles() {
     assert_compiles(
         "function pick(share flag: Boolean) -> Fixed<Int> {\n\
            let two: Fixed<Int> = [1, 2]\n\
@@ -1482,6 +1677,7 @@ fn fixed_return_lengths_differ_is_rendered_from_the_registry_and_its_suggestion_
     );
 }
 
+// bug: typeck renders FixedReturnLengthUnknown from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
 #[test]
 fn fixed_return_length_unknown_is_rendered_from_the_registry() {
     assert_rendered(
@@ -1505,8 +1701,9 @@ fn fixed_return_length_unknown_is_rendered_from_the_registry() {
     );
 }
 
+// bug: typeck renders FixedFieldLengthMissing from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
 #[test]
-fn fixed_field_length_missing_is_rendered_from_the_registry_and_its_suggestion_compiles() {
+fn fixed_field_length_missing_is_rendered_from_the_registry() {
     // WHY: a shape keeps a `Fixed` list inside itself, so a field written `Fixed<Int>` has no size;
     // the refusal's text must come from the registry, and both ways out (write the length, or hold
     // the items in an `Array`) must compile.
@@ -1524,12 +1721,22 @@ fn fixed_field_length_missing_is_rendered_from_the_registry_and_its_suggestion_c
             ("suggested", "Fixed<Int, 4>"),
         ],
     );
+}
+
+// bug: the WHAT-INSTEAD of FixedFieldLengthMissing names code that does not compile, so typeck teaches a fix it refuses | tier: Low
+#[test]
+fn fixed_field_length_missing_suggestion_writing_the_length_compiles() {
     assert_compiles(
         "shape Bag {\n\
            items: Fixed<Int, 4>\n\
          }\n\
          function entrypoint() -> Nothing { print(1) }",
     );
+}
+
+// bug: the WHAT-INSTEAD of FixedFieldLengthMissing names code that does not compile, so typeck teaches a fix it refuses | tier: Low
+#[test]
+fn fixed_field_length_missing_suggestion_holding_an_array_compiles() {
     assert_compiles(
         "shape Bag {\n\
            items: Array<Int>\n\
@@ -1538,9 +1745,9 @@ fn fixed_field_length_missing_is_rendered_from_the_registry_and_its_suggestion_c
     );
 }
 
+// bug: typeck renders FixedLengthMissingInTaskFunction from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
 #[test]
-fn fixed_length_missing_in_task_function_is_rendered_from_the_registry_and_its_suggestion_compiles()
-{
+fn fixed_length_missing_in_a_waiting_function_is_rendered_from_the_registry() {
     // WHY: a function that waits, or may run as a task of its own, is built once, so an unsized
     // `Fixed` parameter has no length for it (before: an internal compiler error). Both reasons
     // render from the registry, and the suggestion (write the length) compiles.
@@ -1562,6 +1769,11 @@ fn fixed_length_missing_in_task_function_is_rendered_from_the_registry_and_its_s
             ("reason", "pauses at a `wait`"),
         ],
     );
+}
+
+// bug: typeck renders FixedLengthMissingInTaskFunction from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
+#[test]
+fn fixed_length_missing_in_a_task_candidate_function_is_rendered_from_the_registry() {
     assert_rendered(
         DiagnosticKind::FixedLengthMissingInTaskFunction,
         "function heavy(share seed: Int) -> Int {\n\
@@ -1588,6 +1800,11 @@ fn fixed_length_missing_in_task_function_is_rendered_from_the_registry_and_its_s
             ("reason", "may be run as a task of its own"),
         ],
     );
+}
+
+// bug: the WHAT-INSTEAD of FixedLengthMissingInTaskFunction names code that does not compile, so typeck teaches a fix it refuses | tier: Low
+#[test]
+fn fixed_length_missing_in_task_function_suggestion_compiles() {
     assert_compiles(
         "function slowTotal(share xs: Fixed<Int, 3>) -> Int {\n\
            wait sleep(1)\n\
@@ -1602,13 +1819,9 @@ fn fixed_length_missing_in_task_function_is_rendered_from_the_registry_and_its_s
 
 // ── v0.3-M9 C1n (#387): a type parameter bound to a union, not first in the return union ───────
 
-#[test]
-fn generic_union_bound_out_of_order_is_rendered_from_the_registry_and_its_suggestion_compiles() {
-    // WHY: the refusal's text must come from the registry (Golden Rule 3), and the return type
-    // it suggests (the type parameter first) must compile.
-    let program = |return_type: &str| {
-        format!(
-            "shape Big {{ label: String }}\n\
+fn generic_union_bound_program(return_type: &str) -> String {
+    format!(
+        "shape Big {{ label: String }}\n\
              shape Tiny {{ count: Int }}\n\
              function carry<T>(give item: T) -> {return_type} {{ return item }}\n\
              function entrypoint() -> Nothing {{\n\
@@ -1617,11 +1830,17 @@ fn generic_union_bound_out_of_order_is_rendered_from_the_registry_and_its_sugges
                let got = carry(choice)\n\
                print(`done`)\n\
              }}"
-        )
-    };
+    )
+}
+
+// bug: typeck renders GenericUnionBoundOutOfOrder from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
+#[test]
+fn generic_union_bound_out_of_order_is_rendered_for_a_nothing_first_return() {
+    // WHY: the refusal's text must come from the registry (Golden Rule 3), and the return type
+    // it suggests (the type parameter first) must compile.
     assert_rendered(
         DiagnosticKind::GenericUnionBoundOutOfOrder,
-        &program("Nothing | T"),
+        &generic_union_bound_program("Nothing | T"),
         &[
             ("callee", "carry"),
             ("typeParam", "T"),
@@ -1633,9 +1852,14 @@ fn generic_union_bound_out_of_order_is_rendered_from_the_registry_and_its_sugges
             ("first", "Big"),
         ],
     );
+}
+
+// bug: typeck renders GenericUnionBoundOutOfOrder from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
+#[test]
+fn generic_union_bound_out_of_order_is_rendered_for_a_variant_first_return() {
     assert_rendered(
         DiagnosticKind::GenericUnionBoundOutOfOrder,
-        &program("Tiny | T"),
+        &generic_union_bound_program("Tiny | T"),
         &[
             ("callee", "carry"),
             ("typeParam", "T"),
@@ -1647,8 +1871,18 @@ fn generic_union_bound_out_of_order_is_rendered_from_the_registry_and_its_sugges
             ("first", "Big"),
         ],
     );
-    assert_compiles(&program("T | Nothing"));
-    assert_compiles(&program("T | Tiny"));
+}
+
+// bug: the WHAT-INSTEAD of GenericUnionBoundOutOfOrder names code that does not compile, so typeck teaches a fix it refuses | tier: Low
+#[test]
+fn generic_union_bound_out_of_order_suggestion_with_nothing_second_compiles() {
+    assert_compiles(&generic_union_bound_program("T | Nothing"));
+}
+
+// bug: the WHAT-INSTEAD of GenericUnionBoundOutOfOrder names code that does not compile, so typeck teaches a fix it refuses | tier: Low
+#[test]
+fn generic_union_bound_out_of_order_suggestion_with_the_variant_second_compiles() {
+    assert_compiles(&generic_union_bound_program("T | Tiny"));
 }
 
 // ── v0.3-M9 C10 (#387): a `for` loop whose body frees the list it is walking ────────────────
@@ -1657,13 +1891,9 @@ fn generic_union_bound_out_of_order_is_rendered_from_the_registry_and_its_sugges
 // assignment in the body, a call to a function that assigns), and the copy its WHAT-INSTEAD
 // suggests compiles (Golden Rule 3).
 
-#[test]
-fn walked_list_written_in_loop_is_rendered_from_the_registry_for_an_assignment() {
-    // WHY: the text is rendered from the registry, and walking a `.copy()` of the list while the
-    // body assigns the original compiles.
-    let program = |loop_header: &str, before_loop: &str| {
-        format!(
-            "shape Inner {{ rows: Array<Array<Int>> }}\n\
+fn walked_list_assignment_program(loop_header: &str, before_loop: &str) -> String {
+    format!(
+        "shape Inner {{ rows: Array<Array<Int>> }}\n\
              shape Outer {{ inner: Inner }}\n\
              function entrypoint() -> Nothing {{\n\
                let outer: Outer = {{ inner: {{ rows: [[1], [2]] }} }}\n\
@@ -1676,11 +1906,17 @@ fn walked_list_written_in_loop_is_rendered_from_the_registry_for_an_assignment()
                }}\n\
                print(total)\n\
              }}"
-        )
-    };
+    )
+}
+
+// bug: typeck renders WalkedListWrittenInLoop from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
+#[test]
+fn walked_list_written_in_loop_is_rendered_from_the_registry_for_an_assignment() {
+    // WHY: the text is rendered from the registry, and walking a `.copy()` of the list while the
+    // body assigns the original compiles.
     assert_rendered(
         DiagnosticKind::WalkedListWrittenInLoop,
-        &program("row in outer.inner.rows", ""),
+        &walked_list_assignment_program("row in outer.inner.rows", ""),
         &[
             ("loopVariable", "row"),
             ("walked", "outer.inner.rows"),
@@ -1690,18 +1926,21 @@ fn walked_list_written_in_loop_is_rendered_from_the_registry_for_an_assignment()
             ("copyName", "rowsCopy"),
         ],
     );
-    assert_compiles(&program(
+}
+
+// bug: the WHAT-INSTEAD of WalkedListWrittenInLoop names code that does not compile, so typeck teaches a fix it refuses | tier: Low
+#[test]
+fn walked_list_written_in_loop_is_rendered_from_the_registry_for_an_assignment_suggestion_compiles()
+{
+    assert_compiles(&walked_list_assignment_program(
         "row in rowsCopy",
         "let rowsCopy = outer.inner.rows.copy()",
     ));
 }
 
-#[test]
-fn walked_list_written_in_loop_is_rendered_from_the_registry_for_a_call() {
-    // WHY: the call form names the call and the place the callee assigns, in the caller's terms.
-    let program = |loop_header: &str, before_loop: &str| {
-        format!(
-            "shape Holder {{ rows: Array<Array<Int>> }}\n\
+fn walked_list_call_program(loop_header: &str, before_loop: &str) -> String {
+    format!(
+        "shape Holder {{ rows: Array<Array<Int>> }}\n\
              function reset(lend holder: Holder) -> Nothing {{ holder.rows = [[9]] }}\n\
              function entrypoint() -> Nothing {{\n\
                let holder: Holder = {{ rows: [[1], [2]] }}\n\
@@ -1713,11 +1952,16 @@ fn walked_list_written_in_loop_is_rendered_from_the_registry_for_a_call() {
                }}\n\
                print(total)\n\
              }}"
-        )
-    };
+    )
+}
+
+// bug: typeck renders WalkedListWrittenInLoop from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
+#[test]
+fn walked_list_written_in_loop_is_rendered_from_the_registry_for_a_call() {
+    // WHY: the call form names the call and the place the callee assigns, in the caller's terms.
     assert_rendered(
         DiagnosticKind::WalkedListWrittenInLoop,
-        &program("row in holder.rows", ""),
+        &walked_list_call_program("row in holder.rows", ""),
         &[
             ("loopVariable", "row"),
             ("walked", "holder.rows"),
@@ -1730,18 +1974,20 @@ fn walked_list_written_in_loop_is_rendered_from_the_registry_for_a_call() {
             ("copyName", "rowsCopy"),
         ],
     );
-    assert_compiles(&program(
+}
+
+// bug: the WHAT-INSTEAD of WalkedListWrittenInLoop names code that does not compile, so typeck teaches a fix it refuses | tier: Low
+#[test]
+fn walked_list_written_in_loop_is_rendered_from_the_registry_for_a_call_suggestion_compiles() {
+    assert_compiles(&walked_list_call_program(
         "row in rowsCopy",
         "let rowsCopy = holder.rows.copy()",
     ));
 }
 
-#[test]
-fn walked_list_written_in_loop_names_a_map_walk_a_map() {
-    // WHY: the text names what the loop walks, so a map walk is told "map", not "list".
-    let program = |loop_header: &str, before_loop: &str| {
-        format!(
-            "shape Holder {{ table: Map<String, Int> }}\n\
+fn walked_map_program(loop_header: &str, before_loop: &str) -> String {
+    format!(
+        "shape Holder {{ table: Map<String, Int> }}\n\
              function entrypoint() -> Nothing {{\n\
                let holder: Holder = {{ table: {{}} }}\n\
                {before_loop}\n\
@@ -1751,11 +1997,16 @@ fn walked_list_written_in_loop_names_a_map_walk_a_map() {
                  print(entry.key)\n\
                }}\n\
              }}"
-        )
-    };
+    )
+}
+
+// bug: typeck renders WalkedListWrittenInLoop from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
+#[test]
+fn walked_list_written_in_loop_names_a_map_walk_a_map() {
+    // WHY: the text names what the loop walks, so a map walk is told "map", not "list".
     assert_rendered(
         DiagnosticKind::WalkedListWrittenInLoop,
-        &program("entry in holder.table", ""),
+        &walked_map_program("entry in holder.table", ""),
         &[
             ("loopVariable", "entry"),
             ("walked", "holder.table"),
@@ -1765,19 +2016,20 @@ fn walked_list_written_in_loop_names_a_map_walk_a_map() {
             ("copyName", "tableCopy"),
         ],
     );
-    assert_compiles(&program(
+}
+
+// bug: the WHAT-INSTEAD of WalkedListWrittenInLoop names code that does not compile, so typeck teaches a fix it refuses | tier: Low
+#[test]
+fn walked_list_written_in_loop_names_a_map_walk_a_map_suggestion_compiles() {
+    assert_compiles(&walked_map_program(
         "entry in tableCopy",
         "let tableCopy = holder.table.copy()",
     ));
 }
 
-#[test]
-fn walked_list_written_in_loop_names_a_string_walk_a_string() {
-    // WHY: a loop over a string is a walk too (codegen holds the string for an exact write), so a
-    // write that frees it is refused and told "string", not "list".
-    let program = |loop_header: &str, before_loop: &str| {
-        format!(
-            "shape Holder {{ text: String }}\n\
+fn walked_string_program(loop_header: &str, before_loop: &str) -> String {
+    format!(
+        "shape Holder {{ text: String }}\n\
              function entrypoint() -> Nothing {{\n\
                let holder: Holder = {{ text: `abc` }}\n\
                {before_loop}\n\
@@ -1787,11 +2039,17 @@ fn walked_list_written_in_loop_names_a_string_walk_a_string() {
                  print(letter)\n\
                }}\n\
              }}"
-        )
-    };
+    )
+}
+
+// bug: typeck renders WalkedListWrittenInLoop from a hand-written twin, or with a slot that drifted, instead of its registry template, so the user reads text the registry does not hold | tier: Low
+#[test]
+fn walked_list_written_in_loop_names_a_string_walk_a_string() {
+    // WHY: a loop over a string is a walk too (codegen holds the string for an exact write), so a
+    // write that frees it is refused and told "string", not "list".
     assert_rendered(
         DiagnosticKind::WalkedListWrittenInLoop,
-        &program("letter in holder.text", ""),
+        &walked_string_program("letter in holder.text", ""),
         &[
             ("loopVariable", "letter"),
             ("walked", "holder.text"),
@@ -1801,7 +2059,12 @@ fn walked_list_written_in_loop_names_a_string_walk_a_string() {
             ("copyName", "textCopy"),
         ],
     );
-    assert_compiles(&program(
+}
+
+// bug: the WHAT-INSTEAD of WalkedListWrittenInLoop names code that does not compile, so typeck teaches a fix it refuses | tier: Low
+#[test]
+fn walked_list_written_in_loop_names_a_string_walk_a_string_suggestion_compiles() {
+    assert_compiles(&walked_string_program(
         "letter in textCopy",
         "let textCopy = holder.text.copy()",
     ));
