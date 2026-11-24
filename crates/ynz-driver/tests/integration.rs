@@ -1932,6 +1932,23 @@ suspension_local_table_high_case! {
         "int loop-var direct: wrong output"
     );
     }
+    // case: a shape `for` loop variable held across a cross-module suspension is reloaded from the wrong slot
+    v03_m3e_shape_loop_var_direct_runs_correctly => {
+    // test-ratchet: M3e Phase 2 LIFT — was assert_m3e_reject (exit 1); now asserts correct
+    // runtime output. Shape loop variable must survive the resume boundary with LLVM-accurate slot.
+    // WHY: shape × loop-var × direct (escape #2). A shape loop variable's LLVM ABI size may
+    // differ from the field-count approximation — wrong slot count → adjacent-slot corruption
+    // across loop iterations.
+    let (stdout, _stderr, code) = ynz_run_stdout(&fixture("v0_3_m3e_shape_loop_var_direct"));
+    assert_eq!(
+        code, 0,
+        "shape loop-var direct: must exit 0; exit was {code}"
+    );
+    assert_eq!(
+        stdout, "item: 10\nitem: 20\n",
+        "shape loop-var direct: wrong output"
+    );
+    }
     // case: the caller's own int local overlaps the embedded transitive suspender's sub-frame
     v03_m3e_int_crossing_local_transitive_runs_correctly => {
     // test-ratchet: M3e Phase 2 LIFT — was assert_m3e_reject (exit 1); now asserts correct
@@ -2523,6 +2540,18 @@ cross_module_suspension_table_high_case! {
     let (stdout, _stderr, code) = ynz_run_stdout(&fixture("v0_3_m3e_reexport_chain_int"));
     assert_eq!(code, 0, "reexport chain int: must exit 0; exit was {code}");
     assert_eq!(stdout, "result: 7\n", "reexport chain int: wrong output");
+    }
+    // case: a re-export chain that also stacks an errors-capable staging slot and a two-slot number local mis-sizes the composed frame
+    v03_m3e_reexport_ec_number_runs_correctly => {
+    // test-ratchet: M3e Phase 2 LIFT — was assert_m3e_reject (exit 1); now asserts correct
+    // runtime output. Stacked escapes: re-export × EC × number/decimal128.
+    // WHY: stacked escapes #1+#3+#4. B's frame must correctly include A's sub-frame (G2), the
+    // EC {i64,i64} staging slot (2 slots), AND two number/decimal128 slots (lo + hi). This is
+    // the highest-risk fixture — three offset-sensitive elements; any one mis-sized causes
+    // either a wrong numeric result or a memory corruption.
+    let (stdout, _stderr, code) = ynz_run_stdout(&fixture("v0_3_m3e_reexport_ec_number"));
+    assert_eq!(code, 0, "reexport ec number: must exit 0; exit was {code}");
+    assert_eq!(stdout, "total: 3.5\n", "reexport ec number: wrong output");
     }
     // case: a diamond import sizes the shared leaf frame differently for the two importers
     v03_m3e_diamond_import_runs_correctly => {
