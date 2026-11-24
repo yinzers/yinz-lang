@@ -24,18 +24,14 @@
 // Each fact test failed on the base commit (the record had no `Escape::Stored`: a store joined
 // two classes instead); the rejection tests failed because typeck accepted the program.
 //
-// WHY this many tests for one High-tier unit (the SOP says stop at about 8 and justify): the
-// unit is the whole ownership record, and each test is one way the checker can lose a transfer
-// at its own code site (a field store, a container store, an index store, a reassignment, a
-// literal, a `let`, a callee's store, a call-result receiver, a loop cell, a builtin result, a
-// loop give, a give handed up from an inner loop, a give made in a `while` condition, five kinds
-// of event the recorder cannot place). The case tables below are one NAMED test per case, so the
-// runner parallelizes them and names the failing program; a case is in a table only when it takes
-// a different checker path. The accepted-program guards and
-// `a_given_then_revived_binding_keeps_its_given_escape` were green on arrival on purpose: they pin
-// over-rejection and the record's flow-insensitivity against the path-aware revive
-// (`revive_paths.rs`), which must not leak into the record (a record that forgot the give would
-// let a release pass free the class early).
+// Tests are tables of NAMED cases, one named test per program, split only where the cases need a
+// different harness: `record_cases!` (the record's facts for one function), the `cases!` decision
+// tables in `support` (accepted, or rejected with the use-after-give / use-after-store text),
+// the spawn inference pair, and `internal_error_cases!` (the recorder driven through its public
+// API). The accepted-program guards and `a_given_then_revived_binding_keeps_its_given_escape` were
+// green on arrival on purpose: they pin over-rejection and the record's flow-insensitivity
+// against the path-aware revive (`revive_paths.rs`), which must not leak into the record (a
+// record that forgot the give would let a release pass free the class early).
 
 #[macro_use]
 mod support;
@@ -47,6 +43,7 @@ use support::{
 use ynz_diagnostics::DiagnosticKind;
 use ynz_parser::{CompilerDb, SourceFile};
 use ynz_typeck::binding_names::BindingNames;
+use ynz_typeck::check::BgOwnership;
 use ynz_typeck::non_owned_reads::NonOwnedReads;
 use ynz_typeck::transfer_record::{
     Escape, FunctionTransfers, ReleaseAnchor, RoleEvidence, TransferRecorder,
@@ -97,11 +94,6 @@ fn record_of(output: &CheckOutput, function_name: &str) -> FunctionTransfers {
         .clone()
 }
 
-/// Run `source`, require zero errors, return the record of `function_name`.
-fn transfers_of(source: &str, function_name: &str) -> FunctionTransfers {
-    record_of(&run(source), function_name)
-}
-
 fn founder_name(transfers: &FunctionTransfers, member: &str) -> String {
     let class = transfers
         .class_of(member)
@@ -139,144 +131,6 @@ fn stored(place: &str) -> Escape {
     Escape::Stored {
         place: place.to_string(),
     }
-}
-
-// ── the S3 holes: a heap value stored without a sink ────────────────────────
-
-/// (High) t6b `bag.items = numbers; return bag`: the field-set stores `numbers` in `bag`, so
-/// `numbers` is handed over: the record notes the transfer on `numbers`, and `bag` (which owns the
-/// value now) escapes by return. Before, the two shared one class and a release pass could not tell
-/// who frees the array.
-#[test]
-fn t6b_field_set_hands_the_value_to_the_field() {
-    let source = format!(
-        "{BAG}function make() -> Bag {{
-  let numbers: Array<Int> = [1, 2, 3]
-  let bag: Bag = {{ items: [0] }}
-  bag.items = numbers
-  return bag
-}}"
-    );
-    let transfers = transfers_of(&source, "make");
-    assert!(!transfers.same_class("numbers", "bag"), "{transfers:#?}");
-    assert_eq!(
-        escapes_of(&transfers, "numbers"),
-        vec![stored("`bag.items`")]
-    );
-    assert_eq!(escapes_of(&transfers, "bag"), vec![Escape::Returned]);
-}
-
-/// (High) g1 `container.add(numbers); return container`: the container `.add` hands `numbers` over
-/// to `container`.
-#[test]
-fn g1_container_add_hands_the_value_to_the_container() {
-    let source = "function make() -> Array<Array<Int>> {
-  let numbers: Array<Int> = [1, 2, 3]
-  let container: Array<Array<Int>> = []
-  container.add(numbers)
-  return container
-}";
-    let transfers = transfers_of(source, "make");
-    assert!(
-        !transfers.same_class("numbers", "container"),
-        "{transfers:#?}"
-    );
-    assert_eq!(
-        escapes_of(&transfers, "numbers"),
-        vec![stored("`container`")]
-    );
-    assert_eq!(escapes_of(&transfers, "container"), vec![Escape::Returned]);
-}
-
-/// (High) g8 `container[0] = numbers; return container`: the index-set hands `numbers` over to the
-/// slot.
-#[test]
-fn g8_index_set_hands_the_value_to_the_slot() {
-    let source = "function make() -> Array<Array<Int>> {
-  let numbers: Array<Int> = [1, 2, 3]
-  let container: Array<Array<Int>> = [[0]]
-  container[0] = numbers
-  return container
-}";
-    let transfers = transfers_of(source, "make");
-    assert!(
-        !transfers.same_class("numbers", "container"),
-        "{transfers:#?}"
-    );
-    assert_eq!(
-        escapes_of(&transfers, "numbers"),
-        vec![stored("`container[0]`")]
-    );
-    assert_eq!(escapes_of(&transfers, "container"), vec![Escape::Returned]);
-}
-
-/// (High) g7 `acc = per` inside a loop: `acc` outlives `per`, so a release at the back-edge of
-/// `per` would free what `acc` still holds. The reassignment hands `per` over: `per` escapes, and
-/// `acc` is the founder of its own class (it owns the value it now holds).
-#[test]
-fn g7_assign_from_a_loop_local_hands_the_value_to_the_outliving_binding() {
-    let source = "function underTest() -> Int {
-  let acc: Array<Int> = [0]
-  let i: Int = 0
-  while (i < 2) {
-    let per: Array<Int> = [i, i, i]
-    acc = per
-    i = i + 1
-  }
-  return acc.count()
-}";
-    let transfers = transfers_of(source, "underTest");
-    assert!(!transfers.same_class("acc", "per"), "{transfers:#?}");
-    assert_eq!(escapes_of(&transfers, "per"), vec![stored("`acc`")]);
-    assert_eq!(founder_name(&transfers, "acc"), "acc");
-}
-
-/// (High) t7 `{ first: numbers, second: moreNumbers }` returned through `pair`: the literal takes
-/// over EVERY named heap part, not only the first. Before, `moreNumbers` was released while the
-/// returned `pair` held it.
-#[test]
-fn t7_struct_literal_hands_every_part_to_the_literal() {
-    let source = format!(
-        "{PAIR}function make() -> Pair {{
-  let numbers: Array<Int> = [1, 2, 3]
-  let moreNumbers: Array<Int> = [4, 5]
-  let pair: Pair = {{ first: numbers, second: moreNumbers }}
-  return pair
-}}"
-    );
-    let transfers = transfers_of(&source, "make");
-    assert!(
-        !transfers.same_class("numbers", "moreNumbers"),
-        "{transfers:#?}"
-    );
-    assert_eq!(
-        escapes_of(&transfers, "numbers"),
-        vec![stored(
-            "the literal `{ first: numbers, second: moreNumbers }`"
-        )]
-    );
-    assert_eq!(
-        escapes_of(&transfers, "moreNumbers"),
-        vec![stored(
-            "the literal `{ first: numbers, second: moreNumbers }`"
-        )]
-    );
-    assert_eq!(escapes_of(&transfers, "pair"), vec![Escape::Returned]);
-}
-
-/// (High) `let second = first`: the second name takes the value over, so `first` is handed to
-/// `second` and `second` is the founder of the value it now owns.
-#[test]
-fn let_of_a_whole_binding_hands_the_value_to_the_new_binding() {
-    let source = "function underTest() -> Int {
-  let first: Array<Int> = [1]
-  let second: Array<Int> = first
-  return second.count()
-}";
-    let transfers = transfers_of(source, "underTest");
-    assert!(!transfers.same_class("first", "second"), "{transfers:#?}");
-    assert_eq!(escapes_of(&transfers, "first"), vec![stored("`second`")]);
-    assert_eq!(founder_name(&transfers, "second"), "second");
 }
 
 // ── the same programs, read after the store: rejected (deny and teach) ──────
@@ -721,64 +575,39 @@ cases! { assert_accepted;
     ), "(High) over-rejection: a give the inner loop hands up is of a binding the outer loop declares afresh each pass, so the outer loop carries nothing";
 }
 
-// ── the record's boundaries (no over-joining, anchors, escapes) ─────────────
+// ── accepted and rejected programs next to the record ───────────────────────
 
-/// (High) Bits are copied, not handed over: `container.add(numbers[0].or(0))` stores an int and `let
-/// piece = numbers.count()` is a number, so `numbers` stays readable and nothing is recorded for
-/// it.
-#[test]
-fn storing_bits_hands_nothing_over() {
-    let source = "function underTest() -> Int {
-  let numbers: Array<Int> = [1, 2, 3]
-  let container: Array<Int> = []
-  container.add(numbers[0].or(0))
-  container.add(numbers.count())
-  return container.count() + numbers.count()
-}";
-    let transfers = transfers_of(source, "underTest");
-    assert_eq!(escapes_of(&transfers, "numbers"), Vec::<Escape>::new());
+/// A store of a parameter the caller keeps is refused with the parameter's own text.
+fn assert_stored_parameter_rejected(source: &str) {
+    assert_rejected_with(source, "is a parameter of");
 }
 
-/// (High) A string is a counted heap allocation, but a store copies it or takes it by move, so
-/// storing one hands nothing over and the name stays readable.
-#[test]
-fn storing_a_string_hands_nothing_over() {
-    assert_accepted(
-        "function underTest() -> Int {
+cases! { assert_stored_parameter_rejected;
+    storing_a_borrowed_parameter_is_rejected: "function stash(lend bucket: Array<Array<Int>>, rows: Array<Int>) -> Nothing {
+  bucket.add(rows)
+}", "(High) a store of a parameter the caller keeps (`lend`, `share` or bare) is refused: the caller owns the value, so the container could not own it too";
+    a_callee_that_stores_a_bare_parameter_is_rejected: "function put(lend container: Array<Array<Int>>, numbers: Array<Int>) -> Nothing {
+  container.add(numbers)
+}", "(High) a callee that stores a parameter it does not own would hand the caller's value to its container behind the caller's back: the store is refused inside the callee, which must say `give`";
+}
+
+cases! { assert_accepted;
+    storing_a_string_hands_nothing_over: "function underTest() -> Int {
   let name: String = `ada`
   let names: Array<String> = []
   names.add(name)
   let same: String = name
   return names.count() + same.count()
-}",
-    );
-}
-
-/// (High) A `sensitive string` is the string pointer with a label; its copy is the receiver's bits
-/// (`owned_copy_plan`), so storing one hands nothing over and the name stays readable.
-#[test]
-fn storing_a_sensitive_string_hands_nothing_over() {
-    assert_accepted(
-        "function underTest() -> Int {
+}", "(High) over-rejection: a string is a counted heap allocation, but a store copies it or takes it by move, so storing one hands nothing over and the name stays readable";
+    storing_a_sensitive_string_hands_nothing_over: "function underTest() -> Int {
   let key: sensitive String = sensitive(`abc`)
   let keys: Array<sensitive String> = []
   keys.add(key)
   let same: sensitive String = key
   print(key)
   return keys.count()
-}",
-    );
-}
-
-/// (High) A `Range` is its start and end and nothing can change them: `owned_copy_plan` calls its
-/// copy the receiver's bits, so storing one hands nothing over. `let sameRange = wholeRange` and a
-/// struct literal holding `wholeRange` leave `wholeRange` readable, so `for (i in wholeRange)` is a
-/// valid program. Every form here builds end to end; an `Array<Range>` does not (codegen cannot
-/// lower a range element yet), so it is not pinned as accepted.
-#[test]
-fn storing_a_range_hands_nothing_over() {
-    assert_accepted(
-        "shape Window { span: Range }
+}", "(High) over-rejection: a `sensitive string` is the string pointer with a label and its copy is the receiver's bits (`owned_copy_plan`), so storing one hands nothing over";
+    storing_a_range_hands_nothing_over: "shape Window { span: Range }
 function underTest() -> Int {
   let wholeRange = range(0, 3)
   let sameRange = wholeRange
@@ -794,271 +623,16 @@ function underTest() -> Int {
     total = total + k
   }
   return total
-}",
-    );
+}", "(High) over-rejection: a `Range` is its start and end and nothing can change them, so a `let` and a struct literal holding `wholeRange` leave it readable (an `Array<Range>` does not build end to end yet, so it is not pinned)";
+    a_callee_that_only_reads_an_argument_leaves_it_readable: "function tally(lend into: Array<Int>, from: Array<Int>) -> Nothing {
+  into.add(from.count())
 }
-
-const EAT2: &str = "function eat_all(give rows: Array<Array<Int>>) -> Nothing {
-  print(rows.count().toString())
-}\n";
-
-/// (High) A store of a value the program does not read again is accepted, and the container
-/// can be given on: the stored value travels with it, so `numbers`'s transfer is the store and the
-/// container's is the give.
-#[test]
-fn a_store_then_a_give_of_the_container_is_accepted_and_recorded_twice() {
-    let source = format!(
-        "{EAT2}function underTest() -> Nothing {{
-  let numbers: Array<Int> = [1, 2, 3]
-  let container: Array<Array<Int>> = []
-  container.add(numbers)
-  eat_all(container)
-}}"
-    );
-    let transfers = transfers_of(&source, "underTest");
-    assert_eq!(
-        escapes_of(&transfers, "numbers"),
-        vec![stored("`container`")]
-    );
-    assert_eq!(
-        escapes_of(&transfers, "container"),
-        vec![Escape::Given {
-            callee: "eat_all".to_string()
-        }]
-    );
-}
-
-// Escapes are recorded per class: a store, a give, a send and a store into a temporary are
-// facts the release pass reads (a `return` is asserted by the S3 tests above).
-
-/// (High) A `send` is recorded as `Sent` on the channel: a release pass that read no escape
-/// would free the sent array at the producer's scope exit while the receiver reads it.
-#[test]
-fn a_send_is_recorded_as_an_escape_on_its_channel() {
-    let source = "function producer(lend wire: Channel<Array<Int>>) -> Nothing {
-  let sent: Array<Int> = [10, 20, 30]
-  wire.send(sent)
-  wire.close()
-}";
-    let transfers = transfers_of(source, "producer");
-    assert_eq!(
-        escapes_of(&transfers, "sent"),
-        vec![Escape::Sent {
-            channel: "wire".to_string()
-        }]
-    );
-}
-
-/// (High) A store into a place no binding names (`makeBag().items = numbers`) is recorded, not
-/// dropped: the temporary holds `numbers`, so nothing here may release it as a plain local.
-#[test]
-fn a_store_into_a_temporary_is_recorded_as_an_escape() {
-    let source = format!(
-        "{BAG}function makeBag() -> Bag {{
-  return {{ items: [0] }}
-}}
-function underTest() -> Nothing {{
-  let numbers: Array<Int> = [1, 2, 3]
-  makeBag().items = numbers
-}}"
-    );
-    let transfers = transfers_of(&source, "underTest");
-    assert_eq!(
-        escapes_of(&transfers, "numbers"),
-        vec![stored("`makeBag().items`")]
-    );
-}
-
-/// (High) A store of a parameter the caller keeps (`lend`, `share` or bare) is refused: the
-/// caller owns the value, so the container could not own it too.
-#[test]
-fn storing_a_borrowed_parameter_is_rejected() {
-    assert_rejected_with(
-        "function stash(lend bucket: Array<Array<Int>>, rows: Array<Int>) -> Nothing {
-  bucket.add(rows)
-}",
-        "is a parameter of `stash`",
-    );
-}
-
-/// (High) A piece of a parameter the caller keeps stays recorded as the caller's: a class with a
-/// borrowed parameter in it is never released here.
-#[test]
-fn a_borrowed_parameter_in_the_class_means_the_caller_owns_it() {
-    let source = "function underTest(share bag: Bag) -> Int {
-  let view: Array<Int> = bag.items
-  return view.count()
-}";
-    let transfers = transfers_of(&format!("{BAG}{source}"), "underTest");
-    assert!(transfers.same_class("bag", "view"), "{transfers:#?}");
-    let class = transfers.class_of("view").expect("class");
-    assert!(
-        matches!(&class.anchor, ReleaseAnchor::CallerOwns { .. }),
-        "{class:#?}"
-    );
-}
-
-/// (High) The founder is the owner whose scope exits last: a piece declared deeper never anchors
-/// a class an outer owner is in.
-#[test]
-fn the_outer_owner_is_the_founder_of_a_class_with_a_deeper_piece() {
-    let source = "function underTest() -> Int {
-  let outer: Bag = { items: [1] }
-  let total: Int = 0
-  if (true) {
-    let inner: Array<Int> = outer.items
-    total = inner.count()
-  }
-  return outer.items.count() + total
-}";
-    let transfers = transfers_of(&format!("{BAG}{source}"), "underTest");
-    assert_eq!(founder_name(&transfers, "inner"), "outer");
-}
-
-/// (High) An imported function that returns a `Maybe` holding a `Channel` hands back a counted
-/// reference of its own (`copied_at_return`: its `return` shares what it does not move, C7 slice 3b;
-/// ruled by the Software Architect within the Chief Architect's counted-reference rule). The holder
-/// binds the result by move and is its own founder, so `held` and `local` are each released once and
-/// no class is left without a static founder (this was the reproducer of `NoStaticFounder`).
-#[test]
-fn a_maybe_channel_an_imported_function_returns_is_an_owner_in_a_class_of_its_own() {
-    let library =
-        "export function firstChan(share chans: Array<Channel<Int>>) -> Maybe<Channel<Int>> {
-  return chans.first()
-}\n";
-    let main = "import { firstChan } from `lib`
-function underTest(condition: Boolean) -> Nothing {
-  let held: Maybe<Channel<Int>> = none
-  if (condition) {
-    let local: Array<Channel<Int>> = [Channel<Int>()]
-    held = firstChan(local)
-  }
-}
-function entrypoint() -> Nothing {
-}
-";
-    let transfers = record_of(&run_with_library(library, main), "underTest");
-    assert!(!transfers.same_class("held", "local"), "{transfers:#?}");
-    assert_eq!(founder_name(&transfers, "held"), "held");
-    assert_eq!(founder_name(&transfers, "local"), "local");
-}
-
-/// (High) An imported function (or a local one) that returns its `Channel` argument hands back a
-/// counted reference of its own (`ynz_channel_share` at the callee's `return`, `copied_at_return`),
-/// so the binding that holds the result owns it. It joins nothing, so `held` and `local` are each the founder of a class of
-/// their own and the channel is released once per reference.
-#[test]
-fn a_handed_back_channel_is_a_counted_reference_in_a_class_of_its_own() {
-    let library = "export function same(share ch: Channel<Int>) -> Channel<Int> {
-  return ch
-}\n";
-    let main = "import { same } from `lib`
-function passOn(share ch: Channel<Int>) -> Channel<Int> {
-  return ch
-}
-function viaImport(condition: Boolean) -> Nothing {
-  let held: Channel<Int> = Channel<Int>()
-  if (condition) {
-    let local: Channel<Int> = Channel<Int>()
-    held = same(local)
-  }
-}
-function viaLocal(condition: Boolean) -> Nothing {
-  let held: Channel<Int> = Channel<Int>()
-  if (condition) {
-    let local: Channel<Int> = Channel<Int>()
-    held = passOn(local)
-  }
-}
-function entrypoint() -> Nothing {
-}
-";
-    let output = run_with_library(library, main);
-    for function in ["viaImport", "viaLocal"] {
-        let transfers = record_of(&output, function);
-        assert!(
-            !transfers.same_class("held", "local"),
-            "{function}: {transfers:#?}"
-        );
-        assert_eq!(founder_name(&transfers, "held"), "held");
-        assert_eq!(founder_name(&transfers, "local"), "local");
-    }
-}
-
-/// (High) An imported function that returns a `Maybe` (or a union) may hand back a piece of its
-/// argument. The binding that holds the result outlives `local`, so it owns a copy
-/// (`MustCopy` in `non_owned_reads`): it joins nothing and `local` is its own founder.
-#[test]
-fn an_untraceable_maybe_result_is_a_copy_owner_in_a_class_of_its_own() {
-    let library = "export function firstRow(share rows: Array<Array<Int>>) -> Maybe<Array<Int>> {
-  return rows.first()
-}\n";
-    let main = "import { firstRow } from `lib`
-function underTest(condition: Boolean) -> Int {
-  let held: Maybe<Array<Int>> = none
-  if (condition) {
-    let local: Array<Array<Int>> = [[1]]
-    held = firstRow(local)
-  }
-  return 1
-}
-function entrypoint() -> Nothing {
-}
-";
-    let transfers = record_of(&run_with_library(library, main), "underTest");
-    assert!(!transfers.same_class("held", "local"), "{transfers:#?}");
-    assert_eq!(founder_name(&transfers, "held"), "held");
-    assert_eq!(founder_name(&transfers, "local"), "local");
-}
-
-/// (High) The field read that used to leave no static founder (`cell = owner.rows`, `cell`
-/// outlives `owner`) is a copy typeck judged `MustCopy`: `cell` owns a value of its own and joins
-/// nothing, so each is the founder of a class of its own.
-#[test]
-fn a_field_read_that_outlives_its_root_is_a_copy_owner_in_a_class_of_its_own() {
-    let source = format!(
-        "{BUCKET}function make() -> Bucket {{
-  let bucket: Bucket = {{ rows: [9] }}
-  return bucket
-}}
-function underTest(condition: Boolean) -> Int {{
-  let cell: Array<Int> = make().rows
-  if (condition) {{
-    let owner: Bucket = make()
-    cell = owner.rows
-  }}
-  return cell.count()
-}}"
-    );
-    let transfers = transfers_of(&source, "underTest");
-    assert!(!transfers.same_class("cell", "owner"), "{transfers:#?}");
-    assert_eq!(founder_name(&transfers, "cell"), "cell");
-    assert_eq!(founder_name(&transfers, "owner"), "owner");
-}
-
-const BUCKET: &str = "shape Bucket {\n  rows: Array<Int>\n}\n";
-
-// ── a call that stores one argument into another ────────────────────────────
-
-const PUT: &str =
-    "function put(lend container: Array<Array<Int>>, give numbers: Array<Int>) -> Nothing {
-  container.add(numbers)
-}
-function relay(lend container: Array<Array<Int>>, give numbers: Array<Int>) -> Nothing {
-  put(container, numbers)
-}\n";
-
-/// (High) A callee that stores a parameter it does not own would hand the caller's value to its
-/// container behind the caller's back: the store is refused inside the callee, which must say
-/// `give` (so every caller hands the value over for good).
-#[test]
-fn a_callee_that_stores_a_bare_parameter_is_rejected() {
-    assert_rejected_with(
-        "function put(lend container: Array<Array<Int>>, numbers: Array<Int>) -> Nothing {
-  container.add(numbers)
-}",
-        "is a parameter of `put` that has no ownership word",
-    );
+function underTest() -> Int {
+  let from: Array<Int> = [1, 2, 3]
+  let into: Array<Int> = []
+  tally(into, from)
+  return from.count() + into.count()
+}", "(High) over-rejection: a callee that only READS `from` into `into` takes nothing over, so both stay usable";
 }
 
 fn assert_read_after_call_give_rejected(source: &str) {
@@ -1080,187 +654,68 @@ cases! { assert_read_after_call_give_rejected;
 }}"), "(High) the store happens in the callee's own call (`relay` -> `put`): `relay`'s parameter is `give` too";
 }
 
-/// (High) `put(container, numbers)` records the give on the caller's `numbers`: a release pass sees
-/// `numbers` leave.
-#[test]
-fn a_call_that_stores_a_given_argument_is_recorded_as_a_give() {
-    let source = format!(
-        "{PUT}function make() -> Array<Array<Int>> {{
-  let numbers: Array<Int> = [1, 2, 3]
-  let container: Array<Array<Int>> = []
-  put(container, numbers)
-  return container
-}}"
-    );
-    let transfers = transfers_of(&source, "make");
-    assert!(
-        !transfers.same_class("numbers", "container"),
-        "{transfers:#?}"
-    );
-    assert_eq!(
-        escapes_of(&transfers, "numbers"),
-        vec![Escape::Given {
-            callee: "put".to_string()
-        }]
-    );
+// ── how a spawn in a loop takes its binding ─────────────────────────────────
+
+/// The ownership typeck inferred for the one `background work(rows)` spawn in `source`; the
+/// program must be free of errors.
+fn spawn_ownership_of(source: &str) -> Vec<BgOwnership> {
+    let output = run(source);
+    let found = errors(&output);
+    assert!(found.is_empty(), "{found:#?}");
+    output
+        .typed_module
+        .background_arg_inferred_ownership
+        .values()
+        .cloned()
+        .collect()
 }
 
-/// (High) The converse: a callee that only READS `from` into `into` takes nothing over, so both
-/// stay usable (no false rejection of a program that is correct).
-#[test]
-fn a_callee_that_only_reads_an_argument_leaves_it_readable() {
-    assert_accepted(
-        "function tally(lend into: Array<Int>, from: Array<Int>) -> Nothing {
-  into.add(from.count())
-}
-function underTest() -> Int {
-  let from: Array<Int> = [1, 2, 3]
-  let into: Array<Int> = []
-  tally(into, from)
-  return from.count() + into.count()
-}",
-    );
+fn assert_spawn_copies(source: &str) {
+    assert_eq!(spawn_ownership_of(source), vec![BgOwnership::Copy]);
 }
 
-// ── the remaining no-owner cases ────────────────────────────────────────────
-
-fn assert_no_owner(transfers: &FunctionTransfers, member: &str) {
-    let class = transfers
-        .class_of(member)
-        .unwrap_or_else(|| panic!("`{member}` is in no class"));
-    assert_eq!(class.anchor, ReleaseAnchor::NoOwner, "{class:#?}");
+fn assert_spawn_gives(source: &str) {
+    assert_eq!(spawn_ownership_of(source), vec![BgOwnership::Give]);
 }
 
-/// (High) A string, array or map field of a temporary that a `let` keeps is TAKEN, not copied
-/// (`ReadVerdict::Take`): the binding is the owner of the field, a founder that releases it.
-/// This binding was `NoOwner` before the take existed (C7 slice 2, item 6: the pin
-/// `a_piece_of_a_temporary_is_recorded_as_no_owner` moved here).
-#[test]
-fn a_field_taken_out_of_a_temporary_is_owned_by_its_binding() {
-    let source = format!(
-        "{BUCKET}function make() -> Bucket {{
-  let bucket: Bucket = {{ rows: [9] }}
-  return bucket
-}}
-function underTest() -> Int {{
-  let cell: Array<Int> = make().rows
-  return cell.count()
-}}"
-    );
-    let transfers = transfers_of(&source, "underTest");
-    let class = transfers.class_of("cell").expect("`cell` is in a class");
-    assert!(
-        matches!(&class.anchor, ReleaseAnchor::Founder { codegen_name, .. } if codegen_name == "cell"),
-        "{class:#?}"
-    );
-}
-
-/// (High) `NoOwner` for a loop cell of a temporary (`for (row in make())`).
-#[test]
-fn a_loop_cell_of_a_temporary_is_recorded_as_no_owner() {
-    let source = "function make() -> Array<Array<Int>> {
-  let rows: Array<Array<Int>> = [[1]]
-  return rows
-}
-function underTest() -> Int {
-  let total: Int = 0
-  for (row in make()) {
-    total = total + row.count()
-  }
-  return total
-}";
-    assert_no_owner(&transfers_of(source, "underTest"), "row");
-}
-
-/// (High) An IMPORTED function's result of a type copied at `return` is an owned value, as a local
-/// function's is: the declared return type says what the unseen `return` does, so the binding that
-/// holds it founds its own class and releases it (C7 slice 3b; it was `NoOwner`, a leak).
-#[test]
-fn an_imported_functions_result_is_owned_by_the_binding_that_holds_it() {
-    let library = "export function fresh() -> Array<Int> {
-  return [1]
-}\n";
-    let main = "import { fresh } from `lib`
-function underTest() -> Int {
-  let result: Array<Int> = fresh()
-  return result.count()
-}
-function entrypoint() -> Nothing {
+const WORK: &str = "function work(rows: Array<Int>) -> Nothing {
+  print(rows.count().toString())
 }
 ";
-    let transfers = record_of(&run_with_library(library, main), "underTest");
-    assert_eq!(founder_name(&transfers, "result"), "result");
-}
 
-// ── inference that feeds the record ─────────────────────────────────────────
-
-/// (High) A `background` spawn inside a loop of a binding declared OUTSIDE it: the next pass
-/// spawns with the same binding, so the first spawn must copy, never give (a second give is a
-/// second owner of one array).
-#[test]
-fn a_spawn_in_a_loop_of_an_outer_binding_copies_it() {
-    use ynz_typeck::check::BgOwnership;
-    let spawn_in = |declared_outside: bool| -> Vec<BgOwnership> {
-        let (outside, inside) = if declared_outside {
-            ("  let rows: Array<Int> = [1, 2, 3]\n", "")
-        } else {
-            ("", "    let rows: Array<Int> = [1, 2, 3]\n")
-        };
-        let source = format!(
-            "function work(rows: Array<Int>) -> Nothing {{
-  print(rows.count().toString())
-}}
-function underTest() -> Nothing {{
-{outside}  for (i in range(0, 3)) {{
-{inside}    background work(rows)
+cases! { assert_spawn_copies;
+    a_spawn_in_a_loop_of_an_outer_binding_copies_it: format!("{WORK}function underTest() -> Nothing {{
+  let rows: Array<Int> = [1, 2, 3]
+  for (i in range(0, 3)) {{
+    background work(rows)
   }}
-}}"
-        );
-        let output = run(&source);
-        let found = errors(&output);
-        assert!(found.is_empty(), "{found:#?}");
-        output
-            .typed_module
-            .background_arg_inferred_ownership
-            .values()
-            .cloned()
-            .collect()
-    };
-    assert_eq!(spawn_in(true), vec![BgOwnership::Copy]);
-    assert_eq!(spawn_in(false), vec![BgOwnership::Give]);
+}}"), "(High) a `background` spawn inside a loop of a binding declared OUTSIDE it: the next pass spawns with the same binding, so the first spawn must copy, never give (a second give is a second owner of one array)";
 }
 
-/// (High) A builtin method's result can be an ARGUMENT, not only a piece of the receiver:
-/// `cache.first().or(fallback)` returns `fallback` when the cache is empty (a view while nothing
-/// copies it, a copy that owns its value once it is returned), `left.concat(right)`
-/// holds the elements of both. Returned, `fallback` / `right` must escape with it.
-#[test]
-fn a_builtin_methods_result_reaches_its_heap_arguments() {
-    let or_source = "function pick(cache: Array<Array<Int>>) -> Array<Int> {
-  let fallback: Array<Int> = [1]
-  let found: Array<Int> = cache.first().or(fallback)
-  return found
-}";
-    let transfers = transfers_of(or_source, "pick");
-    // `found` is returned, so typeck judges `cache.first().or(fallback)` a copy: `found` owns a value
-    // of its own and joins nothing.
-    assert!(!transfers.same_class("found", "fallback"), "{transfers:#?}");
-    assert!(transfers
-        .class_of("found")
-        .is_some_and(|class| class.members[0].copy_owner));
-
-    let concat_source = "function both() -> Array<Array<Int>> {
-  let left: Array<Array<Int>> = [[1]]
-  let right: Array<Array<Int>> = [[2]]
-  let joined: Array<Array<Int>> = left.concat(right)
-  return joined
-}";
-    let transfers = transfers_of(concat_source, "both");
-    assert!(transfers.same_class("left", "right"), "{transfers:#?}");
-    assert_eq!(escapes_of(&transfers, "right"), vec![Escape::Returned]);
+cases! { assert_spawn_gives;
+    a_spawn_in_a_loop_of_a_loop_local_gives_it: format!("{WORK}function underTest() -> Nothing {{
+  for (i in range(0, 3)) {{
+    let rows: Array<Int> = [1, 2, 3]
+    background work(rows)
+  }}
+}}"), "(High) a spawn of a binding the loop declares afresh each pass gives it: the copy that an outer binding needs would be a leak per pass";
 }
 
-// ── receivers that are not a name chain (fixer round 1) ─────────────────────
+// ── what the record says about each binding ─────────────────────────────────
+
+const BUCKET: &str = "shape Bucket {\n  rows: Array<Int>\n}\n";
+
+const EAT2: &str = "function eat_all(give rows: Array<Array<Int>>) -> Nothing {
+  print(rows.count().toString())
+}\n";
+
+const PUT: &str =
+    "function put(lend container: Array<Array<Int>>, give numbers: Array<Int>) -> Nothing {
+  container.add(numbers)
+}
+function relay(lend container: Array<Array<Int>>, give numbers: Array<Int>) -> Nothing {
+  put(container, numbers)
+}\n";
 
 const FIRST_BAG: &str = "shape Bag {
   items: Array<Int>
@@ -1270,35 +725,356 @@ function firstBag<T>(share bags: Array<T>, share fallback: T) -> T {
 }
 ";
 
-/// (High) Bug caught: `firstBag(bags, empty).items` is a piece of `bags` (the callee returns one of its
-/// elements), but the field access rooted only in NAME chains and recorded no root, so `piece` was
-/// free to be released while `bags` still held it. (A generic callee: a function returning a shape, an
-/// array, a map or a string hands back an owned copy, so only a type parameter still returns a piece.)
-#[test]
-fn a_field_of_a_call_result_is_a_piece_of_the_calls_arguments() {
-    let source = format!(
+const MAYBE_CHANNEL_LIBRARY: &str =
+    "export function firstChan(share chans: Array<Channel<Int>>) -> Maybe<Channel<Int>> {
+  return chans.first()
+}\n";
+
+const MAYBE_CHANNEL_MAIN: &str = "import { firstChan } from `lib`
+function underTest(condition: Boolean) -> Nothing {
+  let held: Maybe<Channel<Int>> = none
+  if (condition) {
+    let local: Array<Channel<Int>> = [Channel<Int>()]
+    held = firstChan(local)
+  }
+}
+function entrypoint() -> Nothing {
+}
+";
+
+const HANDED_BACK_LIBRARY: &str = "export function same(share ch: Channel<Int>) -> Channel<Int> {
+  return ch
+}\n";
+
+const HANDED_BACK_MAIN: &str = "import { same } from `lib`
+function passOn(share ch: Channel<Int>) -> Channel<Int> {
+  return ch
+}
+function viaImport(condition: Boolean) -> Nothing {
+  let held: Channel<Int> = Channel<Int>()
+  if (condition) {
+    let local: Channel<Int> = Channel<Int>()
+    held = same(local)
+  }
+}
+function viaLocal(condition: Boolean) -> Nothing {
+  let held: Channel<Int> = Channel<Int>()
+  if (condition) {
+    let local: Channel<Int> = Channel<Int>()
+    held = passOn(local)
+  }
+}
+function entrypoint() -> Nothing {
+}
+";
+
+const UNTRACEABLE_MAYBE_LIBRARY: &str =
+    "export function firstRow(share rows: Array<Array<Int>>) -> Maybe<Array<Int>> {
+  return rows.first()
+}\n";
+
+const UNTRACEABLE_MAYBE_MAIN: &str = "import { firstRow } from `lib`
+function underTest(condition: Boolean) -> Int {
+  let held: Maybe<Array<Int>> = none
+  if (condition) {
+    let local: Array<Array<Int>> = [[1]]
+    held = firstRow(local)
+  }
+  return 1
+}
+function entrypoint() -> Nothing {
+}
+";
+
+const IMPORTED_RESULT_LIBRARY: &str = "export function fresh() -> Array<Int> {
+  return [1]
+}\n";
+
+const IMPORTED_RESULT_MAIN: &str = "import { fresh } from `lib`
+function underTest() -> Int {
+  let result: Array<Int> = fresh()
+  return result.count()
+}
+function entrypoint() -> Nothing {
+}
+";
+
+fn assert_no_owner(transfers: &FunctionTransfers, member: &str) {
+    let class = transfers
+        .class_of(member)
+        .unwrap_or_else(|| panic!("`{member}` is in no class"));
+    assert_eq!(class.anchor, ReleaseAnchor::NoOwner, "{class:#?}");
+}
+
+/// One named test per program: `record_cases!(name: output, "function", |transfers| { checks },
+/// "bug it catches (High)";)` runs the program, requires zero errors, and hands the record of
+/// `function` to the checks.
+macro_rules! record_cases {
+    ($($case:ident: $output:expr, $function:literal, |$transfers:ident| $checks:block, $bug:literal;)+) => {
+        $(
+            // bug: typeck's transfer record loses or misplaces a transfer (a store, give, send, join or owner), so a release pass frees a value twice, too early or never | tier: High
+            #[doc = $bug]
+            #[test]
+            fn $case() {
+                let $transfers = record_of(&$output, $function);
+                $checks
+            }
+        )+
+    };
+}
+
+record_cases! {
+    a_field_set_hands_the_value_to_the_field: run(&format!(
+        "{BAG}function make() -> Bag {{
+  let numbers: Array<Int> = [1, 2, 3]
+  let bag: Bag = {{ items: [0] }}
+  bag.items = numbers
+  return bag
+}}"
+    )), "make", |transfers| {
+        assert!(!transfers.same_class("numbers", "bag"), "{transfers:#?}");
+        assert_eq!(escapes_of(&transfers, "numbers"), vec![stored("`bag.items`")]);
+        assert_eq!(escapes_of(&transfers, "bag"), vec![Escape::Returned]);
+    }, "(High) `bag.items = numbers; return bag`: the field-set stores `numbers` in `bag`, so `numbers` is handed over and `bag` (which owns the value now) escapes by return; before, the two shared one class and a release pass could not tell who frees the array";
+    a_container_add_hands_the_value_to_the_container: run("function make() -> Array<Array<Int>> {
+  let numbers: Array<Int> = [1, 2, 3]
+  let container: Array<Array<Int>> = []
+  container.add(numbers)
+  return container
+}"), "make", |transfers| {
+        assert!(!transfers.same_class("numbers", "container"), "{transfers:#?}");
+        assert_eq!(escapes_of(&transfers, "numbers"), vec![stored("`container`")]);
+        assert_eq!(escapes_of(&transfers, "container"), vec![Escape::Returned]);
+    }, "(High) `container.add(numbers); return container`: the container `.add` hands `numbers` over to `container`";
+    an_index_set_hands_the_value_to_the_slot: run("function make() -> Array<Array<Int>> {
+  let numbers: Array<Int> = [1, 2, 3]
+  let container: Array<Array<Int>> = [[0]]
+  container[0] = numbers
+  return container
+}"), "make", |transfers| {
+        assert!(!transfers.same_class("numbers", "container"), "{transfers:#?}");
+        assert_eq!(escapes_of(&transfers, "numbers"), vec![stored("`container[0]`")]);
+        assert_eq!(escapes_of(&transfers, "container"), vec![Escape::Returned]);
+    }, "(High) `container[0] = numbers; return container`: the index-set hands `numbers` over to the slot";
+    an_assignment_from_a_loop_local_hands_the_value_to_the_outliving_binding: run("function underTest() -> Int {
+  let acc: Array<Int> = [0]
+  let i: Int = 0
+  while (i < 2) {
+    let per: Array<Int> = [i, i, i]
+    acc = per
+    i = i + 1
+  }
+  return acc.count()
+}"), "underTest", |transfers| {
+        assert!(!transfers.same_class("acc", "per"), "{transfers:#?}");
+        assert_eq!(escapes_of(&transfers, "per"), vec![stored("`acc`")]);
+        assert_eq!(founder_name(&transfers, "acc"), "acc");
+    }, "(High) `acc = per` inside a loop: `acc` outlives `per`, so a release at the back-edge of `per` would free what `acc` still holds; `per` escapes and `acc` is the founder of its own class";
+    a_struct_literal_hands_every_part_to_the_literal: run(&format!(
+        "{PAIR}function make() -> Pair {{
+  let numbers: Array<Int> = [1, 2, 3]
+  let moreNumbers: Array<Int> = [4, 5]
+  let pair: Pair = {{ first: numbers, second: moreNumbers }}
+  return pair
+}}"
+    )), "make", |transfers| {
+        assert!(!transfers.same_class("numbers", "moreNumbers"), "{transfers:#?}");
+        let literal = "the literal `{ first: numbers, second: moreNumbers }`";
+        assert_eq!(escapes_of(&transfers, "numbers"), vec![stored(literal)]);
+        assert_eq!(escapes_of(&transfers, "moreNumbers"), vec![stored(literal)]);
+        assert_eq!(escapes_of(&transfers, "pair"), vec![Escape::Returned]);
+    }, "(High) `{ first: numbers, second: moreNumbers }` returned through `pair`: the literal takes over EVERY named heap part, not only the first; before, `moreNumbers` was released while the returned `pair` held it";
+    a_let_of_a_whole_binding_hands_the_value_to_the_new_binding: run("function underTest() -> Int {
+  let first: Array<Int> = [1]
+  let second: Array<Int> = first
+  return second.count()
+}"), "underTest", |transfers| {
+        assert!(!transfers.same_class("first", "second"), "{transfers:#?}");
+        assert_eq!(escapes_of(&transfers, "first"), vec![stored("`second`")]);
+        assert_eq!(founder_name(&transfers, "second"), "second");
+    }, "(High) `let second = first`: the second name takes the value over, so `first` is handed to `second` and `second` is the founder of the value it now owns";
+    storing_bits_hands_nothing_over: run("function underTest() -> Int {
+  let numbers: Array<Int> = [1, 2, 3]
+  let container: Array<Int> = []
+  container.add(numbers[0].or(0))
+  container.add(numbers.count())
+  return container.count() + numbers.count()
+}"), "underTest", |transfers| {
+        assert_eq!(escapes_of(&transfers, "numbers"), Vec::<Escape>::new());
+    }, "(High) over-joining: bits are copied, not handed over, so storing an int taken from `numbers` records nothing for it";
+    a_store_then_a_give_of_the_container_is_recorded_twice: run(&format!(
+        "{EAT2}function underTest() -> Nothing {{
+  let numbers: Array<Int> = [1, 2, 3]
+  let container: Array<Array<Int>> = []
+  container.add(numbers)
+  eat_all(container)
+}}"
+    )), "underTest", |transfers| {
+        assert_eq!(escapes_of(&transfers, "numbers"), vec![stored("`container`")]);
+        assert_eq!(
+            escapes_of(&transfers, "container"),
+            vec![Escape::Given { callee: "eat_all".to_string() }]
+        );
+    }, "(High) a store of a value the program does not read again is accepted and the container can be given on: the stored value travels with it, so `numbers`'s transfer is the store and the container's is the give";
+    a_send_is_recorded_as_an_escape_on_its_channel: run("function producer(lend wire: Channel<Array<Int>>) -> Nothing {
+  let sent: Array<Int> = [10, 20, 30]
+  wire.send(sent)
+  wire.close()
+}"), "producer", |transfers| {
+        assert_eq!(
+            escapes_of(&transfers, "sent"),
+            vec![Escape::Sent { channel: "wire".to_string() }]
+        );
+    }, "(High) a `send` is recorded as `Sent` on the channel: a release pass that read no escape would free the sent array at the producer's scope exit while the receiver reads it";
+    a_store_into_a_temporary_is_recorded_as_an_escape: run(&format!(
+        "{BAG}function makeBag() -> Bag {{
+  return {{ items: [0] }}
+}}
+function underTest() -> Nothing {{
+  let numbers: Array<Int> = [1, 2, 3]
+  makeBag().items = numbers
+}}"
+    )), "underTest", |transfers| {
+        assert_eq!(escapes_of(&transfers, "numbers"), vec![stored("`makeBag().items`")]);
+    }, "(High) a store into a place no binding names (`makeBag().items = numbers`) is recorded, not dropped: the temporary holds `numbers`, so nothing may release it as a plain local";
+    a_borrowed_parameter_in_the_class_means_the_caller_owns_it: run(&format!(
+        "{BAG}function underTest(share bag: Bag) -> Int {{
+  let view: Array<Int> = bag.items
+  return view.count()
+}}"
+    )), "underTest", |transfers| {
+        assert!(transfers.same_class("bag", "view"), "{transfers:#?}");
+        let class = transfers.class_of("view").expect("class");
+        assert!(matches!(&class.anchor, ReleaseAnchor::CallerOwns { .. }), "{class:#?}");
+    }, "(High) a piece of a parameter the caller keeps stays recorded as the caller's: a class with a borrowed parameter in it is never released here";
+    the_outer_owner_is_the_founder_of_a_class_with_a_deeper_piece: run(&format!(
+        "{BAG}function underTest() -> Int {{
+  let outer: Bag = {{ items: [1] }}
+  let total: Int = 0
+  if (true) {{
+    let inner: Array<Int> = outer.items
+    total = inner.count()
+  }}
+  return outer.items.count() + total
+}}"
+    )), "underTest", |transfers| {
+        assert_eq!(founder_name(&transfers, "inner"), "outer");
+    }, "(High) the founder is the owner whose scope exits last: a piece declared deeper never anchors a class an outer owner is in";
+    a_maybe_channel_an_imported_function_returns_is_an_owner_in_a_class_of_its_own: run_with_library(MAYBE_CHANNEL_LIBRARY, MAYBE_CHANNEL_MAIN), "underTest", |transfers| {
+        assert!(!transfers.same_class("held", "local"), "{transfers:#?}");
+        assert_eq!(founder_name(&transfers, "held"), "held");
+        assert_eq!(founder_name(&transfers, "local"), "local");
+    }, "(High) an imported function that returns a `Maybe` holding a `Channel` hands back a counted reference of its own (`copied_at_return`), so the holder is its own founder and each is released once; no class is left without a static founder (the reproducer of `NoStaticFounder`)";
+    a_channel_handed_back_by_an_imported_function_is_a_counted_reference_in_a_class_of_its_own: run_with_library(HANDED_BACK_LIBRARY, HANDED_BACK_MAIN), "viaImport", |transfers| {
+        assert!(!transfers.same_class("held", "local"), "{transfers:#?}");
+        assert_eq!(founder_name(&transfers, "held"), "held");
+        assert_eq!(founder_name(&transfers, "local"), "local");
+    }, "(High) an imported function that returns its `Channel` argument hands back a counted reference (`ynz_channel_share` at the callee's `return`), so the binding that holds it owns it and the channel is released once per reference";
+    a_channel_handed_back_by_a_local_function_is_a_counted_reference_in_a_class_of_its_own: run_with_library(HANDED_BACK_LIBRARY, HANDED_BACK_MAIN), "viaLocal", |transfers| {
+        assert!(!transfers.same_class("held", "local"), "{transfers:#?}");
+        assert_eq!(founder_name(&transfers, "held"), "held");
+        assert_eq!(founder_name(&transfers, "local"), "local");
+    }, "(High) the same counted reference when the function that returns its `Channel` argument is a local one";
+    an_untraceable_maybe_result_is_a_copy_owner_in_a_class_of_its_own: run_with_library(UNTRACEABLE_MAYBE_LIBRARY, UNTRACEABLE_MAYBE_MAIN), "underTest", |transfers| {
+        assert!(!transfers.same_class("held", "local"), "{transfers:#?}");
+        assert_eq!(founder_name(&transfers, "held"), "held");
+        assert_eq!(founder_name(&transfers, "local"), "local");
+    }, "(High) an imported function that returns a `Maybe` may hand back a piece of its argument; the binding that holds the result outlives `local`, so it owns a copy (`MustCopy`): it joins nothing and `local` is its own founder";
+    a_field_read_that_outlives_its_root_is_a_copy_owner_in_a_class_of_its_own: run(&format!(
+        "{BUCKET}function make() -> Bucket {{
+  let bucket: Bucket = {{ rows: [9] }}
+  return bucket
+}}
+function underTest(condition: Boolean) -> Int {{
+  let cell: Array<Int> = make().rows
+  if (condition) {{
+    let owner: Bucket = make()
+    cell = owner.rows
+  }}
+  return cell.count()
+}}"
+    )), "underTest", |transfers| {
+        assert!(!transfers.same_class("cell", "owner"), "{transfers:#?}");
+        assert_eq!(founder_name(&transfers, "cell"), "cell");
+        assert_eq!(founder_name(&transfers, "owner"), "owner");
+    }, "(High) the field read that used to leave no static founder (`cell = owner.rows`, `cell` outlives `owner`) is a copy typeck judged `MustCopy`: `cell` owns a value of its own and joins nothing";
+    a_call_that_stores_a_given_argument_is_recorded_as_a_give: run(&format!(
+        "{PUT}function make() -> Array<Array<Int>> {{
+  let numbers: Array<Int> = [1, 2, 3]
+  let container: Array<Array<Int>> = []
+  put(container, numbers)
+  return container
+}}"
+    )), "make", |transfers| {
+        assert!(!transfers.same_class("numbers", "container"), "{transfers:#?}");
+        assert_eq!(
+            escapes_of(&transfers, "numbers"),
+            vec![Escape::Given { callee: "put".to_string() }]
+        );
+    }, "(High) `put(container, numbers)` records the give on the caller's `numbers`: a release pass sees `numbers` leave";
+    a_field_taken_out_of_a_temporary_is_owned_by_its_binding: run(&format!(
+        "{BUCKET}function make() -> Bucket {{
+  let bucket: Bucket = {{ rows: [9] }}
+  return bucket
+}}
+function underTest() -> Int {{
+  let cell: Array<Int> = make().rows
+  return cell.count()
+}}"
+    )), "underTest", |transfers| {
+        let class = transfers.class_of("cell").expect("`cell` is in a class");
+        assert!(
+            matches!(&class.anchor, ReleaseAnchor::Founder { codegen_name, .. } if codegen_name == "cell"),
+            "{class:#?}"
+        );
+    }, "(High) a string, array or map field of a temporary that a `let` keeps is TAKEN, not copied (`ReadVerdict::Take`): the binding is the owner of the field, a founder that releases it (it was `NoOwner` before the take existed, a leak)";
+    a_loop_cell_of_a_temporary_is_recorded_as_no_owner: run("function make() -> Array<Array<Int>> {
+  let rows: Array<Array<Int>> = [[1]]
+  return rows
+}
+function underTest() -> Int {
+  let total: Int = 0
+  for (row in make()) {
+    total = total + row.count()
+  }
+  return total
+}"), "underTest", |transfers| {
+        assert_no_owner(&transfers, "row");
+    }, "(High) `NoOwner` for a loop cell of a temporary (`for (row in make())`): nothing may release a cell of a value the loop does not own";
+    an_imported_functions_result_is_owned_by_the_binding_that_holds_it: run_with_library(IMPORTED_RESULT_LIBRARY, IMPORTED_RESULT_MAIN), "underTest", |transfers| {
+        assert_eq!(founder_name(&transfers, "result"), "result");
+    }, "(High) an imported function's result of a type copied at `return` is an owned value, as a local function's is: the binding that holds it founds its own class and releases it (it was `NoOwner`, a leak)";
+    a_builtin_or_result_is_a_copy_that_joins_nothing: run("function pick(cache: Array<Array<Int>>) -> Array<Int> {
+  let fallback: Array<Int> = [1]
+  let found: Array<Int> = cache.first().or(fallback)
+  return found
+}"), "pick", |transfers| {
+        assert!(!transfers.same_class("found", "fallback"), "{transfers:#?}");
+        assert!(transfers
+            .class_of("found")
+            .is_some_and(|class| class.members[0].copy_owner));
+    }, "(High) a builtin method's result can be an ARGUMENT: `cache.first().or(fallback)` returns `fallback` when the cache is empty; returned, typeck judges it a copy, so `found` owns a value of its own and joins nothing";
+    a_builtin_concat_result_holds_the_elements_of_both_arguments: run("function both() -> Array<Array<Int>> {
+  let left: Array<Array<Int>> = [[1]]
+  let right: Array<Array<Int>> = [[2]]
+  let joined: Array<Array<Int>> = left.concat(right)
+  return joined
+}"), "both", |transfers| {
+        assert!(transfers.same_class("left", "right"), "{transfers:#?}");
+        assert_eq!(escapes_of(&transfers, "right"), vec![Escape::Returned]);
+    }, "(High) `left.concat(right)` holds the elements of both arguments: returned, `right` must escape with it";
+    a_field_of_a_call_result_is_a_piece_of_the_calls_arguments: run(&format!(
         "{FIRST_BAG}function underTest() -> Int {{
   let bags: Array<Bag> = [{{ items: [1] }}]
   let empty: Bag = {{ items: [] }}
   let piece: Array<Int> = firstBag(bags, empty).items
   return piece.count()
 }}"
-    );
-    let transfers = transfers_of(&source, "underTest");
-    // The read copies the field (a call result that may be a piece of its arguments is not a
-    // temporary to take from), so `piece` owns a value of its own: it joins nothing and is
-    // released at its own scope exit, and `bags` is never released while `piece` points into it.
-    assert!(!transfers.same_class("bags", "piece"), "{transfers:#?}");
-    assert_eq!(founder_name(&transfers, "piece"), "piece");
-}
-
-/// (High) A generic callee's `return` copies a heap-typed result at its instance, so
-/// `firstBag(bags, empty).items` is a field of an owned value, not a piece of `bags`: storing it
-/// is accepted and `bags` and `container` hold different arrays. (It was refused as a piece of
-/// `bags`, which also left the result unreleased: a leak per call.)
-#[test]
-fn storing_a_field_of_a_generic_call_result_is_accepted_it_owns_its_value() {
-    let source = format!(
+    )), "underTest", |transfers| {
+        assert!(!transfers.same_class("bags", "piece"), "{transfers:#?}");
+        assert_eq!(founder_name(&transfers, "piece"), "piece");
+    }, "(High) `firstBag(bags, empty).items` is a piece of `bags` (the callee returns one of its elements), but the field access rooted only in NAME chains and recorded no root, so `piece` was released while `bags` still held it; the read copies the field, so `piece` owns a value of its own";
+    storing_a_field_of_a_generic_call_result_keeps_it_apart_from_the_arguments: run(&format!(
         "{FIRST_BAG}function underTest() -> Array<Array<Int>> {{
   let bags: Array<Bag> = [{{ items: [1] }}]
   let empty: Bag = {{ items: [] }}
@@ -1307,36 +1083,23 @@ fn storing_a_field_of_a_generic_call_result_is_accepted_it_owns_its_value() {
   container.add(piece)
   return container
 }}"
-    );
-    let transfers = transfers_of(&source, "underTest");
-    assert!(!transfers.same_class("bags", "piece"), "{transfers:#?}");
-}
-
-/// (High) Bug caught: a store whose PLACE is a call result (`firstBag(bags, empty).items = numbers`) was
-/// recorded as a store into a temporary. It hands `numbers` over to the place: `numbers` escapes,
-/// whatever the place is.
-#[test]
-fn a_store_into_a_piece_of_a_call_result_hands_the_value_over() {
-    let source = format!(
+    )), "underTest", |transfers| {
+        assert!(!transfers.same_class("bags", "piece"), "{transfers:#?}");
+    }, "(High) a generic callee's `return` copies a heap-typed result, so storing `firstBag(bags, empty).items` is accepted and `bags` and `container` hold different arrays (it was refused as a piece of `bags`, which also left the result unreleased: a leak per call)";
+    a_store_into_a_piece_of_a_call_result_hands_the_value_over: run(&format!(
         "{FIRST_BAG}function underTest() -> Nothing {{
   let bags: Array<Bag> = [{{ items: [1] }}]
   let empty: Bag = {{ items: [] }}
   let numbers: Array<Int> = [5]
   firstBag(bags, empty).items = numbers
 }}"
-    );
-    let transfers = transfers_of(&source, "underTest");
-    assert_eq!(
-        escapes_of(&transfers, "numbers"),
-        vec![stored("`firstBag(bags, empty).items`")]
-    );
-}
-
-/// (High) Bug caught: `for (row in rows.concat(extra))` joined the loop cell to nothing (the
-/// iterated expression is a method call, not a name), so `row` was free to outlive `rows`/`extra`.
-#[test]
-fn a_loop_cell_joins_everything_the_iterated_value_reaches() {
-    let source = "function underTest() -> Int {
+    )), "underTest", |transfers| {
+        assert_eq!(
+            escapes_of(&transfers, "numbers"),
+            vec![stored("`firstBag(bags, empty).items`")]
+        );
+    }, "(High) a store whose PLACE is a call result (`firstBag(bags, empty).items = numbers`) hands `numbers` over to the place, whatever the place is; it was recorded as a store into a temporary";
+    a_loop_cell_joins_everything_the_iterated_value_reaches: run("function underTest() -> Int {
   let rows: Array<Array<Int>> = [[1]]
   let extra: Array<Array<Int>> = [[2]]
   let total: Int = 0
@@ -1344,23 +1107,11 @@ fn a_loop_cell_joins_everything_the_iterated_value_reaches() {
     total = total + row.count()
   }
   return total
-}";
-    let transfers = transfers_of(source, "underTest");
-    for member in ["rows", "extra", "row"] {
-        assert!(
-            transfers.same_class("rows", member),
-            "{member}: {transfers:#?}"
-        );
-    }
-}
-
-/// (High) Bug caught: a binding given away on one path and revived by a reassignment must keep
-/// its `Given` escape (the record is flow-insensitive on purpose). Dropping the escape at the
-/// revive would let a release pass free the class on the path where it WAS given away, a double
-/// free; keeping it costs only a leak of the revived value.
-#[test]
-fn a_given_then_revived_binding_keeps_its_given_escape() {
-    let source = format!(
+}"), "underTest", |transfers| {
+        assert!(transfers.same_class("rows", "extra"), "{transfers:#?}");
+        assert!(transfers.same_class("rows", "row"), "{transfers:#?}");
+    }, "(High) `for (row in rows.concat(extra))` joined the loop cell to nothing (the iterated expression is a method call, not a name), so `row` was free to outlive `rows` and `extra`";
+    a_given_then_revived_binding_keeps_its_given_escape: run(&format!(
         "{EAT}function underTest(condition: Boolean) -> Int {{
   let numbers: Array<Int> = [1, 2, 3]
   if (condition) {{
@@ -1369,15 +1120,15 @@ fn a_given_then_revived_binding_keeps_its_given_escape() {
   }}
   return numbers.count()
 }}"
-    );
-    let transfers = transfers_of(&source, "underTest");
-    assert_eq!(
-        escapes_of(&transfers, "numbers"),
-        vec![Escape::Given {
-            callee: "eat".to_string()
-        }]
-    );
+    )), "underTest", |transfers| {
+        assert_eq!(
+            escapes_of(&transfers, "numbers"),
+            vec![Escape::Given { callee: "eat".to_string() }]
+        );
+    }, "(High) a binding given away on one path and revived by a reassignment keeps its `Given` escape (the record is flow-insensitive on purpose): dropping it at the revive would let a release pass free the class on the path where it WAS given away, a double free";
 }
+
+// ── the recorder's own holes ────────────────────────────────────────────────
 
 /// Every event the recorder cannot place must come back as one internal-error value (which
 /// `TypedModule::with_codegen_names` turns into a hard error), never as a silent return. The
@@ -1404,68 +1155,40 @@ fn key(start: usize, name: &str) -> (usize, usize, String) {
     (start, start + 1, name.to_string())
 }
 
-/// (High) Bug caught: an event with no function being walked used to return silently, so the
-/// record claimed a partition it never built and a release pass would have trusted it.
-#[test]
-fn an_event_before_any_function_is_an_internal_error() {
-    assert_one_internal_error(
-        |recorder| recorder.join(&key(0, "first"), &key(2, "second"), None),
-        "while no function was being walked",
-    );
+/// One named test per event the recorder cannot place:
+/// `internal_error_cases!(name: |recorder| drive, "needle", "bug it catches (High)";)`.
+macro_rules! internal_error_cases {
+    ($($case:ident: |$recorder:ident| $drive:block, $needle:literal, $bug:literal;)+) => {
+        $(
+            // bug: the transfer recorder drops an event it cannot place instead of reporting an internal error, so a release pass trusts a partition that was never built | tier: High
+            #[doc = $bug]
+            #[test]
+            fn $case() {
+                assert_one_internal_error(|$recorder| $drive, $needle);
+            }
+        )+
+    };
 }
 
-/// (High) Bug caught: a join naming a binding the function never declared used to be dropped,
-/// leaving two values in separate classes that one value reaches.
-#[test]
-fn a_join_naming_an_undeclared_binding_is_an_internal_error() {
-    assert_one_internal_error(
-        |recorder| {
-            recorder.begin_function("underTest");
-            recorder.declare(key(0, "declared"), vec![0], RoleEvidence::Owner, None);
-            recorder.join(&key(0, "declared"), &key(2, "undeclared"), None);
-        },
-        "in `underTest`, which it never saw declared",
-    );
-}
-
-/// (High) Bug caught: an escape of an undeclared binding used to be dropped, so a value that
-/// leaves the function looked as if it stayed and a release pass would free it.
-#[test]
-fn an_escape_of_an_undeclared_binding_is_an_internal_error() {
-    assert_one_internal_error(
-        |recorder| {
-            recorder.begin_function("underTest");
-            recorder.escape(&key(2, "undeclared"), Escape::Returned);
-        },
-        "in `underTest`, which it never saw declared",
-    );
-}
-
-/// (High) Bug caught: a reassignment's role evidence for an undeclared binding used to be
-/// dropped, so a piece could be recorded as an owner.
-#[test]
-fn a_binding_event_for_an_undeclared_binding_is_an_internal_error() {
-    assert_one_internal_error(
-        |recorder| {
-            recorder.begin_function("underTest");
-            recorder.note_event(&key(2, "undeclared"), RoleEvidence::Piece, None);
-        },
-        "in `underTest`, which it never saw declared",
-    );
-}
-
-/// (High) Bug caught: a declared binding the name table lacks used to be skipped when the record
-/// was built, so its function vanished from the record without an error.
-#[test]
-fn a_declared_binding_with_no_codegen_name_is_an_internal_error() {
-    let mut recorder = TransferRecorder::default();
-    recorder.begin_function("underTest");
-    recorder.declare(key(0, "declared"), vec![0], RoleEvidence::Owner, None);
-    let record = recorder.finish(&BindingNames::default(), &NonOwnedReads::default());
-    let messages = record.internal_errors();
-    assert!(
-        messages.len() == 1 && messages[0].contains("has no codegen name from type checking"),
-        "expected one missing-name internal error, got {messages:#?}"
-    );
-    assert!(record.function("underTest").is_none());
+internal_error_cases! {
+    an_event_before_any_function_is_an_internal_error: |recorder| {
+        recorder.join(&key(0, "first"), &key(2, "second"), None)
+    }, "while no function was being walked", "(High) an event with no function being walked used to return silently, so the record claimed a partition it never built";
+    a_join_naming_an_undeclared_binding_is_an_internal_error: |recorder| {
+        recorder.begin_function("underTest");
+        recorder.declare(key(0, "declared"), vec![0], RoleEvidence::Owner, None);
+        recorder.join(&key(0, "declared"), &key(2, "undeclared"), None);
+    }, "in `underTest`, which it never saw declared", "(High) a join naming a binding the function never declared used to be dropped, leaving two values in separate classes that one value reaches";
+    an_escape_of_an_undeclared_binding_is_an_internal_error: |recorder| {
+        recorder.begin_function("underTest");
+        recorder.escape(&key(2, "undeclared"), Escape::Returned);
+    }, "in `underTest`, which it never saw declared", "(High) an escape of an undeclared binding used to be dropped, so a value that leaves the function looked as if it stayed and a release pass would free it";
+    a_binding_event_for_an_undeclared_binding_is_an_internal_error: |recorder| {
+        recorder.begin_function("underTest");
+        recorder.note_event(&key(2, "undeclared"), RoleEvidence::Piece, None);
+    }, "in `underTest`, which it never saw declared", "(High) a reassignment's role evidence for an undeclared binding used to be dropped, so a piece could be recorded as an owner";
+    a_declared_binding_with_no_codegen_name_is_an_internal_error: |recorder| {
+        recorder.begin_function("underTest");
+        recorder.declare(key(0, "declared"), vec![0], RoleEvidence::Owner, None);
+    }, "has no codegen name from type checking", "(High) a declared binding the name table lacks used to be skipped when the record was built, so its function vanished from the record without an error";
 }

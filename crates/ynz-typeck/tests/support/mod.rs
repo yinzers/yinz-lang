@@ -67,7 +67,7 @@ pub fn assert_use_after_give(source: &str) {
 macro_rules! cases {
     ($check:ident; $($case:ident: $source:expr, $bug:literal;)+) => {
         $(
-            // bug: typeck accepts a read or give of a value already given away on some path (double free, use-after-free), or refuses a program where every path keeps it live | tier: High
+            // bug: typeck mis-decides who owns a value after a hand-over (accepts a use of a given-away value, refuses a correct program, or infers copy where give is needed) | tier: High
             #[doc = $bug]
             #[test]
             fn $case() {
