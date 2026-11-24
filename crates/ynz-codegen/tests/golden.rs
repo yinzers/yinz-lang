@@ -130,9 +130,11 @@ fn codegen_is_deterministic_across_two_runs() {
     assert_eq!(first.object_bytes, second.object_bytes);
 }
 
-/// One named test per program so the runner names the failing case. Four cases, each a different
-/// lowering path (a literal print, decimal arithmetic, recursion, shape parameters with ownership
-/// modifiers), each with its own way to fail: a diagnostic on a valid program, or an empty object.
+/// One named test per program so the runner names the failing case. Eight cases (over the Medium
+/// guide of three: each is a different lowering path of one entry point, with its own way to fail), a
+/// literal print, decimal arithmetic, recursion, shape parameters with ownership modifiers, a `for`
+/// loop, an early return, value arms with an `else` arm, mutual recursion; each fails as a diagnostic
+/// on a valid program, or an empty object.
 macro_rules! valid_program_case {
     ($test_name:ident, file: $file:expr, source: $source:expr) => {
         // bug: codegen rejects a valid program or LLVM silently emits an empty object file | tier: Medium
@@ -155,6 +157,30 @@ valid_program_case!(a_hello_program_compiles_to_an_object, file: HELLO_FILE, sou
 valid_program_case!(decimal_arithmetic_compiles_to_an_object, file: "m2_smoke.ynz", source: ARITHMETIC_SOURCE);
 valid_program_case!(a_recursive_function_compiles_to_an_object, file: "m3_fib.ynz", source: FIB_SOURCE);
 valid_program_case!(shape_parameters_with_ownership_modifiers_compile_to_an_object, file: "m4_player.ynz", source: PLAYER_SOURCE);
+// Case bug: a `for` over a range lowers to a diagnostic or an empty object.
+valid_program_case!(
+    a_for_loop_over_a_range_compiles_to_an_object,
+    file: "m3_for.ynz",
+    source: "function entrypoint() -> Nothing { for (i in range(0, 3)) { print(i) } }"
+);
+// Case bug: a function with an early `return` inside an `if` fails to lower.
+valid_program_case!(
+    an_early_return_compiles_to_an_object,
+    file: "m3_early_ret.ynz",
+    source: "function sign(x: Int) -> Int { if (x > 0) { return 1 } return 0 }\nfunction entrypoint() -> Nothing { print(sign(5)) }"
+);
+// Case bug: an `if` with value arms and an `else` arm fails to lower.
+valid_program_case!(
+    an_if_with_value_arms_and_an_else_arm_compiles_to_an_object,
+    file: "m3_multicase.ynz",
+    source: "function entrypoint() -> Nothing { let v: Int = 2\nif (v) { 1 => print(1)\n2 => print(2)\nelse => print(0) } }"
+);
+// Case bug: two mutually recursive functions fail to lower (the second is not yet declared when the first is emitted).
+valid_program_case!(
+    mutually_recursive_functions_compile_to_an_object,
+    file: "m3_mutual.ynz",
+    source: "function a(n: Int) -> Int { if (n <= 0) { return 0 } return b(n - 1) }\nfunction b(n: Int) -> Int { if (n <= 0) { return 0 } return a(n - 1) }\nfunction entrypoint() -> Nothing { print(a(4)) }"
+);
 
 // bug: a `share` parameter loses its `readonly` and `noalias` attributes, so the optimizer cannot assume it is not written and the design's performance invariant is lost silently | tier: Medium
 #[test]
