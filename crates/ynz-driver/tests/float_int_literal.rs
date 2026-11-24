@@ -26,6 +26,7 @@ fn run_fixture(name: &str) -> (String, String, i32) {
 /// One named test per case so the runner parallelizes them and names the failing one.
 macro_rules! float_literal_case {
     ($test_name:ident, $fixture:literal, $expected:literal) => {
+        // bug: an int literal under a `float` hint is lowered as i64 bits and printed as a ~1e-323 denormal or zero | tier: High
         #[test]
         fn $test_name() {
             let (stdout, stderr, code) = run_fixture($fixture);
