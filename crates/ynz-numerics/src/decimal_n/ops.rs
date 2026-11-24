@@ -589,6 +589,7 @@ mod compare_tests {
     macro_rules! compare_case {
         ($case:ident, $left:literal, $right:literal, $expected:expr, $bug:literal) => {
             #[doc = $bug]
+            // bug: bignum compare orders two numbers wrongly (text order, ignored exponent or sign, narrowed digits, infinity, NaN) | tier: High
             #[test]
             fn $case() {
                 assert_eq!(

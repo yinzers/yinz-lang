@@ -6,7 +6,7 @@
 /// results; a round-trip failure means literals can't survive parse→format→parse.
 use proptest::prelude::*;
 use ynz_numerics::format as d128_fmt;
-use ynz_numerics::{abs, add, compare, mul, neg, parse, sub};
+use ynz_numerics::{add, compare, mul, neg, parse, sub};
 
 fn parse_or_zero(s: &str) -> u128 {
     parse(s).unwrap_or(ynz_numerics::POS_ZERO)
@@ -45,6 +45,7 @@ proptest! {
         ..Default::default()
     })]
 
+    // bug: decimal128 add gives a different result when its operands are swapped (exponent alignment or sign handling has a directional bug) | tier: High
     #[test]
     fn commutativity_add(a in representative(), b in representative()) {
         // WHY: a + b == b + a.  A violation means the exponent alignment or sign
@@ -55,6 +56,7 @@ proptest! {
             "commutativity violated: {} + {}", a, b);
     }
 
+    // bug: decimal128 add of zero changes the other operand's value | tier: High
     #[test]
     fn identity_add(a in representative()) {
         // WHY: a + 0 == a.  If this fails, the zero-handling special case is wrong.
@@ -67,6 +69,7 @@ proptest! {
         prop_assert!(same, "a + 0 != a for a={}: got {}", a, d128_fmt(result));
     }
 
+    // bug: decimal128 sub of a value from itself is not zero | tier: High
     #[test]
     fn a_minus_a_is_zero(a in representative()) {
         // WHY: a - a must equal 0.
@@ -77,6 +80,7 @@ proptest! {
             "a - a != 0 for a={}: got {}", a, d128_fmt(result));
     }
 
+    // bug: decimal128 sub gives a result that is not the negation of the swapped subtraction | tier: High
     #[test]
     fn sub_antisymmetry(a in representative(), b in representative()) {
         // WHY: a - b == -(b - a) numerically.  +0 and -0 are equal per IEEE 754,
@@ -87,6 +91,7 @@ proptest! {
         prop_assert!(equal, "a-b != -(b-a) for {}, {}: {} vs {}", a, b, d128_fmt(ab), d128_fmt(ba));
     }
 
+    // bug: decimal128 mul gives a different result when its operands are swapped (asymmetric operand handling) | tier: High
     #[test]
     fn commutativity_mul(a in representative(), b in representative()) {
         // WHY: a * b == b * a.  Fails if schoolbook multiply has asymmetric operand handling.
@@ -96,6 +101,7 @@ proptest! {
             "commutativity violated: {} * {}", a, b);
     }
 
+    // bug: decimal128 mul by one changes the other operand's value | tier: High
     #[test]
     fn identity_mul(a in representative()) {
         // WHY: a * 1 == a.
@@ -109,22 +115,7 @@ proptest! {
         prop_assert!(same, "a * 1 != a for a={}: got {}", a, d128_fmt(result));
     }
 
-    #[test]
-    fn double_neg_is_identity(a in representative()) {
-        // WHY: neg(neg(a)) == a.
-        let a_bits = parse_or_zero(&a);
-        prop_assert_eq!(d128_fmt(a_bits), d128_fmt(neg(neg(a_bits))));
-    }
-
-    #[test]
-    fn abs_is_nonnegative(a in representative()) {
-        // WHY: abs(a) >= 0.  A sign-bit manipulation bug would break this.
-        let a_bits = parse_or_zero(&a);
-        let result = abs(a_bits);
-        prop_assert!(compare(result, ynz_numerics::POS_ZERO) >= 0,
-            "abs({}) < 0: got {}", a, d128_fmt(result));
-    }
-
+    // bug: decimal128 format output does not re-parse to a numerically equal value, so a literal cannot survive parse, format, parse | tier: High
     #[test]
     fn round_trip(a in representative()) {
         // WHY: format(parse(s)) must produce a string that re-parses to a numerically

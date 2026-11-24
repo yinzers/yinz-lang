@@ -16,257 +16,121 @@ use ynz_numerics::{abs, add, compare, div, format, mul, neg, parse, sub};
 // These vectors cover the load-bearing invariants: associativity-breaking edge
 // cases, NaN propagation, and the 0.1+0.2=0.3 exactness guarantee.
 
-struct TestCase {
-    id: &'static str,
-    a: &'static str,
-    b: Option<&'static str>,
-    op: &'static str,
-    expected: &'static str,
-}
-
-const EMBEDDED_VECTORS: &[TestCase] = &[
-    TestCase {
-        id: "dqAdd001",
-        op: "add",
-        a: "0.1",
-        b: Some("0.2"),
-        expected: "0.3",
-    },
-    TestCase {
-        id: "dqAdd002",
-        op: "add",
-        a: "1",
-        b: Some("1"),
-        expected: "2",
-    },
-    TestCase {
-        id: "dqAdd003",
-        op: "add",
-        a: "-1",
-        b: Some("1"),
-        expected: "0",
-    },
-    TestCase {
-        id: "dqAdd004",
-        op: "add",
-        a: "1.5",
-        b: Some("2.25"),
-        expected: "3.75",
-    },
-    TestCase {
-        id: "dqAdd005",
-        op: "add",
-        a: "1e10",
-        b: Some("-1e10"),
-        expected: "0",
-    },
-    TestCase {
-        id: "dqSub001",
-        op: "sub",
-        a: "2",
-        b: Some("1"),
-        expected: "1",
-    },
-    TestCase {
-        id: "dqSub002",
-        op: "sub",
-        a: "0.3",
-        b: Some("0.2"),
-        expected: "0.1",
-    },
-    TestCase {
-        id: "dqSub003",
-        op: "sub",
-        a: "1",
-        b: Some("3"),
-        expected: "-2",
-    },
-    TestCase {
-        id: "dqMul001",
-        op: "mul",
-        a: "42",
-        b: Some("42"),
-        expected: "1764",
-    },
-    TestCase {
-        id: "dqMul002",
-        op: "mul",
-        a: "1.5",
-        b: Some("2"),
-        expected: "3.0",
-    },
-    TestCase {
-        id: "dqMul003",
-        op: "mul",
-        a: "-3",
-        b: Some("4"),
-        expected: "-12",
-    },
-    TestCase {
-        id: "dqMul004",
-        op: "mul",
-        a: "0",
-        b: Some("99"),
-        expected: "0",
-    },
-    TestCase {
-        id: "dqDiv001",
-        op: "div",
-        a: "10",
-        b: Some("2"),
-        expected: "5",
-    },
-    TestCase {
-        id: "dqDiv002",
-        op: "div",
-        a: "1",
-        b: Some("3"),
-        expected: "0.3333333333333333333333333333333333",
-    },
-    TestCase {
-        id: "dqDiv003",
-        op: "div",
-        a: "22",
-        b: Some("7"),
-        expected: "3.142857142857142857142857142857143",
-    },
-    TestCase {
-        id: "dqCmp001",
-        op: "compare",
-        a: "1",
-        b: Some("2"),
-        expected: "-1",
-    },
-    TestCase {
-        id: "dqCmp002",
-        op: "compare",
-        a: "2",
-        b: Some("2"),
-        expected: "0",
-    },
-    TestCase {
-        id: "dqCmp003",
-        op: "compare",
-        a: "3",
-        b: Some("2"),
-        expected: "1",
-    },
-    TestCase {
-        id: "dqAbs001",
-        op: "abs",
-        a: "-5",
-        b: None,
-        expected: "5",
-    },
-    TestCase {
-        id: "dqAbs002",
-        op: "abs",
-        a: "5",
-        b: None,
-        expected: "5",
-    },
-    TestCase {
-        id: "dqNeg001",
-        op: "neg",
-        a: "5",
-        b: None,
-        expected: "-5",
-    },
-    TestCase {
-        id: "dqNeg002",
-        op: "neg",
-        a: "-5",
-        b: None,
-        expected: "5",
-    },
-];
-
-fn run_vector(tc: &TestCase) -> Result<(), String> {
-    let a = parse(tc.a).ok_or_else(|| format!("{}: failed to parse a={}", tc.id, tc.a))?;
-    let result_bits = match tc.op {
-        "add" => {
-            let b = parse(tc.b.unwrap()).ok_or_else(|| format!("{}: failed to parse b", tc.id))?;
-            add(a, b)
-        }
-        "sub" => {
-            let b = parse(tc.b.unwrap()).ok_or_else(|| format!("{}: failed to parse b", tc.id))?;
-            sub(a, b)
-        }
-        "mul" => {
-            let b = parse(tc.b.unwrap()).ok_or_else(|| format!("{}: failed to parse b", tc.id))?;
-            mul(a, b)
-        }
-        "div" => {
-            let b = parse(tc.b.unwrap()).ok_or_else(|| format!("{}: failed to parse b", tc.id))?;
-            div(a, b)
-        }
+/// Applies one decimal128 operation to its operands and compares the result with the expected
+/// text (string-equal, or numerically equal when the same value is written at another scale).
+fn run_vector(op: &str, a: &str, b: Option<&str>, expected: &str) -> Result<(), String> {
+    let a_bits = parse(a).ok_or_else(|| format!("failed to parse a={a}"))?;
+    let b_bits = match b {
+        Some(text) => Some(parse(text).ok_or_else(|| format!("failed to parse b={text}"))?),
+        None => None,
+    };
+    let operand_b = || b_bits.ok_or_else(|| format!("{op} needs a second operand"));
+    let result_bits = match op {
+        "add" => add(a_bits, operand_b()?),
+        "sub" => sub(a_bits, operand_b()?),
+        "mul" => mul(a_bits, operand_b()?),
+        "div" => div(a_bits, operand_b()?),
         "compare" => {
-            let b = parse(tc.b.unwrap()).ok_or_else(|| format!("{}: failed to parse b", tc.id))?;
-            let c = compare(a, b);
-            let s = match c {
+            let ordering = match compare(a_bits, operand_b()?) {
                 -1 => "-1",
                 0 => "0",
                 1 => "1",
                 _ => "NaN",
             };
-            return if s == tc.expected {
+            return if ordering == expected {
                 Ok(())
             } else {
                 Err(format!(
-                    "{}: compare({}, {}) = {s}, expected {}",
-                    tc.id,
-                    tc.a,
-                    tc.b.unwrap_or(""),
-                    tc.expected
+                    "compare({a}, {}) = {ordering}, expected {expected}",
+                    b.unwrap_or("")
                 ))
             };
         }
-        "abs" => abs(a),
-        "neg" => neg(a),
-        _ => return Err(format!("{}: unknown op {}", tc.id, tc.op)),
+        "abs" => abs(a_bits),
+        "neg" => neg(a_bits),
+        _ => return Err(format!("unknown op {op}")),
     };
 
     let actual = format(result_bits);
-    // Accept either string equality OR numeric equality (different scales of same value)
     let num_equal = parse(&actual)
-        .and_then(|a| parse(tc.expected).map(|e| compare(a, e) == 0))
+        .and_then(|actual_bits| {
+            parse(expected).map(|expected_bits| compare(actual_bits, expected_bits) == 0)
+        })
         .unwrap_or(false);
-    if actual == tc.expected || num_equal {
+    if actual == expected || num_equal {
         Ok(())
     } else {
         Err(format!(
-            "{}: {}({}{}) = {actual}, expected {}",
-            tc.id,
-            tc.op,
-            tc.a,
-            tc.b.map(|b| format!(", {b}")).unwrap_or_default(),
-            tc.expected
+            "{op}({a}{}) = {actual}, expected {expected}",
+            b.map(|second| format!(", {second}")).unwrap_or_default()
         ))
     }
 }
 
-/// Run the embedded minimal test vectors.
-///
-/// # Test contract
-///
-/// WHY: these embedded vectors guard the load-bearing M2 correctness guarantees
-/// (decimal exactness, NaN propagation, comparison) when the full IBM corpus is
-/// absent.  If any fail, the conformance gate fails CI even without the corpus.
-#[test]
-fn embedded_conformance_vectors() {
-    let mut failures = Vec::new();
-    for tc in EMBEDDED_VECTORS {
-        if let Err(msg) = run_vector(tc) {
-            failures.push(msg);
-        }
-    }
-    if !failures.is_empty() {
-        panic!(
-            "{} conformance failure(s):\n{}",
-            failures.len(),
-            failures.join("\n")
-        );
-    }
+/// One generated test per vector: `name: op, a, b => expected;` (`b` is `None` for unary ops).
+/// The Hursley-style vectors, the special-value cases and the audit vectors (N1, N2) share this
+/// harness because each is one operation applied to parsed text; the audit vectors' expected
+/// values are Python `decimal` oracle values (Context prec=34, Emax=6144, ROUND_HALF_EVEN, clamp=1).
+macro_rules! decimal128_value_cases {
+    ($($case:ident: $op:literal, $a:literal, $b:expr => $expected:literal;)+) => {
+        $(
+            // bug: a decimal128 add/sub/mul/div/compare/neg/abs returns the wrong value (digits, rounding, sign, zero, Infinity or NaN) | tier: High
+            #[test]
+            fn $case() {
+                run_vector($op, $a, $b, $expected).unwrap_or_else(|failure| panic!("{failure}"));
+            }
+        )+
+    };
+}
+
+decimal128_value_cases! {
+    // add: same sign, decimal exactness (0.1 + 0.2 must be 0.3, not 0.30000000000000004), alignment, cancellation
+    add_same_sign_integers: "add", "1", Some("1") => "2";
+    add_decimal_exactness: "add", "0.1", Some("0.2") => "0.3";
+    add_opposite_signs_cancel_to_zero: "add", "-1", Some("1") => "0";
+    add_operands_with_different_exponents: "add", "1.5", Some("2.25") => "3.75";
+    // the fine operand has 34 digits and the coarse one 4: alignment must not drop the fine digits
+    add_34_digit_fraction_to_a_larger_integer: "add", "0.3333333333333333333333333333333333", Some("1000") => "1000.333333333333333333333333333333";
+    // N1: the truncated tail of the smaller operand below the 34-digit LSB must round the 34th digit up
+    add_sticky_tail_from_alignment_truncation: "add", "93296E45", Some("578E13") => "9.329600000000000000000000000000001E+49";
+    add_infinity_plus_infinity: "add", "Infinity", Some("Infinity") => "Infinity";
+    add_infinity_plus_negative_infinity_is_nan: "add", "Infinity", Some("-Infinity") => "NaN";
+    add_propagates_nan: "add", "NaN", Some("1") => "NaN";
+    // sub
+    sub_positive_result: "sub", "2", Some("1") => "1";
+    sub_decimal_exactness: "sub", "0.3", Some("0.2") => "0.1";
+    sub_negative_result: "sub", "1", Some("3") => "-2";
+    // N1: the discarded tail makes the true result strictly below the computed difference (...999)
+    sub_sticky_tail_from_alignment_truncation: "sub", "93296E45", Some("578E13") => "9.329599999999999999999999999999999E+49";
+    // N1: tail above half a ULP rounds the 34th digit down, exactly half ties to even, below half rounds up
+    sub_unclamped_tail_above_half: "sub", "1E33", Some("0.16") => "999999999999999999999999999999999.8";
+    sub_unclamped_tail_exactly_half_ties_to_even: "sub", "1E33", Some("0.15") => "999999999999999999999999999999999.8";
+    sub_unclamped_tail_below_half: "sub", "1E33", Some("0.14") => "999999999999999999999999999999999.9";
+    // mul
+    mul_integers: "mul", "42", Some("42") => "1764";
+    mul_keeps_the_scaled_exponent: "mul", "1.5", Some("2") => "3.0";
+    mul_negative_operand: "mul", "-3", Some("4") => "-12";
+    mul_by_zero: "mul", "0", Some("99") => "0";
+    // N2: excess digits are reduced in ONE half-even step, not digit by digit (a digit loop gave ...106)
+    mul_excess_digits_rounded_in_one_step: "mul", "2165452767410561414527036521052E58", Some("7363056") => "1.594434999179893868660178341855105E+95";
+    // N2: a 38-digit product whose dropped digits "4780" are judged as one unit, < 5000 rounds down (a digit loop gave ...750)
+    mul_dropped_digits_judged_as_one_unit: "mul", "4705894581252909670E-51", Some("7189456187232149834E-33") => "3.383282291365097828459299078190749E-47";
+    // div
+    div_exact_quotient: "div", "10", Some("2") => "5";
+    div_repeating_quotient_rounds_down_at_34_digits: "div", "1", Some("3") => "0.3333333333333333333333333333333333";
+    div_repeating_quotient_rounds_up_at_34_digits: "div", "22", Some("7") => "3.142857142857142857142857142857143";
+    // IEEE 754 section 7.4: a non-zero numerator over zero is +/-Infinity
+    div_by_zero_is_infinity: "div", "1", Some("0") => "Infinity";
+    // compare
+    compare_less: "compare", "1", Some("2") => "-1";
+    compare_equal: "compare", "2", Some("2") => "0";
+    compare_greater: "compare", "3", Some("2") => "1";
+    compare_positive_zero_equals_negative_zero: "compare", "0", Some("-0") => "0";
+    // neg and abs
+    abs_of_a_negative: "abs", "-5", None => "5";
+    abs_of_a_positive: "abs", "5", None => "5";
+    neg_of_a_positive: "neg", "5", None => "-5";
+    neg_of_a_negative: "neg", "-5", None => "5";
 }
 
 /// Run the full IBM Hursley corpus if the files are present in `tests/conformance/`.
@@ -274,6 +138,7 @@ fn embedded_conformance_vectors() {
 /// WHY: the embedded vectors above cover the key invariants, but the full corpus
 /// exercises hundreds of edge cases that only IBM's test suite enumerates.
 /// When `CORPUS.sha256` is present, CI verifies the corpus hash before running.
+// bug: a decimal128 operation disagrees with a line of the IBM Hursley corpus (corpus files are not checked in, so this runs only where they are present) | tier: High
 #[test]
 fn ibm_hursley_corpus_if_present() {
     let corpus_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/conformance");

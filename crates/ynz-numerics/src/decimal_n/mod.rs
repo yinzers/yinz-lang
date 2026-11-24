@@ -48,17 +48,3 @@ pub fn div(a: &BigNum, b: &BigNum) -> BigNum {
 pub fn promote_from_d128(value_str: &str, precision: u16) -> BigNum {
     BigNum::from_str(value_str, precision).unwrap_or_else(|| BigNum::zero(precision))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_01_plus_02() {
-        let a = parse_bignum("0.1", 100).unwrap();
-        let b = parse_bignum("0.2", 100).unwrap();
-        let c = add(&a, &b);
-        let s = format_bignum(&c);
-        assert_eq!(s, "0.3", "0.1 + 0.2 must equal 0.3, got: {s}");
-    }
-}

@@ -222,6 +222,7 @@ mod bg_arg_kind_tests {
     /// `ALL_BG_ARG_KINDS` is a hand list; this holds it to the crate's own `BG_ARG_KIND_*`
     /// constants by reading this source file, so a kind added above without being listed (or
     /// the reverse) fails here instead of slipping past the runtime's per-kind parity test.
+    // bug: a BG_ARG_KIND_* wire value is declared but missing from ALL_BG_ARG_KINDS (or the reverse), so the runtime's per-kind alloc/free parity test skips it and a spawn-argument leak or double free ships | tier: High
     #[test]
     fn every_bg_arg_kind_const_is_in_all_bg_arg_kinds() {
         let src = include_str!("lib.rs");
