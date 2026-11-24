@@ -207,6 +207,23 @@ fmt_cli_case!(all_with_one_broken_file_continues_and_exits_1 => {
     );
 });
 
+// case: `--check --all` exits 0 on a project that holds a non-canonical file, or omits the `Would reformat:` line
+fmt_cli_case!(check_all_noncanonical_exits_1 => {
+    // A temp copy so a regression that ignores --check cannot clobber the fixture project.
+    let dir = tempfile::tempdir().unwrap();
+    copy_dir(&fixture("project"), dir.path()).unwrap();
+
+    ynz()
+        .arg("fmt")
+        .arg("--check")
+        .arg("--all")
+        .arg(dir.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicates::str::contains("Would reformat:"));
+});
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
