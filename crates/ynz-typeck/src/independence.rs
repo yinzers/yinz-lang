@@ -971,366 +971,111 @@ mod tests {
         names.iter().map(|s| s.to_string()).collect()
     }
 
-    // ── Data-dependency detection ─────────────────────────────────────────────
-
-    #[test]
-    fn data_dependent_stmts_are_not_independent() {
-        // WHY: A statement that reads the binding another defines must be placed
-        // sequentially. Wrong analysis would mark them as Parallel, corrupting output
-        // and proving the cross-impl gate RED.
-        let effects: WriteEffectMap = HashMap::new();
-        let a = let_stmt("x", "fetcher", vec![]);
-        let b = call_stmt("fetcher", vec![ident("x")]);
-        assert!(
-            !stmts_are_independent(&a, &b, &effects),
-            "b reads `x` which a defines — must NOT be independent"
-        );
+    /// One named test per case so the runner names the failing case. `group_sizes` is the member
+    /// count of each group in source order: a `Singleton` is 1, a `Parallel` is its length.
+    /// Every statement calls a function in `suspends`; `table` gives their parameter types.
+    macro_rules! partition_case {
+        ($test_name:ident, table: $table:expr, suspends: $suspends:expr, stmts: $stmts:expr, group_sizes: $group_sizes:expr) => {
+            // bug: partition_independent_groups puts conflicting suspending calls (a shared definition, a data dependency, an aliasable heap argument) in one Parallel group (wrong value or data race), or sequences calls that cannot conflict | tier: High
+            #[test]
+            fn $test_name() {
+                let table = table_only(&$table);
+                let stmts: Vec<Stmt> = $stmts;
+                let groups = partition_independent_groups(
+                    &stmts,
+                    &suspend_set(&$suspends),
+                    &table,
+                    &HashMap::new(),
+                );
+                let group_sizes: Vec<usize> = groups
+                    .iter()
+                    .map(|group| match group {
+                        IndependentGroup::Singleton(_) => 1,
+                        IndependentGroup::Parallel(members) => members.len(),
+                    })
+                    .collect();
+                assert_eq!(group_sizes, $group_sizes);
+            }
+        };
     }
 
-    #[test]
-    fn define_define_conflict_not_independent() {
-        // WHY: Two stmts that both define the same name would shadow each other.
-        // Conservative: not independent.
-        let effects: WriteEffectMap = HashMap::new();
-        let a = let_stmt("x", "fa", vec![]);
-        let b = let_stmt("x", "fb", vec![]);
-        assert!(
-            !stmts_are_independent(&a, &b, &effects),
-            "both define `x` — must NOT be independent"
-        );
-    }
-
-    #[test]
-    fn truly_independent_stmts_are_independent() {
-        // WHY: Stmts with no data dep and no write conflict must be marked independent
-        // so the parallel pass can group them.
-        let effects: WriteEffectMap = HashMap::new();
-        let a = let_stmt("x", "fa", vec![]);
-        let b = let_stmt("y", "fb", vec![]);
-        assert!(
-            stmts_are_independent(&a, &b, &effects),
-            "no shared defs/reads/write-effects — must be independent"
-        );
-    }
-
-    #[test]
-    fn lend_conflict_not_independent() {
-        // WHY: If both calls write the same binding, they have a write conflict and must
-        // be sequenced. This is the `writeA(x); writeB(x)` pattern in the plan ACs. The
-        // write at position 0 comes from the conservative floor (heap-typed arg = potential
-        // write).
-        let table = table_only(&[("writer", vec![heap_ty()])]);
-        let effects = build_write_effect_summary(&table, &HashMap::new());
-        let a = call_stmt("writer", vec![ident("counter")]);
-        let b = call_stmt("writer", vec![ident("counter")]);
-        assert!(
-            !stmts_are_independent(&a, &b, &effects),
-            "both write `counter` — write conflict, must NOT be independent"
-        );
-    }
-
-    // ── Aliasing-soundness: heap-lend pairs are always sequenced ─────────────────
-
-    #[test]
-    fn aliased_lend_pair_produces_singletons_not_parallel() {
-        // WHY: `let b = a` makes `b` an alias for `a` — both bindings point at the same
-        // heap object (shapes/arrays/maps are heap references; assignment copies the pointer).
-        // The independence analysis cannot distinguish aliased names from distinct objects,
-        // so it conservatively sequences any pair where either call has a `lend` argument.
-        //
-        // The unit test proves `partition_independent_groups` produces two Singleton groups
-        // (NOT a Parallel) for `slowBump(a, 10); slowBump(b, 100)` where both have lend pos 0.
-        // This closes the soundness gap: the correct result is sequential regardless of whether
-        // `b` was aliased from `a` or is a distinct object — alias analysis is required to
-        // distinguish the two cases, and we don't have it.
-        // slowBump: pos 0 is a heap arg (potential write under the floor), pos 1 is a scalar.
-        let table = table_only(&[("slowBump", vec![heap_ty(), crate::types::Type::Int])]);
-        let imported: HashMap<String, _> = HashMap::new();
-        let susp = suspend_set(&["slowBump"]);
-        let a_stmt = call_stmt("slowBump", vec![ident("a"), ident("10")]);
-        let b_stmt = call_stmt("slowBump", vec![ident("b"), ident("100")]);
-        let stmts = vec![a_stmt, b_stmt];
-
-        let groups = partition_independent_groups(&stmts, &susp, &table, &imported);
-        assert_eq!(
-            groups.len(),
-            2,
-            "aliased-lend pair: expected 2 Singleton groups, got {} groups",
-            groups.len()
-        );
-        assert!(
-            matches!(groups[0], IndependentGroup::Singleton(_)),
-            "group[0] must be Singleton (aliasing-soundness: lend-lend always sequential)"
-        );
-        assert!(
-            matches!(groups[1], IndependentGroup::Singleton(_)),
-            "group[1] must be Singleton (aliasing-soundness: lend-lend always sequential)"
-        );
-    }
-
-    #[test]
-    fn aliased_share_read_vs_lend_write_produces_singletons() {
-        // WHY: `let b = a; let r = slowRead(b); fastBump(a)` — slowRead takes a `share`-heap arg
-        // (read-only) on b, fastBump takes a `lend`-heap arg (write) on a. Since `b = a` they
-        // alias the same heap object. Parallelizing slowRead(b) with fastBump(a) means the read
-        // may sample the object AFTER the write commits → wrong value (live-reproduced: r:110 vs
-        // r:10 expected). The guard must fire on ANY pair where EITHER statement has a
-        // write-capable arg, not just when BOTH do. This test locks that the share-heap read
-        // does NOT count as a write while the lend-heap write does.
-        // Both take a heap arg; under the conservative floor both are potential writes, so
-        // the pair sequentializes regardless of which one actually mutates.
-        let table = table_only(&[("slowRead", vec![heap_ty()]), ("fastBump", vec![heap_ty()])]);
-        let imported: HashMap<String, _> = HashMap::new();
-        let susp = suspend_set(&["slowRead", "fastBump"]);
-
-        let read_stmt = let_stmt("r", "slowRead", vec![ident("b")]);
-        let write_stmt = call_stmt("fastBump", vec![ident("a")]);
-        let stmts = vec![read_stmt, write_stmt];
-
-        let groups = partition_independent_groups(&stmts, &susp, &table, &imported);
-        assert_eq!(
-            groups.len(),
-            2,
-            "share-read vs lend-write pair: expected 2 Singleton groups (aliasing-soundness), got {}",
-            groups.len()
-        );
-        assert!(
-            matches!(groups[0], IndependentGroup::Singleton(_)),
-            "group[0] must be Singleton — lend-write partner means pair is not independent"
-        );
-        assert!(
-            matches!(groups[1], IndependentGroup::Singleton(_)),
-            "group[1] must be Singleton — lend-write partner means pair is not independent"
-        );
-    }
-
-    #[test]
-    fn no_write_args_different_bindings_can_parallelize() {
-        // WHY: Two calls where NEITHER has a write-capable argument (both read-only) have
-        // no write-effect conflict. They are independent and eligible for parallelization.
-        // This confirms the aliasing-soundness guard only blocks write-arg pairs, not
-        // read-only pairs (the common case for parallel I/O reads).
-        let effects: WriteEffectMap = HashMap::new(); // no write positions
-        let a = let_stmt("x", "fa", vec![ident("data_a")]);
-        let b = let_stmt("y", "fb", vec![ident("data_b")]);
-        assert!(
-            stmts_are_independent(&a, &b, &effects),
-            "calls with no write args and distinct defs — must be independent (parallelizable)"
-        );
-    }
-
-    // ── HOLE A + soundness: give / bare-heap / share-heap / scalar classification ──
-
-    #[test]
-    fn give_arg_produces_singletons() {
-        // WHY (HOLE A): `give` is ownership transfer = write+free. A callee that takes a
-        // heap value by `give` writes (consumes/frees) it. Two such calls on potentially-
-        // aliased heap bindings must be sequenced — the old lend-only summary missed `give`
-        // entirely, letting a give+aliased-read pair parallelize → use-after-free / wrong read.
-        // This test locks that a `give`-heap argument is classified write-capable.
-        // consume: `give`-heap param. Under the floor a heap arg is a potential write, so the
-        // give case is covered without distinguishing give from lend.
-        let table = table_only(&[("consume", vec![heap_ty()])]);
-        let imported: HashMap<String, _> = HashMap::new();
-        let susp = suspend_set(&["consume"]);
-        let a_stmt = call_stmt("consume", vec![ident("a")]);
-        let b_stmt = call_stmt("consume", vec![ident("b")]);
-        let stmts = vec![a_stmt, b_stmt];
-
-        let groups = partition_independent_groups(&stmts, &susp, &table, &imported);
-        assert_eq!(
-            groups.len(),
-            2,
-            "give-heap pair: expected 2 Singleton groups (give is a write), got {}",
-            groups.len()
-        );
-        assert!(matches!(groups[0], IndependentGroup::Singleton(_)));
-        assert!(matches!(groups[1], IndependentGroup::Singleton(_)));
-    }
-
-    #[test]
-    fn bare_write_heap_pair_sequentializes() {
-        // WHY: a BARE heap parameter is a potential write under the conservative floor (the
-        // floor does not try to distinguish a bare-mutating param from a bare-reading one —
-        // either could mutate the shared heap object). Two such calls on potentially-aliased
-        // heap bindings must be sequenced.
-        let table = table_only(&[("bareMut", vec![heap_ty()])]);
-        let imported: HashMap<String, _> = HashMap::new();
-        let susp = suspend_set(&["bareMut"]);
-        let a_stmt = call_stmt("bareMut", vec![ident("a")]);
-        let b_stmt = call_stmt("bareMut", vec![ident("b")]);
-        let stmts = vec![a_stmt, b_stmt];
-
-        let groups = partition_independent_groups(&stmts, &susp, &table, &imported);
-        assert_eq!(
-            groups.len(),
-            2,
-            "bare-write-heap pair: expected 2 Singleton groups (bare-mutating heap is Writes), got {}",
-            groups.len()
-        );
-        assert!(matches!(groups[0], IndependentGroup::Singleton(_)));
-        assert!(matches!(groups[1], IndependentGroup::Singleton(_)));
-    }
-
-    #[test]
-    fn bare_read_heap_pair_sequentializes_under_floor() {
-        // test-ratchet: the conservative floor (Golden Rule 2 soundness > Rule 7 perf)
-        // forfeits read-only-mutable-heap parallelism. The floor treats every mutable-heap arg
-        // as a potential write — it does not trust any per-form ownership classifier (that
-        // approach missed five distinct write forms across three gate rounds) — so two
-        // read-only bare-heap calls SEQUENTIALIZE. The assertion locks that sound behavior;
-        // reversal path (re-enable parallelism) is a real type+alias-aware ownership analysis.
-        //
-        // WHY: two bare-heap-arg calls sequentialize under the floor — a bare heap arg could
-        // mutate the shared object (the floor does not prove otherwise), so the conservative
-        // result is two Singleton groups.
-        let table = table_only(&[("readA", vec![heap_ty()]), ("readB", vec![heap_ty()])]);
-        let imported: HashMap<String, _> = HashMap::new();
-        let susp = suspend_set(&["readA", "readB"]);
-        let a_stmt = let_stmt("x", "readA", vec![ident("a")]);
-        let b_stmt = let_stmt("y", "readB", vec![ident("b")]);
-        let stmts = vec![a_stmt, b_stmt];
-
-        let groups = partition_independent_groups(&stmts, &susp, &table, &imported);
-        assert_eq!(
-            groups.len(),
-            2,
-            "bare-read-heap pair: floor sequentializes mutable-heap args → 2 Singletons, got {}",
-            groups.len()
-        );
-        assert!(matches!(groups[0], IndependentGroup::Singleton(_)));
-        assert!(matches!(groups[1], IndependentGroup::Singleton(_)));
-    }
-
-    #[test]
-    fn mutable_heap_share_read_pair_sequentializes_under_floor() {
-        // test-ratchet: same forfeiture as `bare_read_heap_pair_sequentializes_under_floor`.
-        // Under the conservative floor a mutable-heap arg is unconditionally a potential write
-        // (the floor does not consult `share` enforcement, which proved incomplete), so two
-        // `share`-heap reads sequentialize. The assertion locks that sound behavior.
-        //
-        // WHY: two share-heap-arg calls sequentialize under the floor — soundness over the
-        // read-only-heap-overlap perf capability (Golden Rule 2 > Rule 7).
-        let table = table_only(&[("readA", vec![heap_ty()]), ("readB", vec![heap_ty()])]);
-        let imported: HashMap<String, _> = HashMap::new();
-        let susp = suspend_set(&["readA", "readB"]);
-        let a_stmt = let_stmt("x", "readA", vec![ident("a")]);
-        let b_stmt = let_stmt("y", "readB", vec![ident("b")]);
-        let stmts = vec![a_stmt, b_stmt];
-
-        let groups = partition_independent_groups(&stmts, &susp, &table, &imported);
-        assert_eq!(
-            groups.len(),
-            2,
-            "share-heap read pair: floor sequentializes mutable-heap args → 2 Singletons, got {}",
-            groups.len()
-        );
-        assert!(matches!(groups[0], IndependentGroup::Singleton(_)));
-        assert!(matches!(groups[1], IndependentGroup::Singleton(_)));
-    }
-
-    #[test]
-    fn trivially_copyable_args_can_parallelize() {
-        // WHY: scalar arguments (`int`/`float`/`boolean`/`number`) are passed by copy — a
-        // callee that "writes" a copied scalar parameter cannot affect the caller's value,
-        // so there is no aliasing. Even at an effective-`Writes` position, a trivially-copyable
-        // parameter is NOT write-capable (the heap-type test excludes it). Two such calls must
-        // collapse into ONE Parallel group.
-        let table = table_only(&[
+    // Case bug: a statement that reads the binding another defines is grouped with it (it reads a
+    // value its partner has not produced yet).
+    partition_case!(
+        a_pair_reading_what_the_other_defines_is_sequenced,
+        table: [],
+        suspends: ["fa", "fb"],
+        stmts: vec![let_stmt("x", "fa", vec![]), call_stmt("fb", vec![ident("x")])],
+        group_sizes: [1, 1]
+    );
+    // Case bug: two statements that define the same name are grouped (shadowing breaks the join).
+    partition_case!(
+        a_pair_defining_the_same_name_is_sequenced,
+        table: [],
+        suspends: ["fa", "fb"],
+        stmts: vec![let_stmt("x", "fa", vec![]), let_stmt("x", "fb", vec![])],
+        group_sizes: [1, 1]
+    );
+    // Case bug: calls with no shared names and no arguments are sequenced (the I/O-overlap headline).
+    partition_case!(
+        a_pair_with_no_shared_names_runs_in_parallel,
+        table: [],
+        suspends: ["fa", "fb"],
+        stmts: vec![let_stmt("x", "fa", vec![]), let_stmt("y", "fb", vec![])],
+        group_sizes: [2]
+    );
+    // Case bug: `let b = a; let r = slowRead(b); fastBump(a)` — a heap argument aliases any other
+    // heap binding, so the read may sample the object after the write commits (live-reproduced:
+    // r:110 where r:10 was expected). Under the conservative floor ANY heap-typed argument is a
+    // potential write, so the pair is sequenced whichever callee mutates.
+    partition_case!(
+        a_pair_with_a_heap_argument_is_sequenced,
+        table: [("slowRead", vec![heap_ty()]), ("fastBump", vec![heap_ty()])],
+        suspends: ["slowRead", "fastBump"],
+        stmts: vec![
+            let_stmt("r", "slowRead", vec![ident("b")]),
+            call_stmt("fastBump", vec![ident("a")]),
+        ],
+        group_sizes: [1, 1]
+    );
+    // Case bug: two calls of one callee share a sub-frame slot and run in one group; also holds
+    // for heap arguments (`slowBump(a, 10); slowBump(b, 100)`).
+    partition_case!(
+        two_calls_of_one_callee_are_sequenced,
+        table: [("slowBump", vec![heap_ty(), crate::types::Type::Int])],
+        suspends: ["slowBump"],
+        stmts: vec![
+            call_stmt("slowBump", vec![ident("a"), ident("10")]),
+            call_stmt("slowBump", vec![ident("b"), ident("100")]),
+        ],
+        group_sizes: [1, 1]
+    );
+    // Case bug: scalar arguments (passed by copy, no aliasing) are treated as writes and sequenced.
+    partition_case!(
+        trivially_copyable_args_can_parallelize,
+        table: [
             ("addA", vec![crate::types::Type::Int]),
             ("addB", vec![crate::types::Type::Int]),
-        ]);
-        let imported: HashMap<String, _> = HashMap::new();
-        let susp = suspend_set(&["addA", "addB"]);
-        let a_stmt = let_stmt("x", "addA", vec![ident("n")]);
-        let b_stmt = let_stmt("y", "addB", vec![ident("m")]);
-        let stmts = vec![a_stmt, b_stmt];
-
-        let groups = partition_independent_groups(&stmts, &susp, &table, &imported);
-        assert_eq!(
-            groups.len(),
-            1,
-            "scalar-arg pair: expected 1 Parallel group, got {} groups",
-            groups.len()
-        );
-        assert!(
-            matches!(&groups[0], IndependentGroup::Parallel(v) if v.len() == 2),
-            "group[0] must be a Parallel of 2 (scalar args are passed by copy — no aliasing)"
-        );
-    }
-
-    #[test]
-    fn string_args_parallelize() {
-        // WHY: strings are immutable (`spec/strings.md` line 99) — a `string` argument is never
-        // a write hazard regardless of its effective ownership. Two calls passing string args
-        // must parallelize even when the position's effective ownership is `Writes`/`Unknown`,
-        // because the value itself cannot be mutated through the reference.
-        let table = table_only(&[
+        ],
+        suspends: ["addA", "addB"],
+        stmts: vec![
+            let_stmt("x", "addA", vec![ident("n")]),
+            let_stmt("y", "addB", vec![ident("m")]),
+        ],
+        group_sizes: [2]
+    );
+    // Case bug: string arguments (immutable, never a write hazard) are treated as writes.
+    partition_case!(
+        string_args_parallelize,
+        table: [
             ("emitA", vec![crate::types::Type::String]),
             ("emitB", vec![crate::types::Type::String]),
-        ]);
-        let imported: HashMap<String, _> = HashMap::new();
-        let susp = suspend_set(&["emitA", "emitB"]);
-        let a_stmt = let_stmt("x", "emitA", vec![ident("s")]);
-        let b_stmt = let_stmt("y", "emitB", vec![ident("t")]);
-        let stmts = vec![a_stmt, b_stmt];
-
-        let groups = partition_independent_groups(&stmts, &susp, &table, &imported);
-        assert_eq!(
-            groups.len(),
-            1,
-            "string-arg pair: expected 1 Parallel group (strings are immutable), got {} groups",
-            groups.len()
-        );
-        assert!(
-            matches!(&groups[0], IndependentGroup::Parallel(v) if v.len() == 2),
-            "group[0] must be a Parallel of 2 (string args are immutable — never a write hazard)"
-        );
-    }
-
-    // ── Gate discrimination: wrong analysis → wrong groups → cross-impl diverges ──
-
-    #[test]
-    fn gate_discrimination_wrong_independent_verdict_would_change_grouping() {
-        // WHY: This is the planted-bug gate-discrimination test. It verifies that a
-        // wrong independence verdict (marking dependent stmts as "independent") produces
-        // a DIFFERENT partition than the correct analysis. When the default-parallel mode
-        // uses the wrong partition and --no-auto-parallel uses source order, the outputs
-        // diverge → the cross-impl consistency gate goes RED.
-        //
-        // The "bug" here is: bypassing the independence check and declaring everything
-        // parallel. We verify the correct analysis says NOT independent, while the buggy
-        // all-parallel partition differs.
-        let susp = suspend_set(&["fetcher"]);
-        let table = SignatureTable {
-            fns: HashMap::new(),
-        };
-        let imported: HashMap<String, _> = HashMap::new();
-        let a = let_stmt("x", "fetcher", vec![]);
-        let b = call_stmt("fetcher", vec![ident("x")]); // data-dep on `a`
-        let stmts = vec![a, b];
-
-        let correct_groups = partition_independent_groups(&stmts, &susp, &table, &imported);
-        // With correct analysis: a is Singleton (data-dep breaks grouping), b is Singleton.
-        assert_eq!(
-            correct_groups.len(),
-            2,
-            "correct analysis: two dependent stmts → two Singleton groups"
-        );
-        assert!(
-            matches!(correct_groups[0], IndependentGroup::Singleton(_)),
-            "correct analysis: group[0] must be Singleton"
-        );
-        assert!(
-            matches!(correct_groups[1], IndependentGroup::Singleton(_)),
-            "correct analysis: group[1] must be Singleton"
-        );
-        // If the bug existed (skip the independence check, treat all as parallel):
-        // the partition would produce one Parallel(2) group instead of two Singletons.
-        // Running that parallel group would poll both concurrently — but `b` reads `x`
-        // which `a` hasn't produced yet → data race / wrong value.
-        // The cross-impl oracle (--no-auto-parallel = sequential) would produce the
-        // correct output; the buggy parallel mode would produce wrong output → gate RED.
-        // This test locks the CORRECT partition shape so a bug regresses this test first.
-    }
+        ],
+        suspends: ["emitA", "emitB"],
+        stmts: vec![
+            let_stmt("x", "emitA", vec![ident("s")]),
+            let_stmt("y", "emitB", vec![ident("t")]),
+        ],
+        group_sizes: [2]
+    );
 }
