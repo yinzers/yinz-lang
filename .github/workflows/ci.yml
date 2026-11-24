@@ -9,6 +9,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # The two corpus sweeps of ynz-driver (nextest filterset). `test` leaves them out, `sweep` runs them.
+  SWEEP_TESTS: binary(cross_impl_consistency) & (test(=corpus_byte_identical_across_mode_matrix) | test(=corpus_produces_deterministic_output_across_runs))
 
 # Least-privilege GITHUB_TOKEN for every job in this workflow: no job needs anything beyond
 # read-only repo access (checkout, plus actions/cache and the artifact actions, which
@@ -167,6 +169,7 @@ jobs:
           nextest_count="$(wc -l < nextest-list.txt)"
           echo "cargo test --workspace -- --list (without nightly_): ${cargo_test_count}"
           echo "cargo nextest list --workspace --profile ci --run-ignored all: ${nextest_count}"
+          echo "::notice title=test count::cargo test --workspace -- --list without nightly_: ${cargo_test_count}; cargo nextest list --profile ci --run-ignored all: ${nextest_count}"
           if [ "${nextest_count}" -lt "${cargo_test_count}" ]; then
             echo "::error::nextest lists fewer tests (${nextest_count}) than cargo test (${cargo_test_count})"
             exit 1
@@ -182,6 +185,11 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+  # Everything except the two corpus sweeps, split over N runners. The sweeps are single tests of
+  # 5-7 min alone on a runner but 9-25 min when they share one with a partition (spike #676,
+  # run 45300415355: 1494 s under load, 284-300 s alone), and nextest cannot split one test, so
+  # they run in `sweep` below. If a sweep is renamed, `sweep` fails with "no tests to run"
+  # instead of the sweep silently going back into a partition.
   test:
     name: Tests, partition ${{ matrix.partition }}/4
     needs: archive
@@ -210,9 +218,11 @@ jobs:
       # this job's log, where the log reader needs it.
       - name: Run partition
         run: |
+          start_seconds="${SECONDS}"
           cargo nextest run --archive-file nextest-archive.tar.zst --extract-to . --extract-overwrite \
             --workspace-remap . --partition count:${{ matrix.partition }}/4 --profile ci \
-            --failure-output immediate-final
+            --failure-output immediate-final -E 'not (${{ env.SWEEP_TESTS }})'
+          echo "::notice title=partition wall clock::partition ${{ matrix.partition }}/4: $(( SECONDS - start_seconds )) s (extract + run)"
 
       - name: Resource summary
         if: always()
@@ -230,11 +240,11 @@ jobs:
           path: target/nextest/ci/junit.xml
           if-no-files-found: warn
 
-  # TRIAL (spike S1, card #676, draft PR only): the two corpus sweeps, alone on a runner, with
-  # /tmp on disk and on tmpfs. Each `ynz run` writes the 53 MB runtime library and links it, so
-  # scratch IO is the suspect. Remove when the card's findings are filed.
-  sweep-trial:
-    name: Sweep trial, ${{ matrix.test }}, tmpfs=${{ matrix.tmpfs }}
+  # TRIAL (spike S1, card #676) tmpfs column: /tmp on disk against tmpfs. Each `ynz run` writes the
+  # 53 MB runtime library and links it, so scratch IO was the suspect. Drop the column when the
+  # card's findings are filed.
+  sweep:
+    name: Sweep ${{ matrix.test }}, tmpfs=${{ matrix.tmpfs }}
     needs: archive
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -269,7 +279,7 @@ jobs:
           cargo nextest run --archive-file nextest-archive.tar.zst --extract-to . --extract-overwrite \
             --workspace-remap . --profile ci --failure-output immediate-final \
             -E 'binary(cross_impl_consistency) & test(=${{ matrix.test }})'
-          echo "SWEEP WALL CLOCK: ${{ matrix.test }} tmpfs=${{ matrix.tmpfs }}: $(( SECONDS - start_seconds )) s"
+          echo "::notice title=sweep wall clock::${{ matrix.test }} tmpfs=${{ matrix.tmpfs }}: $(( SECONDS - start_seconds )) s (extract + run)"
 
       - name: Resource summary
         if: always()
