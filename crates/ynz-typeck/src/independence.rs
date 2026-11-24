@@ -1038,15 +1038,15 @@ mod tests {
         ],
         group_sizes: [1, 1]
     );
-    // Case bug: two calls of one callee share a sub-frame slot and run in one group; also holds
-    // for heap arguments (`slowBump(a, 10); slowBump(b, 100)`).
+    // Case bug: two calls of one callee share a sub-frame slot and run in one group. Scalar
+    // arguments, so only the same-callee rule (not the heap-argument floor) sequences them.
     partition_case!(
         two_calls_of_one_callee_are_sequenced,
-        table: [("slowBump", vec![heap_ty(), crate::types::Type::Int])],
+        table: [("slowBump", vec![crate::types::Type::Int])],
         suspends: ["slowBump"],
         stmts: vec![
-            call_stmt("slowBump", vec![ident("a"), ident("10")]),
-            call_stmt("slowBump", vec![ident("b"), ident("100")]),
+            call_stmt("slowBump", vec![ident("a")]),
+            call_stmt("slowBump", vec![ident("b")]),
         ],
         group_sizes: [1, 1]
     );
