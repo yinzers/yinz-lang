@@ -255,6 +255,22 @@ jobs:
           awk 'NR>3 { r+=$1; b+=$2; us+=$13; sy+=$14; id+=$15; wa+=$16; n++ }
                END { if (n) printf "samples=%d avg_runnable=%.1f avg_blocked=%.1f us=%.1f sy=%.1f id=%.1f wa=%.1f\n", n, r/n, b/n, us/n, sy/n, id/n, wa/n }' vmstat.log
 
+      # The job log keeps only its last lines in the log reader, so print the slowest tests and
+      # binaries (summed test time per nextest binary id) from the JUnit file here, once.
+      - name: Slowest tests and binaries (top 10)
+        if: always()
+        shell: bash
+        run: |
+          junit=target/nextest/ci/junit.xml
+          testcases() { grep -o '<testcase name="[^"]*" classname="[^"]*"[^>]*time="[^"]*"' "$junit"; }
+          echo "--- 10 slowest tests (seconds, binary, test)"
+          testcases | sed -E 's/<testcase name="([^"]*)" classname="([^"]*)".*time="([^"]*)"/\3\t\2\t\1/' \
+            | sort -t$'\t' -k1,1 -rn | awk 'NR<=10'
+          echo "--- 10 binaries by summed test time (seconds, tests, binary)"
+          testcases | sed -E 's/<testcase name="([^"]*)" classname="([^"]*)".*time="([^"]*)"/\2\t\3/' \
+            | awk -F'\t' '{ seconds[$1] += $2; tests[$1]++ } END { for (binary in seconds) printf "%.1f\t%d\t%s\n", seconds[binary], tests[binary], binary }' \
+            | sort -rn | awk 'NR<=10'
+
       - name: Upload JUnit report
         if: always()
         uses: actions/upload-artifact@v4
