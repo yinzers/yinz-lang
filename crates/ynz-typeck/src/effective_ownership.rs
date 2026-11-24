@@ -2444,44 +2444,63 @@ mod value_like_parity {
     /// with nothing to free (`FrameLocalImmutable`). Two answers to one question drift (the
     /// `range` store refusal was exactly that drift), so every type the copy table calls bits
     /// must be bits here too.
-    // Survives as a private-function parity (`value_like` is pub(crate)): the two tables are compared per `Type` value, which no program text reaches uniformly (rubric 4 parity keep).
-    // bug: value_like and owned_copy_plan answer one question ("storing it hands nothing over") two ways and drift apart (the `range` store refusal was exactly that), so a program the copy table calls bits is refused or double-freed on store | tier: High
-    #[test]
-    fn every_type_the_copy_table_calls_bits_is_value_like() {
-        let string = Type::String;
-        let samples = [
-            Type::Int,
-            Type::Float,
-            Type::Bool,
-            Type::String,
-            Type::Number { precision: 34 },
-            Type::Options {
-                name: "Color".to_string(),
-            },
-            Type::Range {
-                element: Box::new(Type::Int),
-                end_inclusive: false,
-            },
-            Type::Sensitive {
-                inner: Box::new(string.clone()),
-            },
-            Type::Maybe {
-                inner: Box::new(string),
-            },
-        ];
-        for sample in &samples {
-            let copy_is_bits = matches!(
-                owned_copy_plan(sample),
-                OwnedCopy::ReceiverIsCopy | OwnedCopy::FrameLocalImmutable { .. }
-            );
-            if copy_is_bits {
-                assert!(
-                    value_like(sample),
-                    "{sample:?}: its copy is the receiver's bits, so storing it must hand nothing over"
+    ///
+    /// One named test per sampled type, so the runner names the failing type. A type the copy table
+    /// does not call bits passes: only a type whose copy is the receiver's bits must be value-like.
+    macro_rules! copy_bits_is_value_like_case {
+        ($test_name:ident, $sample:expr) => {
+            // Survives as a private-function parity (`value_like` is pub(crate)): the two tables are compared per `Type` value, which no program text reaches uniformly (rubric 4 parity keep).
+            // bug: value_like and owned_copy_plan answer one question ("storing it hands nothing over") two ways and drift apart (the `range` store refusal was exactly that), so a program the copy table calls bits is refused or double-freed on store | tier: High
+            #[test]
+            fn $test_name() {
+                let sample: Type = $sample;
+                let copy_is_bits = matches!(
+                    owned_copy_plan(&sample),
+                    OwnedCopy::ReceiverIsCopy | OwnedCopy::FrameLocalImmutable { .. }
                 );
+                if copy_is_bits {
+                    assert!(
+                        value_like(&sample),
+                        "{sample:?}: its copy is the receiver's bits, so storing it must hand nothing over"
+                    );
+                }
             }
-        }
+        };
     }
+
+    copy_bits_is_value_like_case!(an_int_is_value_like_if_its_copy_is_bits, Type::Int);
+    copy_bits_is_value_like_case!(a_float_is_value_like_if_its_copy_is_bits, Type::Float);
+    copy_bits_is_value_like_case!(a_bool_is_value_like_if_its_copy_is_bits, Type::Bool);
+    copy_bits_is_value_like_case!(a_string_is_value_like_if_its_copy_is_bits, Type::String);
+    copy_bits_is_value_like_case!(
+        a_number_is_value_like_if_its_copy_is_bits,
+        Type::Number { precision: 34 }
+    );
+    copy_bits_is_value_like_case!(
+        an_options_value_is_value_like_if_its_copy_is_bits,
+        Type::Options {
+            name: "Color".to_string()
+        }
+    );
+    copy_bits_is_value_like_case!(
+        a_range_is_value_like_if_its_copy_is_bits,
+        Type::Range {
+            element: Box::new(Type::Int),
+            end_inclusive: false,
+        }
+    );
+    copy_bits_is_value_like_case!(
+        a_sensitive_string_is_value_like_if_its_copy_is_bits,
+        Type::Sensitive {
+            inner: Box::new(Type::String)
+        }
+    );
+    copy_bits_is_value_like_case!(
+        a_maybe_string_is_value_like_if_its_copy_is_bits,
+        Type::Maybe {
+            inner: Box::new(Type::String)
+        }
+    );
 
     /// The other direction: a type that owns heap storage is handed over when stored.
     // Survives with the parity above: same private `value_like`, other direction; no public query returns its verdict alone.
