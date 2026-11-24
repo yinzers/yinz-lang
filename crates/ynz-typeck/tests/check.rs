@@ -1478,11 +1478,12 @@ fn suspends_flags(outputs: &[CheckOutput], names: &[&str]) -> Vec<bool> {
 }
 
 /// One named test per edit: `recheck_cases!(name: files [..], edit (file, text), probes [..],
-/// |before, after| { checks };)`.
+/// |before, after| { checks }, "bug it catches";)`.
 macro_rules! recheck_cases {
-    ($($case:ident: files $files:tt, edit $edit:tt, probes $probes:tt, |$before:ident, $after:ident| $checks:block;)+) => {
+    ($($case:ident: files $files:tt, edit $edit:tt, probes $probes:tt, |$before:ident, $after:ident| $checks:block, $bug:literal;)+) => {
         $(
             // bug: salsa serves a stale check result after an edit (an unchanged diagnostic list, a suspends set that does not follow an imported function), so a wrong program is accepted, a correct one refused, or a function compiled on the wrong state-machine path | tier: Medium
+            #[doc = $bug]
             #[test]
             fn $case() {
                 let ($before, $after) = recheck(&$files, $edit, &$probes);
@@ -1502,7 +1503,7 @@ recheck_cases! {
             "a valid program has no diagnostics, got {:#?}",
             after[0].diagnostics
         );
-    };
+    }, "salsa serves the old diagnostics after a same-file edit, so a fixed program still shows its errors or a broken one shows none";
     a_changed_import_signature_is_checked_again: files [
         ("b.ynz", "export function foo(x: Int) -> Int { return x }"),
         (
@@ -1516,7 +1517,7 @@ recheck_cases! {
         // used to make salsa skip the re-check.
         assert_no_errors(&before[0]);
         assert_has_errors(&after[0]);
-    };
+    }, "salsa skips the re-check of a caller after an imported function changes signature, so a call that no longer type-checks is accepted";
     an_import_that_starts_suspending_flips_its_caller_to_a_state_machine: files [
         ("a.ynz", "export function op() -> Nothing { print(`op`) }"),
         ("b.ynz", "import { op } from `a`\nfunction caller() -> Nothing { op() }"),
@@ -1525,7 +1526,7 @@ recheck_cases! {
         probes ["b.ynz"], |before, after| {
         assert_eq!(suspends_flags(&before, &["caller"]), vec![false]);
         assert_eq!(suspends_flags(&after, &["caller"]), vec![true]);
-    };
+    }, "salsa keeps a caller off the state-machine path after its import starts suspending, so the caller is compiled as a plain function around a suspension";
     an_import_that_stops_suspending_clears_its_caller_from_the_state_machines: files [
         ("a.ynz", "export function op() -> Nothing { sleep(10)\nprint(`op`) }"),
         ("b.ynz", "import { op } from `a`\nfunction caller() -> Nothing { op() }"),
@@ -1534,7 +1535,7 @@ recheck_cases! {
         probes ["b.ynz"], |before, after| {
         assert_eq!(suspends_flags(&before, &["caller"]), vec![true]);
         assert_eq!(suspends_flags(&after, &["caller"]), vec![false]);
-    };
+    }, "salsa keeps a caller on the state-machine path after its import stops suspending, so it is still compiled with a frame it does not need";
     an_import_shared_by_two_files_flips_both_callers: files [
         ("a.ynz", "export function op() -> Nothing { print(`op`) }"),
         ("b.ynz", "import { op } from `a`\nfunction b_caller() -> Nothing { op() }"),
@@ -1544,5 +1545,5 @@ recheck_cases! {
         probes ["b.ynz", "c.ynz"], |before, after| {
         assert_eq!(suspends_flags(&before, &["b_caller", "c_caller"]), vec![false, false]);
         assert_eq!(suspends_flags(&after, &["b_caller", "c_caller"]), vec![true, true]);
-    };
+    }, "salsa re-flips only one of two callers sharing a changed import, so the other caller is compiled on the wrong path";
 }
