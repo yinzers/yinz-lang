@@ -1,12 +1,12 @@
-// WHY: unit tests for the salsa-tracked inlay-hint detection passes.  These
-// verify that each pass produces hints at the correct byte positions and that
-// the conservative aliasing suppression logic fires in both directions
-// (suppressed when mutated/passed; fires when genuinely never mutated).
+// WHY: tests for the salsa-tracked inlay-hint passes other than `let_to_const_promotion_hints`
+// (that unit lives in `inlay_hint_maybe_mutated.rs`): whether `array_to_fixed_promotion_hints`,
+// `variable_type_hints` and `copy_point_hints` fire for the right bindings and call arguments.
+// Hint text wording and hint position are not asserted (Low tier); a position is used only to
+// say WHICH expression the hint belongs to.
 
 use ynz_parser::{CompilerDb, SourceFile};
 use ynz_typeck::{
-    array_to_fixed_promotion_hints, copy_point_hints, let_to_const_promotion_hints,
-    variable_type_hints, PromotionKind,
+    array_to_fixed_promotion_hints, copy_point_hints, variable_type_hints, PromotionKind,
 };
 
 fn single_file(src: &str) -> (CompilerDb, SourceFile) {
@@ -17,146 +17,176 @@ fn single_file(src: &str) -> (CompilerDb, SourceFile) {
     (db, sf)
 }
 
-fn offset_of(src: &str, needle: &str) -> usize {
-    src.find(needle)
-        .unwrap_or_else(|| panic!("{needle:?} not in source"))
+fn array_to_fixed_hint_count(src: &str) -> usize {
+    let (db, sf) = single_file(src);
+    array_to_fixed_promotion_hints(&db, sf)
+        .iter()
+        .filter(|h| matches!(h.kind, PromotionKind::ArrayToFixed))
+        .count()
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// variable_type_hints
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_variable_type_hint_fires_for_int_literal() {
-    // WHY: `let x = 42` has no annotation — the pass must emit a TypeHint.
-    let src = "function entrypoint() -> Nothing {\n  let x = 42\n}\n";
-    let (db, sf) = single_file(src);
-    let hints = variable_type_hints(&db, sf);
+fn assert_array_to_fixed_fires(src: &str) {
     assert!(
-        !hints.is_empty(),
-        "unannotated let must produce a type hint"
-    );
-    assert!(
-        hints.iter().any(|h| h.type_text == "Int"),
-        "inferred type must be `Int`; got: {:?}",
-        hints.iter().map(|h| &h.type_text).collect::<Vec<_>>()
+        array_to_fixed_hint_count(src) >= 1,
+        "expected an ArrayToFixed hint for:\n{src}"
     );
 }
 
-#[test]
-fn test_variable_type_hint_suppressed_for_annotated_let() {
-    // WHY: `let x: Int = 42` already has the annotation — no hint should fire.
-    let src = "function entrypoint() -> Nothing {\n  let x: Int = 42\n}\n";
-    let (db, sf) = single_file(src);
-    let hints = variable_type_hints(&db, sf);
-    assert!(
-        hints.is_empty(),
-        "annotated let must produce zero type hints; got: {:?}",
-        hints
+fn assert_array_to_fixed_suppressed(src: &str) {
+    assert_eq!(
+        array_to_fixed_hint_count(src),
+        0,
+        "expected no ArrayToFixed hint for:\n{src}"
     );
 }
 
-#[test]
-fn test_variable_type_hint_position_is_after_name() {
-    // WHY: the hint must appear after the binding name, not before or at the start
-    // of the statement — otherwise it would render in the wrong column.
-    let src = "function entrypoint() -> Nothing {\n  let score = 42\n}\n";
-    let (db, sf) = single_file(src);
-    let hints = variable_type_hints(&db, sf);
-    let name_end = offset_of(src, "score") + "score".len();
-    for h in &hints {
+macro_rules! array_to_fixed_cases {
+    ($($case:ident: $check:ident($src:expr), $bug:literal;)+) => {
+        $(
+            // bug: the array→fixed hint fires on an array that is grown (or is suppressed on one that never is), so the IDE suggests a fixed length the program then violates | tier: Medium
+            #[doc = $bug]
+            #[test]
+            fn $case() {
+                $check($src);
+            }
+        )+
+    };
+}
+
+array_to_fixed_cases! {
+    never_grown_annotated_array_fires:
+        assert_array_to_fixed_fires("function entrypoint() -> Nothing {\n  let nums: Array<Int> = [1, 2, 3]\n}\n"),
+        "an annotated array that is never grown gets no array→fixed hint";
+
+    array_grown_in_else_arm_is_suppressed:
+        assert_array_to_fixed_suppressed(
+            r#"
+function entrypoint() -> Nothing {
+  let nums: Array<Int> = [1, 2, 3]
+  if (nums) {
+    1 => {}
+    else => {
+      nums.add(4)
+    }
+  }
+}
+"#),
+        "the `else =>` arm of a match is skipped by the walker, so `.add()` there is invisible (Bug 2.6)";
+
+    array_not_grown_in_any_arm_still_fires:
+        assert_array_to_fixed_fires(
+            r#"
+function entrypoint() -> Nothing {
+  let nums: Array<Int> = [1, 2, 3]
+  if (nums) {
+    1 => {}
+    else => {
+      let x = 5
+    }
+  }
+}
+"#),
+        "visiting the `else =>` arm over-suppresses the hint when the arm does not grow the array";
+
+    wait_wrapped_lend_call_on_an_array_is_suppressed:
+        assert_array_to_fixed_suppressed(
+            r#"
+function growIt(lend arr: Int) -> Nothing { }
+
+function entrypoint() -> Nothing {
+  let nums: Array<Int> = [1, 2, 3]
+  wait growIt(nums)
+}
+"#),
+        "the walker does not recurse into `wait`, so a lend call that may grow the array behind it is invisible";
+}
+
+macro_rules! type_hint_cases {
+    ($($case:ident: $body:block)+) => {
+        $(
+            // bug: `variable_type_hints` skips an unannotated `let`, or hints one that already carries its annotation | tier: Medium
+            #[test]
+            fn $case() $body
+        )+
+    };
+}
+
+type_hint_cases! {
+    type_hint_fires_for_unannotated_let: {
+        let (db, sf) = single_file("function entrypoint() -> Nothing {\n  let x = 42\n}\n");
+        let hints = variable_type_hints(&db, sf);
         assert!(
-            h.position >= name_end,
-            "type hint position {} must be at or after name-end {}",
-            h.position,
-            name_end
+            hints.iter().any(|h| h.type_text == "Int"),
+            "unannotated `let x = 42` must get an `Int` type hint; got: {:?}",
+            hints.iter().map(|h| &h.type_text).collect::<Vec<_>>()
+        );
+    }
+
+    type_hint_is_suppressed_for_annotated_let: {
+        let (db, sf) = single_file("function entrypoint() -> Nothing {\n  let x: Int = 42\n}\n");
+        let hints = variable_type_hints(&db, sf);
+        assert!(
+            hints.is_empty(),
+            "annotated let must produce zero type hints; got: {hints:?}"
         );
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// let_to_const_promotion_hints
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_let_to_const_fires_for_never_reassigned() {
-    // WHY: `let x = 0` with no later assignment is a const-promotion candidate.
-    let src = "function entrypoint() -> Nothing {\n  let count = 0\n}\n";
-    let (db, sf) = single_file(src);
-    let hints = let_to_const_promotion_hints(&db, sf);
-    assert!(
-        hints
-            .iter()
-            .any(|h| matches!(h.kind, PromotionKind::LetToConst)),
-        "never-reassigned let must emit LetToConst hint"
-    );
+macro_rules! copy_point_cases {
+    ($($case:ident: $body:block)+) => {
+        $(
+            // bug: `copy_point_hints` misses a trivially-copyable argument (nested in an inner call), hints it twice, or hints a heap-allocated `String` argument | tier: Medium
+            #[test]
+            fn $case() $body
+        )+
+    };
 }
 
-#[test]
-fn test_let_to_const_suppressed_for_const_binding() {
-    // WHY: `const x = 0` is already const — no promotion hint should fire.
-    let src = "function entrypoint() -> Nothing {\n  const count = 0\n}\n";
-    let (db, sf) = single_file(src);
-    let hints = let_to_const_promotion_hints(&db, sf);
-    assert!(
-        hints.is_empty(),
-        "const binding must not emit a const-promotion hint"
-    );
+copy_point_cases! {
+    // Bug 2.14: the walker only inspected the top-level arguments of the outermost call.
+    nested_call_arg_gets_copy_hint: {
+        let src = r#"
+function inner(x: Int) -> Nothing { }
+function outer(result: Int) -> Nothing { }
+
+function entrypoint() -> Nothing {
+    let n: Int = 5
+    outer(inner(n))
 }
-
-#[test]
-fn test_let_to_const_suppressed_when_reassigned() {
-    // WHY: `let x = 0; x = 1` — x is reassigned, so it cannot be const.
-    let src = "function entrypoint() -> Nothing {\n  let x = 0\n  x = 1\n}\n";
-    let (db, sf) = single_file(src);
-    let hints = let_to_const_promotion_hints(&db, sf);
-    let for_x: Vec<_> = hints
-        .iter()
-        .filter(|h| matches!(h.kind, PromotionKind::LetToConst))
-        .collect();
-    assert!(
-        for_x.is_empty(),
-        "reassigned let must not emit const-promotion hint; got: {:?}",
-        for_x
-    );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// array_to_fixed_promotion_hints
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_array_to_fixed_fires_for_annotated_never_grown() {
-    // WHY: `let nums: Array<Int> = [1, 2, 3]` with no .add() call is a fixed
-    // promotion candidate.
-    let src = "function entrypoint() -> Nothing {\n  let nums: Array<Int> = [1, 2, 3]\n}\n";
-    let (db, sf) = single_file(src);
-    let hints = array_to_fixed_promotion_hints(&db, sf);
-    assert!(
-        hints
-            .iter()
-            .any(|h| matches!(h.kind, PromotionKind::ArrayToFixed)),
-        "never-grown Array<Int> must emit ArrayToFixed hint"
-    );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// copy_point_hints
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_copy_point_does_not_fire_for_string_arg() {
-    // WHY: `String` is NOT trivially copyable (heap allocation) — no copy hint.
-    let src = "function greet(s: String) -> String { return s }\n\
-               function entrypoint() -> Nothing {\n  let r = greet(`hi`)\n}\n";
-    let (db, sf) = single_file(src);
-    let hints = copy_point_hints(&db, sf);
-    // String args must not produce copy hints.
-    for h in &hints {
+"#;
+        let (db, sf) = single_file(src);
+        let hints = copy_point_hints(&db, sf);
+        let end_of_n = src.find("inner(n)").unwrap() + "inner(n".len();
         assert!(
-            h.size_text != "N bytes",
-            "copy hint should not fire for string arg; got: {:?}",
-            hints
+            hints.iter().any(|h| h.position == end_of_n),
+            "expected a copy hint at `n` inside `inner(n)` (byte {end_of_n}), got: {hints:?}"
+        );
+    }
+
+    top_level_copyable_arg_gets_exactly_one_copy_hint: {
+        let src = r#"
+function consume(x: Int) -> Nothing { }
+
+function entrypoint() -> Nothing {
+    let n: Int = 42
+    consume(n)
+}
+"#;
+        let (db, sf) = single_file(src);
+        let hints = copy_point_hints(&db, sf);
+        let end_of_n = src.find("consume(n)").unwrap() + "consume(n".len();
+        let hints_at_n = hints.iter().filter(|h| h.position == end_of_n).count();
+        assert_eq!(hints_at_n, 1, "got: {hints:?}");
+    }
+
+    string_arg_gets_no_copy_hint: {
+        let src = "function greet(s: String) -> String { return s }\n\
+                   function entrypoint() -> Nothing {\n  let r = greet(`hi`)\n}\n";
+        let (db, sf) = single_file(src);
+        let hints = copy_point_hints(&db, sf);
+        assert!(
+            hints.is_empty(),
+            "a String argument must not get a copy hint; got: {hints:?}"
         );
     }
 }

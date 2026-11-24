@@ -1,23 +1,16 @@
-// WHY: `errors`-capable typeck (M7 P3a) must enforce: (1) ErrorsCapable type is
-// assigned to the return type of errors-capable functions; (2) calling an errors
-// function in a non-errors context produces a diagnostic; (3) `.failed()`, `.or()`,
-// `.message`, `.suggestions`, `.trace`, `.source` type-check correctly; (4) auto-
-// propagation narrows the binding to the success type on first use inside an errors
-// function; (5) `if (x.failed())` narrows `x` to success in subsequent code.
-// Catches regressions where the errors flow-tracking machinery silently degrades.
-//
-// test-ratchet: M7 P3a adds ErrorsCapable to the type system and all associated
-// flow-sensitive enforcement rules.
+// `errors`-capable typeck (M7 P3a): which programs that declare, call, handle or inspect an
+// `errors` function the checker accepts or rejects (an unhandled result in a plain function, an
+// unknown method, the refused `.suggestions` field). One table of named cases: a case is clean (no
+// diagnostic), exactly N errors, or exactly one error of a named class (`[Class]`). Wording is not asserted.
 
+use ynz_diagnostics::{DiagnosticKind, Severity};
 use ynz_parser::{CompilerDb, SourceFile};
-use ynz_typeck::{check_query, CheckOutput, Type};
-
-const FILE: &str = "test.ynz";
+use ynz_typeck::{check_query, CheckOutput};
 
 fn run(source: &str) -> CheckOutput {
     let db = CompilerDb::default();
-    let sf = SourceFile::new(&db, FILE.to_string(), source.to_string());
-    (*check_query(&db, sf)).clone()
+    let source_file = SourceFile::new(&db, "test.ynz".to_string(), source.to_string());
+    (*check_query(&db, source_file)).clone()
 }
 
 fn assert_clean(source: &str) {
@@ -30,122 +23,58 @@ fn assert_clean(source: &str) {
     );
 }
 
-fn assert_errors(source: &str, expected_count: usize) -> CheckOutput {
-    let output = run(source);
-    let errors: Vec<_> = output
+fn error_diagnostics(output: &CheckOutput) -> Vec<&ynz_diagnostics::Diagnostic> {
+    output
         .diagnostics
         .iter()
-        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
-        .collect();
+        .filter(|diagnostic| matches!(diagnostic.severity, Severity::Error))
+        .collect()
+}
+
+fn assert_error_count(source: &str, expected: usize) {
+    let output = run(source);
+    let errors = error_diagnostics(&output);
     assert_eq!(
         errors.len(),
-        expected_count,
-        "Expected {expected_count} errors, got {}:\n{:#?}",
-        errors.len(),
-        errors
-    );
-    output
-}
-
-fn assert_has_diagnostic(output: &CheckOutput, expected_fragment: &str) {
-    let found = output.diagnostics.iter().any(|d| {
-        d.what.contains(expected_fragment)
-            || d.what_instead.contains(expected_fragment)
-            || d.why.contains(expected_fragment)
-    });
-    assert!(
-        found,
-        "Expected diagnostic containing {:?} but got:\n{:#?}",
-        expected_fragment, output.diagnostics
+        expected,
+        "Expected {expected} errors, got {}:\n{errors:#?}",
+        errors.len()
     );
 }
 
-// ── 1. ErrorsCapable type exists and type_name formats correctly ─────────────
+fn assert_one_error_of_kind(source: &str, expected: DiagnosticKind) {
+    let output = run(source);
+    let errors = error_diagnostics(&output);
+    assert_eq!(errors.len(), 1, "Expected one error, got: {errors:#?}");
+    assert_eq!(errors[0].kind, Some(expected), "got: {errors:#?}");
+}
 
-#[test]
-fn m7_errors_capable_type_variant_exists() {
-    // WHY: Type::ErrorsCapable must be instantiatable with an inner type. If the
-    // variant is missing, any test depending on errors typeck will panic before
-    // reaching the actual assertion.
-    let t = Type::ErrorsCapable {
-        inner: Box::new(Type::String),
+macro_rules! errors_cases {
+    ($($case:ident: $source:expr => $expected:tt;)+) => {
+        $(
+            // bug: typeck accepts an `errors` result that no one handles in a plain function (a failure silently swallowed), or refuses a program that declares, calls, `.or()`s, `.failed()`-checks or propagates an `errors` function correctly | tier: High
+            #[test]
+            fn $case() {
+                errors_case!($source, $expected);
+            }
+        )+
     };
-    assert!(matches!(t, Type::ErrorsCapable { .. }));
 }
 
-#[test]
-fn m7_errors_capable_type_count_is_20() {
-    // WHY: adding the 20th type variant (ErrorsCapable) must be tracked. This
-    // test catches accidental double-additions or premature additions that would
-    // increase the count without a milestone lock comment.
-    //
-    // test-ratchet: M7 P3a bumps the count from 19 to 20.
-    let variants: &[Type] = &[
-        Type::Nothing,
-        Type::String,
-        Type::Error,
-        Type::Int,
-        Type::Float,
-        Type::Number { precision: 34 },
-        Type::Bool,
-        Type::Range {
-            element: Box::new(Type::Int),
-            end_inclusive: false,
-        },
-        Type::Shape { name: "Foo".into() },
-        Type::Dynamic {
-            contract: "Foo".into(),
-        },
-        Type::TypeParam { name: "T".into() },
-        Type::Generic {
-            name: "Pair".into(),
-            args: vec![Type::Int, Type::String],
-        },
-        Type::BuiltinArray {
-            elem: Box::new(Type::Int),
-        },
-        Type::BuiltinFixed {
-            elem: Box::new(Type::Int),
-            size: ynz_typeck::FixedLength::Unknown,
-        },
-        Type::Maybe {
-            inner: Box::new(Type::Int),
-        },
-        Type::BuiltinMap {
-            key: Box::new(Type::String),
-            val: Box::new(Type::Int),
-        },
-        Type::MapEntry {
-            key: Box::new(Type::String),
-            val: Box::new(Type::Int),
-        },
-        Type::Options {
-            name: "Status".into(),
-        },
-        Type::Union {
-            variants: vec![Type::Int, Type::String],
-        },
-        Type::ErrorsCapable {
-            inner: Box::new(Type::String),
-        },
-    ];
-    // test-ratchet: M7 P3a adds ErrorsCapable as the 20th type variant.
-    // M1: 3, M2: +4=7, M3: +1=8, M4: +2=10, M5: +7=17, M6: +2=19, M7: +1=20.
-    assert_eq!(
-        variants.len(),
-        20,
-        "Type variant count changed — add a // test-ratchet: comment. Got {}",
-        variants.len()
-    );
+macro_rules! errors_case {
+    ($source:expr, clean) => {
+        assert_clean($source)
+    };
+    ($source:expr, [$kind:ident]) => {
+        assert_one_error_of_kind($source, DiagnosticKind::$kind)
+    };
+    ($source:expr, $errors:literal) => {
+        assert_error_count($source, $errors)
+    };
 }
 
-// ── 2. Errors-capable function can call another errors-capable function ──────
-
-#[test]
-fn m7_errors_fn_calls_errors_fn_clean() {
-    // WHY: an errors-capable function calling another errors-capable function must
-    // type-check cleanly. Auto-propagation fires at the use site — no diagnostic.
-    assert_clean(
+errors_cases! {
+    an_errors_function_calling_an_errors_function_is_clean:
         r#"
 function readFile() -> String errors {
   return `hello`
@@ -161,18 +90,9 @@ function entrypoint() -> Nothing {
   let msg = r.or(`default`)
   print(msg)
 }
-"#,
-    );
-}
-
-// ── 3. Non-errors function calling errors function → diagnostic ──────────────
-
-#[test]
-fn m7_non_errors_fn_calls_errors_fn_emits_diagnostic() {
-    // WHY: a non-errors function that calls an errors function without handling
-    // the failure must emit a diagnostic. Silently swallowing errors means the
-    // caller never knows the operation failed.
-    let out = assert_errors(
+"#
+        => clean;
+    a_plain_function_using_an_errors_result_unhandled_is_one_error:
         r#"
 function readFile() -> String errors {
   return `hello`
@@ -182,19 +102,9 @@ function entrypoint() -> Nothing {
   let content = readFile()
   print(content)
 }
-"#,
-        1,
-    );
-    assert_has_diagnostic(&out, "failure is not handled here");
-}
-
-// ── 4. .failed() on errors result returns bool ───────────────────────────────
-
-#[test]
-fn m7_failed_method_returns_bool() {
-    // WHY: `.failed()` is the gate for accessing error details. It must return
-    // `Boolean`. If it returns something else, `if (x.failed())` won't type-check.
-    assert_clean(
+"#
+        => 1;
+    a_failed_check_in_a_plain_function_is_clean:
         r#"
 function readFile() -> String errors {
   return `ok`
@@ -206,18 +116,9 @@ function entrypoint() -> Nothing {
     print(`failed`)
   }
 }
-"#,
-    );
-}
-
-// ── 5. .or(default) on errors string result returns string ───────────────────
-
-#[test]
-fn m7_or_method_returns_inner_type() {
-    // WHY: `.or(default)` is the "give me the success value or a fallback" escape
-    // hatch. It must return the success type so the binding is usable as a plain
-    // value — not as ErrorsCapable — after the call.
-    assert_clean(
+"#
+        => clean;
+    or_on_an_errors_binding_is_clean:
         r#"
 function readFile() -> String errors {
   return `hello`
@@ -228,18 +129,9 @@ function entrypoint() -> Nothing {
   let content = r.or(`default`)
   print(content)
 }
-"#,
-    );
-}
-
-// ── 6. .message on errors result returns string ──────────────────────────────
-
-#[test]
-fn m7_message_method_returns_string() {
-    // WHY: `.message` is the human-readable error description. It must return
-    // `String` so it can be passed to `print`. Wrong type breaks the primary
-    // diagnostic display path.
-    assert_clean(
+"#
+        => clean;
+    message_after_a_failed_check_is_clean:
         r#"
 function readFile() -> String errors {
   return `hello`
@@ -251,22 +143,9 @@ function entrypoint() -> Nothing {
     print(r.message)
   }
 }
-"#,
-    );
-}
-
-// ── 7. .suggestions returns Array<String> ────────────────────────────────────
-
-#[test]
-fn m7_suggestions_method_refused_even_when_checked() {
-    // WHY: v0.3 concurrency hardening Phase 3 step 3.4 (FRAGO 002 singleton S1). This test
-    // used to be `m7_suggestions_method_returns_array_of_string` and asserted the read below
-    // compiled clean, which is `.suggestions` typing correctly (`Array<String>`, unchanged)
-    // while having NO working codegen — a correct, properly `.failed()`-guarded program used
-    // to reach codegen and ICE "This is a compiler bug." `ec_field_lowering` now refuses
-    // `.suggestions` at THIS site, at compile time, with real teaching text, before codegen
-    // ever runs. See `ynz_typeck::errors_fields`'s module doc for the full producer.
-    let out = assert_errors(
+"#
+        => clean;
+    suggestions_after_a_failed_check_is_the_not_yet_available_error:
         r#"
 function readFile() -> String errors {
   return `hello`
@@ -279,30 +158,9 @@ function entrypoint() -> Nothing {
     print(hints.count().toString())
   }
 }
-"#,
-        1,
-    );
-    let errs: Vec<_> = out
-        .diagnostics
-        .iter()
-        .filter(|d| matches!(d.severity, ynz_diagnostics::Severity::Error))
-        .collect();
-    assert_eq!(
-        errs[0].kind,
-        Some(ynz_diagnostics::DiagnosticKind::EcFieldNotYetAvailable),
-        "expected EcFieldNotYetAvailable; got: {:#?}",
-        errs
-    );
-}
-
-// ── 8. Errors function mark + use result → success type flows through ─────────
-
-#[test]
-fn m7_errors_fn_auto_propagation_success_type() {
-    // WHY: in an errors-capable function, using an ErrorsCapable binding as a
-    // plain value triggers auto-propagation. The binding's type must narrow to
-    // the inner success type so it can be passed to functions expecting `String`.
-    assert_clean(
+"#
+        => [EcFieldNotYetAvailable];
+    an_errors_binding_passed_on_inside_an_errors_function_is_clean:
         r#"
 function readFile() -> String errors {
   return `content`
@@ -323,17 +181,9 @@ function entrypoint() -> Nothing {
     print(`process failed`)
   }
 }
-"#,
-    );
-}
-
-// ── 9. Errors-capable function calling non-errors function → no diagnostic ───
-
-#[test]
-fn m7_errors_fn_calls_non_errors_fn_clean() {
-    // WHY: calling a non-errors function from an errors-capable function is always
-    // valid — the callee can't fail so no error-handling is needed.
-    assert_clean(
+"#
+        => clean;
+    an_errors_function_calling_a_plain_function_is_clean:
         r#"
 function greet() -> String {
   return `hello`
@@ -348,18 +198,9 @@ function entrypoint() -> Nothing {
   let r = process()
   print(r.or(`failed`))
 }
-"#,
-    );
-}
-
-// ── 10. .or() gives the success value — no diagnostic in non-errors context ──
-
-#[test]
-fn m7_or_in_non_errors_context_no_diagnostic() {
-    // WHY: `.or(default)` is the explicit handler for non-errors contexts. Using
-    // it eliminates the "must handle" diagnostic that fires when the result is
-    // silently ignored.
-    assert_clean(
+"#
+        => clean;
+    or_directly_on_a_call_in_a_plain_function_is_clean:
         r#"
 function readFile() -> String errors {
   return `content`
@@ -369,41 +210,9 @@ function entrypoint() -> Nothing {
   let content = readFile().or(`default`)
   print(content)
 }
-"#,
-    );
-}
-
-// ── 11. .failed() check handles the result — no diagnostic ───────────────────
-
-#[test]
-fn m7_failed_check_handles_result_no_diagnostic() {
-    // WHY: checking `.failed()` is one of the three valid ways to handle an
-    // errors-capable value in a non-errors function. After the check, the
-    // compiler knows the failure was explicitly handled.
-    assert_clean(
-        r#"
-function readFile() -> String errors {
-  return `content`
-}
-
-function entrypoint() -> Nothing {
-  let r = readFile()
-  if (r.failed()) {
-    print(`error`)
-  }
-}
-"#,
-    );
-}
-
-// ── 12. Unknown method on ErrorsCapable → diagnostic ─────────────────────────
-
-#[test]
-fn m7_unknown_method_on_errors_capable_emits_diagnostic() {
-    // WHY: methods that don't exist on ErrorsCapable values must produce a
-    // diagnostic with the list of available methods. Typos in `.failed()` etc.
-    // would otherwise silently compile.
-    let out = assert_errors(
+"#
+        => clean;
+    an_unknown_method_on_an_errors_binding_is_one_error:
         r#"
 function readFile() -> String errors {
   return `ok`
@@ -413,20 +222,9 @@ function entrypoint() -> Nothing {
   let r = readFile()
   let x = r.nonExistentMethod()
 }
-"#,
-        1,
-    ); // 1 error: unknown method on ErrorsCapable
-    assert_has_diagnostic(&out, "does not have a method called");
-}
-
-// ── 13. errors-capable declared type on return type ──────────────────────────
-
-#[test]
-fn m7_errors_capable_declared_fn_type_checks() {
-    // WHY: a function declared `-> Int errors` must type-check cleanly when it
-    // returns a plain `Int`. The declaration tells the typeck machinery this
-    // function is errors-capable; the return value is the success type.
-    assert_clean(
+"#
+        => 1;
+    an_int_errors_function_returning_a_plain_int_is_clean:
         r#"
 function divide(share a: Int, share b: Int) -> Int errors {
   return a
@@ -437,18 +235,9 @@ function entrypoint() -> Nothing {
   let n = r.or(0)
   print(n.toString())
 }
-"#,
-    );
-}
-
-// ── 14. errors-capable returning nothing works ───────────────────────────────
-
-#[test]
-fn m7_errors_capable_nothing_return_clean() {
-    // WHY: `-> Nothing errors` is valid — a side-effectful operation that may
-    // fail but has no success value. The whole point of nothing errors is to
-    // express "this may fail" without returning data.
-    assert_clean(
+"#
+        => clean;
+    a_nothing_errors_function_is_clean:
         r#"
 function writeFile() -> Nothing errors {
   print(`written`)
@@ -460,17 +249,9 @@ function entrypoint() -> Nothing {
     print(`write failed`)
   }
 }
-"#,
-    );
-}
-
-// ── 15. errors-capable int return + .or(0) produces int ─────────────────────
-
-#[test]
-fn m7_errors_int_or_fallback_is_int() {
-    // WHY: `.or(0)` on an `Int errors` value must return `Int`. If the type is
-    // wrong, arithmetic operations after `.or()` would fail to type-check.
-    assert_clean(
+"#
+        => clean;
+    or_on_an_int_errors_call_is_an_int:
         r#"
 function tryParse(share s: String) -> Int errors {
   return 42
@@ -480,93 +261,9 @@ function entrypoint() -> Nothing {
   let n: Int = tryParse(`42`).or(0)
   print(n.toString())
 }
-"#,
-    );
-}
-
-// ── 16. errors-capable bool return works ─────────────────────────────────────
-
-#[test]
-fn m7_errors_bool_or_false_clean() {
-    // WHY: `-> Boolean errors` must type-check cleanly. Bool is a primitive just like
-    // int or string — the errors wrapper must work for all inner types.
-    assert_clean(
-        r#"
-function checkFile() -> Boolean errors {
-  return true
-}
-
-function entrypoint() -> Nothing {
-  let ok = checkFile().or(false)
-  print(ok.toString())
-}
-"#,
-    );
-}
-
-// ── 17. errors result used in errors function narrows to success type ─────────
-
-#[test]
-fn m7_errors_result_used_in_errors_fn_narrows() {
-    // WHY: when an errors-capable binding is used in an errors function (auto-
-    // propagation context), its type must narrow from ErrorsCapable to the inner
-    // success type. A subsequent function expecting `String` must accept it.
-    assert_clean(
-        r#"
-function readFile() -> String errors {
-  return `content`
-}
-
-function touch(share s: String) -> Nothing {
-  print(s)
-}
-
-function process() -> String errors {
-  let content = readFile()
-  touch(content)
-  return content
-}
-
-function entrypoint() -> Nothing {
-  let r = process()
-  print(r.or(`failed`))
-}
-"#,
-    );
-}
-
-// ── 18. .or() fallback type must match inner type (int or string mismatch) ───
-
-#[test]
-fn m7_or_fallback_wrong_type_emits_diagnostic() {
-    // WHY: `.or(default)` returns the inner type. The fallback argument is passed
-    // to the same function and must match. If int is returned but string fallback
-    // is provided, typeck must catch the mismatch.
-    //
-    // NOTE: for P3a, .or() returns the inner type regardless of arg type — the
-    // arg checking happens at call-site level. This test verifies the .or() call
-    // itself doesn't produce unexpected diagnostics when the arg matches.
-    assert_clean(
-        r#"
-function tryGet() -> Int errors {
-  return 99
-}
-
-function entrypoint() -> Nothing {
-  let n = tryGet().or(0)
-  print(n.toString())
-}
-"#,
-    );
-}
-
-// ── 19. chained call: errors + .or() in one expression ───────────────────────
-
-#[test]
-fn m7_chained_errors_or_clean() {
-    // WHY: `readFile().or(`default`)` is the canonical one-liner for handling
-    // an errors result. Chained directly on the call without a let binding.
-    assert_clean(
+"#
+        => clean;
+    or_directly_on_a_call_argument_is_clean:
         r#"
 function readFile() -> String errors {
   return `ok`
@@ -575,18 +272,9 @@ function readFile() -> String errors {
 function entrypoint() -> Nothing {
   print(readFile().or(`default`))
 }
-"#,
-    );
-}
-
-// ── 20. Two errors calls in the same errors function ─────────────────────────
-
-#[test]
-fn m7_two_errors_calls_in_errors_fn() {
-    // WHY: each errors-capable call result in an errors function should get its
-    // own binding and auto-propagate independently. Two calls must both type-check
-    // without one narrowing affecting the other.
-    assert_clean(
+"#
+        => clean;
+    two_errors_calls_in_one_errors_function_are_clean:
         r#"
 function step1() -> String errors {
   return `a`
@@ -609,197 +297,6 @@ function entrypoint() -> Nothing {
     print(`pipeline failed`)
   }
 }
-"#,
-    );
-}
-
-// ── 21. errors-capable type displays as "T errors" in type_name ──────────────
-
-#[test]
-fn m7_errors_capable_type_name_format() {
-    // WHY: `type_name` must produce "string errors" for `ErrorsCapable { inner: String }`.
-    // This display appears in diagnostic messages — wrong format means confusing errors.
-    // Verified via the diagnostic output — a function with wrong return type emits
-    // "string errors" in the message so the user sees the correct type name.
-    let t = Type::ErrorsCapable {
-        inner: Box::new(Type::String),
-    };
-    // Verify the type is constructed correctly (structural check).
-    if let Type::ErrorsCapable { inner } = &t {
-        assert!(matches!(inner.as_ref(), Type::String));
-    } else {
-        panic!("Expected ErrorsCapable");
-    }
-    let t_int = Type::ErrorsCapable {
-        inner: Box::new(Type::Int),
-    };
-    if let Type::ErrorsCapable { inner } = &t_int {
-        assert!(matches!(inner.as_ref(), Type::Int));
-    } else {
-        panic!("Expected ErrorsCapable");
-    }
-}
-
-// ── 22. .message without .failed() check still gets a type ───────────────────
-
-#[test]
-fn m7_message_method_type_checks_on_errors_capable() {
-    // WHY: `.message` must return `String` from the method dispatch — the type
-    // checker must handle it without cascading to a "no such method" error.
-    // Accessing `.message` without a `.failed()` check is semantically wrong but
-    // P3a allows it; the full flow-sensitive enforcement is a v0.2 enhancement.
-    assert_clean(
-        r#"
-function readFile() -> String errors {
-  return `ok`
-}
-
-function entrypoint() -> Nothing {
-  let r = readFile()
-  if (r.failed()) {
-    print(r.message)
-  }
-}
-"#,
-    );
-}
-
-// ── 23. errors-capable in main (non-errors) with .or() ───────────────────────
-
-#[test]
-fn m7_errors_in_main_with_or_clean() {
-    // WHY: `main` is never errors-capable. Using `.or()` to handle an errors
-    // call inside `main` is the standard pattern — must type-check cleanly.
-    assert_clean(
-        r#"
-function fetchName() -> String errors {
-  return `Alice`
-}
-
-function entrypoint() -> Nothing {
-  let name = fetchName().or(`unknown`)
-  print(name)
-}
-"#,
-    );
-}
-
-// ── 24. errors-capable → nested errors function chain ────────────────────────
-
-#[test]
-fn m7_nested_errors_chain_clean() {
-    // WHY: A calls B which calls C (all errors-capable). The chain must type-check
-    // end-to-end without cascading diagnostics from inner calls.
-    assert_clean(
-        r#"
-function readRaw() -> String errors {
-  return `raw`
-}
-
-function process() -> String errors {
-  let raw = readRaw()
-  return raw
-}
-
-function pipeline() -> String errors {
-  let processed = process()
-  return processed
-}
-
-function entrypoint() -> Nothing {
-  let r = pipeline()
-  print(r.or(`err`))
-}
-"#,
-    );
-}
-
-// ── 25. .failed() condition narrows to success after if-block ────────────────
-
-#[test]
-fn m7_failed_if_narrowing_after_block() {
-    // WHY: `if (x.failed()) { ... }` must narrow `x` to the success type for
-    // code that comes AFTER the if-block. The pattern "check failed, handle it,
-    // then use the success value" is the core errors-handling idiom.
-    // After the if-block, `r` is narrowed to `String` — no longer ErrorsCapable.
-    // Use .or() before the if-check, or just check .failed() and use it.
-    assert_clean(
-        r#"
-function readFile() -> String errors {
-  return `content`
-}
-
-function entrypoint() -> Nothing {
-  let r = readFile()
-  if (r.failed()) {
-    print(`error handling`)
-  }
-}
-"#,
-    );
-}
-
-// ── 26. errors-capable with maybe return type inner ──────────────────────────
-
-#[test]
-fn m7_errors_capable_inner_maybe_type() {
-    // WHY: `-> Maybe<Int> errors` is a valid (if exotic) combination — a function
-    // that can either fail OR succeed with an absent value. The inner type must
-    // resolve correctly to `Maybe<Int>`. Testing with a concrete maybe value
-    // to avoid the `none` literal hint-unwrapping complexity.
-    let t = Type::ErrorsCapable {
-        inner: Box::new(Type::Maybe {
-            inner: Box::new(Type::Int),
-        }),
-    };
-    // Verify the nested type is correct.
-    if let Type::ErrorsCapable { inner } = &t {
-        assert!(matches!(inner.as_ref(), Type::Maybe { .. }));
-    } else {
-        panic!("Expected ErrorsCapable wrapping Maybe");
-    }
-}
-
-// ── 27. errors function in non-errors context diagnostic mentions options ─────
-
-#[test]
-fn m7_non_errors_context_diagnostic_lists_options() {
-    // WHY: the diagnostic for unhandled errors must tell the developer the THREE
-    // options (mark errors, use .or(), check .failed()). If only one option is
-    // listed, the developer is left guessing about the others.
-    let out = assert_errors(
-        r#"
-function readFile() -> String errors {
-  return `ok`
-}
-
-function entrypoint() -> Nothing {
-  let content = readFile()
-  print(content)
-}
-"#,
-        1,
-    );
-    assert_has_diagnostic(&out, "Three options");
-}
-
-// ── 28. type_name on nested ErrorsCapable ────────────────────────────────────
-
-#[test]
-fn m7_type_name_nested_errors_capable() {
-    // WHY: nested ErrorsCapable (exotic but must not panic) must be constructable.
-    // Type::ErrorsCapable can wrap any Type including another ErrorsCapable.
-    // The formatter must handle it without stack overflow.
-    let inner = Type::ErrorsCapable {
-        inner: Box::new(Type::Int),
-    };
-    let outer = Type::ErrorsCapable {
-        inner: Box::new(inner),
-    };
-    // Verify structural correctness — nested type has the right shape.
-    if let Type::ErrorsCapable { inner: outer_inner } = &outer {
-        assert!(matches!(outer_inner.as_ref(), Type::ErrorsCapable { .. }));
-    } else {
-        panic!("Expected outer ErrorsCapable");
-    }
+"#
+        => clean;
 }

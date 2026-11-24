@@ -82,6 +82,7 @@ fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+// bug: a second hardcoded copy of the base suspension-source intrinsic list appears in typeck or codegen and drifts from the authoritative one (silent miscompile) | tier: High
 #[test]
 fn base_suspension_set_has_exactly_one_definition() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
@@ -151,6 +152,7 @@ fn find_method_twin_definition(contents: &str) -> Option<usize> {
 /// (or a `"send" | "receive"` match pattern answering a membership question) anywhere in
 /// `ynz-typeck` or `ynz-codegen` source outside the authoritative home is the same
 /// twin-computation drift class the base scan guards against.
+// bug: a second copy of the conduit suspending-method list appears in typeck or codegen and drifts from the authoritative one (silent miscompile) | tier: High
 #[test]
 fn conduit_method_set_has_exactly_one_definition() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
@@ -185,6 +187,7 @@ fn conduit_method_set_has_exactly_one_definition() {
 
 /// The authoritative home is actually present and non-empty — guards against the scan silently
 /// passing because the source moved and the tripwire now scans nothing.
+// bug: the authoritative home moves or empties, so the two scans above pass while scanning against nothing | tier: High
 #[test]
 fn authoritative_home_exists() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
@@ -199,22 +202,29 @@ fn authoritative_home_exists() {
         contents.contains("CHANNEL_SUSPENDING_METHODS"),
         "authoritative home must define CHANNEL_SUSPENDING_METHODS (the v0.3-M4 conduit arm)"
     );
-    // The classifiers are reachable through the crate's public API — a compile-time guarantee
-    // that consumers have a single exported home to thread (base intrinsics AND the M4
-    // conduit-method sibling arm).
-    assert!(ynz_typeck::is_base_suspension_intrinsic("sleep"));
-    assert!(!ynz_typeck::is_base_suspension_intrinsic("notAnIntrinsic"));
-    assert!(ynz_typeck::suspension_source::channel_method_suspends(
-        true, "send"
-    ));
-    assert!(ynz_typeck::suspension_source::channel_method_suspends(
-        true, "receive"
-    ));
+}
+
+// The classifiers are reachable through the crate's public API — a compile-time guarantee that
+// consumers have a single exported home to thread (base intrinsics AND the M4 conduit-method
+// sibling arm).
+macro_rules! suspension_classifier_cases {
+    ($($case:ident: $classified:expr;)+) => {
+        $(
+            // bug: the public suspension classifier answers wrongly (a suspending call treated as non-suspending or the reverse, so a frame is or is not built) | tier: High
+            #[test]
+            fn $case() {
+                assert!($classified);
+            }
+        )+
+    };
+}
+
+suspension_classifier_cases! {
+    sleep_is_a_base_suspension_intrinsic: ynz_typeck::is_base_suspension_intrinsic("sleep");
+    an_unknown_name_is_not_a_base_suspension_intrinsic: !ynz_typeck::is_base_suspension_intrinsic("notAnIntrinsic");
+    send_on_a_conduit_suspends: ynz_typeck::suspension_source::channel_method_suspends(true, "send");
+    receive_on_a_conduit_suspends: ynz_typeck::suspension_source::channel_method_suspends(true, "receive");
     // A UFCS user function named `send` on a NON-conduit receiver is not a suspension source.
-    assert!(!ynz_typeck::suspension_source::channel_method_suspends(
-        false, "send"
-    ));
-    assert!(!ynz_typeck::suspension_source::channel_method_suspends(
-        true, "close"
-    ));
+    send_on_a_non_conduit_does_not_suspend: !ynz_typeck::suspension_source::channel_method_suspends(false, "send");
+    close_on_a_conduit_does_not_suspend: !ynz_typeck::suspension_source::channel_method_suspends(true, "close");
 }

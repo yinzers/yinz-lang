@@ -79,6 +79,7 @@ function fib(n: Int) -> Int {
 }
 ";
 
+// bug: the parallel-group hint misses a CPU group that admitted_cpu_group admits (codegen spawns it, the IDE shows nothing) | tier: Medium
 #[test]
 fn clean_cpu_group_hint_fires_and_matches_admission() {
     // WHY: a single clean 2-member CPU group is the admitted case — codegen spawns it. The hint
@@ -114,6 +115,7 @@ fn clean_cpu_group_hint_fires_and_matches_admission() {
     );
 }
 
+// bug: the hint claims a separate core for a two-CPU-group function that admitted_cpu_group declines (codegen spawns nothing) | tier: Medium
 #[test]
 fn two_cpu_groups_decline_emits_no_hint() {
     // WHY: a function with TWO CPU groups (one top-level pair + one nested-arm pair) is DECLINED
@@ -148,6 +150,7 @@ fn two_cpu_groups_decline_emits_no_hint() {
     );
 }
 
+// bug: the hint claims a separate core for a host that reads its parameter after the join, which admission declines | tier: Medium
 #[test]
 fn param_read_after_join_declines_emits_no_hint() {
     // WHY: a host whose parameter is READ after the join is declined (the spawn overwrites the
@@ -180,6 +183,7 @@ fn param_read_after_join_declines_emits_no_hint() {
     );
 }
 
+// bug: the hint tags a suspending function's independent calls with a separate core instead of the I/O overlap partition | tier: Medium
 #[test]
 fn suspending_fn_emits_io_hint_without_separate_core() {
     // WHY: a suspending (non-promoted) function never spawns onto a separate core. Two independent
@@ -215,6 +219,7 @@ function run() -> Nothing {
     );
 }
 
+// bug: the hint claims a separate core for a CPU pair in a function with a trailing wait, which admission declines | tier: Medium
 #[test]
 fn cpu_group_with_trailing_wait_is_suspending_no_separate_core() {
     // WHY: the mixed case (CPU pair then `wait sleep`) makes the function SUSPENDING, so it routes
@@ -260,6 +265,7 @@ fn line_of(src: &str, needle: &str) -> usize {
         .unwrap_or_else(|| panic!("no line containing {needle:?} in source"))
 }
 
+// bug: the hint pass ignores admitted_fused_group, so a genuinely fused CPU+I/O group shows no hint or the wrong tags | tier: Medium
 #[test]
 fn mixed_fused_group_hint_tags_cpu_and_io_members_and_matches_admission() {
     // WHY: before this fix, `admitted_fused_group` was invisible to the hint pass entirely (it
@@ -312,6 +318,7 @@ fn mixed_fused_group_hint_tags_cpu_and_io_members_and_matches_admission() {
     );
 }
 
+// bug: the hint fires for a mixed group that admitted_fused_group declines (a member with two arguments) | tier: Medium
 #[test]
 fn mixed_fused_group_declines_on_non_scalar_arg_emits_no_hint() {
     // WHY: a call with 2 arguments is not a fused-group-eligible member (`admitted_fused_group`
@@ -364,6 +371,7 @@ function entrypoint() -> Nothing {
     );
 }
 
+// bug: a nested independent-suspend group gets its hint emitted twice, so the hint set differs from the codegen set | tier: Medium
 #[test]
 fn nested_suspending_group_in_ordinary_host_emits_hint_exactly_once_per_member() {
     // WHY: blocker fix (code-reviewer). The Phase 5 refactor split `collect_io_overlap_hints` into
@@ -438,6 +446,7 @@ function run(flag: Boolean) -> Nothing {
     );
 }
 
+// bug: the hint classifies a promoted CPU host against the narrow suspend set, so it tags a call separate core for a fused group codegen declines | tier: Medium
 #[test]
 fn fused_member_that_is_itself_a_promoted_cpu_host_matches_codegen_real_suspend_set() {
     // WHY: should-fix (code-reviewer). Before this fix, the hint pass classified a fused group's

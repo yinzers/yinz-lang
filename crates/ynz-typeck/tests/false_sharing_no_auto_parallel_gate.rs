@@ -19,6 +19,7 @@ const SRC: &str = "shape Tally { hits: Int\n outs: Int }\n\
      function record(give t: Tally) -> Nothing { wait sleep(1)\n print(t.hits.toString()) }\n\
      function entrypoint() -> Nothing { let t: Tally = { hits: 3, outs: 1 }\n background record(t) }";
 
+// bug: `--no-auto-parallel` still pads a cross-thread shape or fires the padding lint (extra memory, output unchanged) | tier: Medium
 #[test]
 fn no_auto_parallel_empties_the_padded_set_and_silences_the_lint() {
     // Sanity half: without the flag the shape pads (same program as the positive
