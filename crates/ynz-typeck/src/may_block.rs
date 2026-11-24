@@ -1781,8 +1781,8 @@ mod tests {
         };
     }
 
-    // Five cases, each a different classifier input of one fixpoint (leaf, loop, self-recursion plus
-    // a caller of it, mutual recursion, an import); over the Medium guide of three, justified in the
+    // Six cases, each a different classifier input of one fixpoint (leaf, loop, self-recursion plus
+    // a caller of it, mutual recursion, a real-work import, a trivial import); over the Medium guide of three, justified in the
     // lane report.
     // Case bug: a leaf with no loop and no recursion is worth spawning.
     real_work_case!(
@@ -1823,5 +1823,13 @@ mod tests {
         imported: ["heavyImported"], imported_real_work: ["heavyImported"],
         works: ["entrypoint"],
         idle: []
+    );
+    // Case bug: a caller of an imported callee that is not in the real-work set is marked (every import seeds).
+    real_work_case!(
+        an_imported_trivial_callee_does_not_seed_its_caller,
+        source: "function entrypoint() -> Nothing {\n    trivialImported()\n}\n",
+        imported: ["trivialImported"], imported_real_work: [],
+        works: [],
+        idle: ["entrypoint"]
     );
 }
