@@ -560,6 +560,30 @@ mod union_layout_tests {
         variants: [shape("Tiny"), shape("Wide")],
         layout: (false, 16, 32, 48, 16)
     );
+    // A shape whose size is no multiple of the slot alignment (nine one-byte fields, size 9) rounds
+    // its payload up to the next multiple, 16, so a slot is a whole number of array strides.
+    union_layout_case!(
+        a_shape_size_that_is_no_multiple_of_the_alignment_rounds_up,
+        shapes: vec![
+            ("Tiny", vec![("flag", Type::Bool)]),
+            (
+                "Nine",
+                vec![
+                    ("a", Type::Bool),
+                    ("b", Type::Bool),
+                    ("c", Type::Bool),
+                    ("d", Type::Bool),
+                    ("e", Type::Bool),
+                    ("f", Type::Bool),
+                    ("g", Type::Bool),
+                    ("h", Type::Bool),
+                    ("i", Type::Bool),
+                ]
+            ),
+        ],
+        variants: [shape("Tiny"), shape("Nine")],
+        layout: (false, 8, 16, 24, 8)
+    );
     // A non-shape variant needs eight payload bytes beside a shape variant.
     union_layout_case!(
         a_non_shape_variant_needs_eight_payload_bytes,
