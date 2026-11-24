@@ -36899,78 +36899,12 @@ mod tests {
         use ynz_typeck::types::Type as Resolved;
 
         let span = dummy_span();
-        // One representative per resolved `Type` variant. The classifier (`parity_case`) is the
-        // exhaustiveness driver — every variant present here is matched by an arm that has no
-        // `_` fallback, so the compiler rejects any future variant that is not classified.
-        let all_variants: Vec<Resolved> = vec![
-            Resolved::Nothing,
-            Resolved::String,
-            Resolved::Error,
-            Resolved::Int,
-            Resolved::Float,
-            Resolved::Number { precision: 34 },
-            Resolved::Bool,
-            Resolved::Range {
-                element: Box::new(Resolved::Int),
-                end_inclusive: false,
-            },
-            Resolved::Shape {
-                name: "Player".to_string(),
-            },
-            Resolved::Dynamic {
-                contract: "Damageable".to_string(),
-            },
-            Resolved::TypeParam {
-                name: "T".to_string(),
-            },
-            Resolved::Generic {
-                name: "Pair".to_string(),
-                args: vec![Resolved::Int, Resolved::Int],
-            },
-            Resolved::BuiltinArray {
-                elem: Box::new(Resolved::Int),
-            },
-            Resolved::BuiltinFixed {
-                elem: Box::new(Resolved::Int),
-                size: ynz_typeck::FixedLength::Unknown,
-            },
-            Resolved::Maybe {
-                inner: Box::new(Resolved::Int),
-            },
-            Resolved::BuiltinMap {
-                key: Box::new(Resolved::Int),
-                val: Box::new(Resolved::Int),
-            },
-            Resolved::MapEntry {
-                key: Box::new(Resolved::Int),
-                val: Box::new(Resolved::Int),
-            },
-            Resolved::Options {
-                name: "Status".to_string(),
-            },
-            Resolved::Union {
-                variants: vec![
-                    Resolved::Shape {
-                        name: "Circle".to_string(),
-                    },
-                    Resolved::Shape {
-                        name: "Square".to_string(),
-                    },
-                ],
-            },
-            Resolved::ErrorsCapable {
-                inner: Box::new(Resolved::Int),
-            },
-            Resolved::Sensitive {
-                inner: Box::new(Resolved::String),
-            },
-        ];
-
-        // Assert the representative set is itself complete: if a variant were missing from
-        // `all_variants`, this loop would never drive `parity_case` for it, so the compile-time
-        // exhaustiveness guard would not protect it. `parity_case` covering every variant is the
-        // compile-time half; iterating every variant here is the runtime half — together they
-        // guarantee each variant is BOTH classified and exercised.
+        // One representative per resolved `Type` variant, from the shared sampler (a runtime list
+        // kept complete by `every_declared_variant_is_represented`, so a new variant is swept
+        // without anyone adding it here). The classifier (`parity_case`) is the exhaustiveness
+        // driver — every variant is matched by an arm that has no `_` fallback, so the compiler
+        // rejects any future variant that is not classified.
+        let all_variants: Vec<Resolved> = ynz_typeck::type_variant_sampler::all_type_variants();
         for variant in &all_variants {
             match parity_case(variant) {
                 ParityCase::Reachable {
