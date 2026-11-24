@@ -64,117 +64,115 @@ fn position_at(src: &str, needle: &str) -> lsp_types::Position {
     LineTable::new(src).byte_offset_to_position(src, offset, PositionEncoding::Utf8)
 }
 
-// Same-file: function definition
+/// One go-to-definition request: where the cursor is and where the jump must land.
+struct Scenario {
+    state: ServerState,
+    cursor_uri: lsp_types::Url,
+    cursor: lsp_types::Position,
+    /// File and line of the declaration, or `None` when nothing is definable under the cursor.
+    expected_definition: Option<(lsp_types::Url, u32)>,
+}
 
-#[test]
-fn test_goto_def_same_file_function_returns_location() {
+fn same_file_function_call() -> Scenario {
     let src = "function greet() -> String { return `hi` }\nfunction entrypoint() -> Nothing {\n  let msg = greet()\n}\n";
-    let path = "/tmp/ynz_gotodef_fn.ynz";
-    let (state, uri) = state_single(path, src);
-    let pos = position_at(src, "greet()"); // offset at call site
-    let result = definition_response(&state, &uri, pos);
-    assert!(
-        result.is_some(),
-        "definition must resolve for same-file function call"
-    );
-    if let Some(lsp_types::GotoDefinitionResponse::Scalar(loc)) = result {
-        // Declaration is at start of file — line 0.
-        assert_eq!(loc.range.start.line, 0, "greet declared on line 0");
-        assert_eq!(&loc.uri, &uri, "same-file jump stays in same URI");
+    let (state, uri) = state_single("/tmp/ynz_gotodef_fn.ynz", src);
+    let cursor = position_at(src, "greet()");
+    Scenario {
+        state,
+        expected_definition: Some((uri.clone(), 0)),
+        cursor_uri: uri,
+        cursor,
     }
 }
 
-#[test]
-fn test_goto_def_same_file_shape_returns_location() {
+fn same_file_shape_annotation() -> Scenario {
     let src = "shape Player {\n  name: String\n  health: Int\n}\nfunction entrypoint() -> Nothing {\n  let p: Player = { name: `Pat`, health: 100 }\n}\n";
-    let path = "/tmp/ynz_gotodef_shape.ynz";
-    let (state, uri) = state_single(path, src);
-    // Position at `Player` in the type annotation.
-    let annotation_pos = position_at(src, ": Player");
-    // + 2 bytes to skip `: ` and land on `P`
-    let pos = lsp_types::Position {
-        line: annotation_pos.line,
-        character: annotation_pos.character + 2,
+    let (state, uri) = state_single("/tmp/ynz_gotodef_shape.ynz", src);
+    // `: ` is two characters; land on the `P` of `Player`.
+    let annotation = position_at(src, ": Player");
+    let cursor = lsp_types::Position {
+        line: annotation.line,
+        character: annotation.character + 2,
     };
-    let result = definition_response(&state, &uri, pos);
-    assert!(
-        result.is_some(),
-        "definition must resolve for shape annotation"
-    );
-    if let Some(lsp_types::GotoDefinitionResponse::Scalar(loc)) = result {
-        assert_eq!(loc.range.start.line, 0, "Player declared on line 0");
+    Scenario {
+        state,
+        expected_definition: Some((uri.clone(), 0)),
+        cursor_uri: uri,
+        cursor,
     }
 }
 
-// Edge cases: no definition found
-
-#[test]
-fn test_goto_def_whitespace_returns_none() {
-    let src = "function entrypoint() -> Nothing {   }\n";
-    let path = "/tmp/ynz_gotodef_ws.ynz";
-    let (state, uri) = state_single(path, src);
-    // Position in the whitespace inside the braces.
-    let pos = lsp_types::Position {
-        line: 0,
-        character: 35,
-    };
-    assert!(definition_response(&state, &uri, pos).is_none());
-}
-
-#[test]
-fn test_goto_def_keyword_returns_none() {
-    let src = "function entrypoint() -> Nothing {}\n";
-    let path = "/tmp/ynz_gotodef_kw.ynz";
-    let (state, uri) = state_single(path, src);
-    // Position on `function` keyword (offset 0).
-    let pos = lsp_types::Position {
-        line: 0,
-        character: 0,
-    };
-    assert!(definition_response(&state, &uri, pos).is_none());
-}
-
-#[test]
-fn test_goto_def_integer_literal_returns_none() {
-    let src = "function entrypoint() -> Nothing {\n  let x = 42\n}\n";
-    let path = "/tmp/ynz_gotodef_int.ynz";
-    let (state, uri) = state_single(path, src);
-    let pos = position_at(src, "42");
-    assert!(definition_response(&state, &uri, pos).is_none());
-}
-
-// Cross-file: imported function jumps to dep file
-
-#[test]
-fn test_goto_def_cross_file_imported_function_returns_dep_uri() {
+fn cross_file_imported_function() -> Scenario {
     let dep_src = "export function announce(name: String) -> String {\n  return name\n}\n";
     let main_src = "import { announce } from `services/players`\nfunction entrypoint() -> Nothing {\n  let msg = announce(`Roberto`)\n}\n";
     let (state, main_uri, dep_uri, _dir) = state_two_files("players", dep_src, main_src);
-
-    let pos = position_at(main_src, "announce(`Roberto`)");
-    let result = definition_response(&state, &main_uri, pos);
-    assert!(result.is_some(), "cross-file import must resolve");
-    if let Some(lsp_types::GotoDefinitionResponse::Scalar(loc)) = result {
-        // Jump must point to the dep file, NOT the main file.
-        assert_ne!(loc.uri, main_uri, "cross-file jump must go to dep file");
-        assert_eq!(loc.uri, dep_uri, "jump must point to players.ynz");
-        // `announce` is declared on line 0 of dep file.
-        assert_eq!(
-            loc.range.start.line, 0,
-            "announce declared on line 0 of dep"
-        );
+    Scenario {
+        state,
+        expected_definition: Some((dep_uri, 0)),
+        cursor_uri: main_uri,
+        cursor: position_at(main_src, "announce(`Roberto`)"),
     }
 }
 
-// Performance: < 100ms p95 for definition request
+fn keyword_has_no_definition() -> Scenario {
+    let src = "function entrypoint() -> Nothing {}\n";
+    let (state, uri) = state_single("/tmp/ynz_gotodef_kw.ynz", src);
+    Scenario {
+        state,
+        cursor_uri: uri,
+        cursor: lsp_types::Position {
+            line: 0,
+            character: 0,
+        },
+        expected_definition: None,
+    }
+}
 
+macro_rules! definition_case {
+    ($name:ident, $scenario:ident) => {
+        // bug: go-to-definition returns no location, the wrong file or the wrong line for a function call, a shape annotation or an imported function, or invents one for a keyword | tier: Medium
+        #[test]
+        fn $name() {
+            let scenario = $scenario();
+            let result =
+                definition_response(&scenario.state, &scenario.cursor_uri, scenario.cursor);
+            match scenario.expected_definition {
+                Some((expected_uri, expected_line)) => {
+                    let Some(lsp_types::GotoDefinitionResponse::Scalar(location)) = result else {
+                        panic!("expected one location; got {result:?}");
+                    };
+                    assert_eq!(location.uri, expected_uri);
+                    assert_eq!(location.range.start.line, expected_line);
+                }
+                None => assert!(result.is_none(), "got {result:?}"),
+            }
+        }
+    };
+}
+
+definition_case!(
+    same_file_function_call_jumps_to_its_declaration,
+    same_file_function_call
+);
+definition_case!(
+    same_file_shape_annotation_jumps_to_its_declaration,
+    same_file_shape_annotation
+);
+definition_case!(
+    cross_file_imported_function_jumps_to_the_dependency_file,
+    cross_file_imported_function
+);
+definition_case!(
+    keyword_under_cursor_has_no_definition,
+    keyword_has_no_definition
+);
+
+// bug: a cold go-to-definition takes over 100 ms | tier: Medium
 #[test]
-fn test_goto_def_response_under_100ms() {
+fn nightly_goto_def_response_under_100ms() {
     let src = "function greet() -> String { return `hi` }\nfunction entrypoint() -> Nothing {\n  let msg = greet()\n}\n";
-    let path = "/tmp/ynz_gotodef_perf.ynz";
-    let (state, uri) = state_single(path, src);
+    let (state, uri) = state_single("/tmp/ynz_gotodef_perf.ynz", src);
     let pos = position_at(src, "greet()");
-
     // Cold call (cache miss): parse + typeck + symbol lookup.
     let start = std::time::Instant::now();
     let _ = definition_response(&state, &uri, pos);

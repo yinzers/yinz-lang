@@ -11,6 +11,7 @@ function entrypoint() -> Nothing {\n\
     print(x.toString())\n\
 }\n";
 
+// bug: the ynz-lsp binary mis-frames or errors a request over stdio (initialize result, completion, hover, shutdown) | tier: Medium
 #[test]
 fn stdio_smoke_full_sequence() {
     // WHY: Exercises the complete LSP wire-format sequence through a real
@@ -28,9 +29,7 @@ fn stdio_smoke_full_sequence() {
         "params": {
             "processId": null,
             "rootUri": null,
-            "capabilities": {
-                "general": { "positionEncodings": ["utf-8"] }
-            }
+            "capabilities": {}
         }
     }));
     let init_msg = h.recv();
@@ -42,6 +41,12 @@ fn stdio_smoke_full_sequence() {
         init_msg["error"].is_null(),
         "initialize must not return an error: {init_msg}"
     );
+    let result = &init_msg["result"];
+    assert_eq!(result["capabilities"]["hoverProvider"], json!(true));
+    assert!(result["capabilities"]["completionProvider"].is_object());
+    // A client that offers no position encodings gets the LSP default.
+    assert_eq!(result["capabilities"]["positionEncoding"], json!("utf-16"));
+    assert_eq!(result["serverInfo"]["name"], json!("ynz-lsp"));
 
     // initialized notification (no response expected)
     h.send(&json!({"jsonrpc":"2.0","method":"initialized","params":{}}));
@@ -118,44 +123,6 @@ fn stdio_smoke_full_sequence() {
         shutdown_msg["result"].is_null(),
         "shutdown must return null result: {shutdown_msg}"
     );
-
-    h.send(&json!({"jsonrpc":"2.0","method":"exit","params":{}}));
-    h.kill();
-}
-
-#[test]
-fn stdio_initialize_shutdown() {
-    let mut h = SubprocessHarness::spawn();
-
-    h.send(&json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "processId": null,
-            "rootUri": null,
-            "capabilities": {}
-        }
-    }));
-
-    // recv() returns the full JSON-RPC message; result field is InitializeResult
-    let msg = h.recv();
-    let result = &msg["result"];
-    assert_eq!(result["capabilities"]["hoverProvider"], json!(true));
-    assert!(result["capabilities"]["completionProvider"].is_object());
-    // positionEncoding belongs inside ServerCapabilities (LSP 3.17 spec §3.15)
-    assert_eq!(result["capabilities"]["positionEncoding"], json!("utf-16")); // client sent no encodings
-    assert!(result["serverInfo"]["name"] == "ynz-lsp");
-
-    h.send(&json!({"jsonrpc":"2.0","method":"initialized","params":{}}));
-
-    h.send(&json!({
-        "jsonrpc": "2.0",
-        "id": 2,
-        "method": "shutdown"
-    }));
-    let shutdown_msg = h.recv();
-    assert!(shutdown_msg["result"].is_null());
 
     h.send(&json!({"jsonrpc":"2.0","method":"exit","params":{}}));
     h.kill();

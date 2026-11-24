@@ -1,6 +1,6 @@
 // WHY: Performance regression tests guard the LSP's responsiveness SLAs.
-// All tests are #[ignore] — run via:
-//   cargo test --release -p ynz-lsp -- --ignored
+// All tests are `nightly_` — CI's default filter excludes them; run via:
+//   cargo nextest run --release -p ynz-lsp -E 'test(/(^|::)nightly_/)'
 // These tests measure wall-clock time from the test's perspective (includes
 // thread scheduling overhead), so thresholds include generous headroom over
 // the raw algorithmic cost.
@@ -94,9 +94,9 @@ function entrypoint() -> Nothing {\n\
 // Cold initialize + first diagnostics
 // ---------------------------------------------------------------------------
 
+// bug: opening a file on a cold server takes over 500 ms to publish its first diagnostics | tier: Medium
 #[test]
-#[ignore]
-fn perf_cold_initialize_under_500ms() {
+fn nightly_perf_cold_initialize_under_500ms() {
     // WHY: From cold server start to first diagnostic notification must complete
     // in under 500ms. If it exceeds this threshold, the LSP feels sluggish on
     // every file open. 500ms is the upper bound for "responsive on file open"
@@ -126,9 +126,9 @@ fn perf_cold_initialize_under_500ms() {
 // Incremental change latency
 // ---------------------------------------------------------------------------
 
+// bug: diagnostics after a one-line edit take over 100 ms | tier: Medium
 #[test]
-#[ignore]
-fn perf_incremental_change_under_100ms() {
+fn nightly_perf_incremental_change_under_100ms() {
     // WHY: After a single-character edit, the next publishDiagnostics must arrive
     // within 100ms. This is the latency budget for "as-you-type" diagnostics.
     // Salsa's incremental computation makes this achievable; if it regresses,
@@ -161,9 +161,9 @@ fn perf_incremental_change_under_100ms() {
 // Completion latency
 // ---------------------------------------------------------------------------
 
+// bug: completion on a warmed server takes over 50 ms | tier: Medium
 #[test]
-#[ignore]
-fn perf_completion_under_50ms() {
+fn nightly_perf_completion_under_50ms() {
     // WHY: Completion requests must respond within 50ms on a warmed server.
     // This is the upper bound for "instant" autocomplete feedback per standard
     // editor UX guidance. Salsa memoization should make repeated completions
@@ -204,9 +204,9 @@ fn perf_completion_under_50ms() {
 // Hover latency
 // ---------------------------------------------------------------------------
 
+// bug: hover on a warmed server takes over 50 ms | tier: Medium
 #[test]
-#[ignore]
-fn perf_hover_under_50ms() {
+fn nightly_perf_hover_under_50ms() {
     // WHY: Hover requests must respond within 50ms on a warmed server.
     // Same reasoning as completion — registry lookups and token-at-offset are
     // O(1) operations; 50ms is generous headroom for thread scheduling overhead.
