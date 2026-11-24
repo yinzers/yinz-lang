@@ -53,3 +53,4 @@ runs:
         # Root wrote the downloads; the cache post-step runs as the runner user.
         sudo chmod -R a+rX "${archives}"
         echo "apt cache: $(find "${archives}" -maxdepth 1 -name '*.deb' | wc -l) .deb files after install"
+        echo "::notice title=apt cache::cache-hit=${CACHE_HIT:-false} for ${PACKAGES}"

@@ -31,6 +31,20 @@ runs:
     - name: Install cargo-nextest
       uses: ./.github/actions/install-nextest
 
+    # Every `ynz run` writes the 53 MB runtime library to /tmp and links it there. Trial runs
+    # 45503360748 and 45505322220 (4-vCPU runners, one sweep alone per runner): with /tmp on
+    # disk a sweep took 412-756 s at 55% iowait on a slow runner disk, with tmpfs 229-520 s at
+    # 2-12% iowait; peak scratch use was 235 MiB. `exec` is required: Docker-style tmpfs
+    # mounts are noexec and the tests run the programs they link. The size is a cap, not a
+    # reservation (pages are used on demand), and a full tmpfs returns ENOSPC, so keep it well
+    # above the peak. Nothing here reads /tmp back after the job; the archive stays on disk.
+    - name: Put /tmp on tmpfs
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo mount -t tmpfs -o size=8g,mode=1777,exec,nosuid,nodev tmpfs /tmp
+        mount | grep ' /tmp '
+
     - name: Download the test archive
       uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
       with:

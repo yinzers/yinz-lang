@@ -240,11 +240,11 @@ jobs:
           path: target/nextest/ci/junit.xml
           if-no-files-found: warn
 
-  # TRIAL (spike S1, card #676) tmpfs column: /tmp on disk against tmpfs. Each `ynz run` writes the
-  # 53 MB runtime library and links it, so scratch IO was the suspect. Drop the column when the
-  # card's findings are filed.
+  # The two corpus sweeps, one runner each (see `test` above). Keep the matrix names in step with
+  # SWEEP_TESTS. /tmp is a tmpfs here (prepare-test-runner): the sweeps write and link a 53 MB
+  # runtime library per program, and on a slow runner disk they spent 55% of their time in iowait.
   sweep:
-    name: Sweep ${{ matrix.test }}, tmpfs=${{ matrix.tmpfs }}
+    name: Sweep ${{ matrix.test }}
     needs: archive
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -254,21 +254,11 @@ jobs:
         test:
           - corpus_byte_identical_across_mode_matrix
           - corpus_produces_deterministic_output_across_runs
-        tmpfs: [false, true]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Prepare the runner
         uses: ./.github/actions/prepare-test-runner
-
-      # Docker mounts tmpfs noexec; `exec` keeps spawned binaries runnable (the sweep runs the
-      # programs it links in /tmp). 8 GB is the cap, not a reservation: pages are used on demand,
-      # and the sampler below reports the peak.
-      - name: Mount /tmp as tmpfs
-        if: matrix.tmpfs
-        run: |
-          sudo mount -t tmpfs -o size=8g,mode=1777,exec,nosuid,nodev tmpfs /tmp
-          mount | grep ' /tmp '
 
       - name: Start resource sampling
         run: .github/scripts/resources.sh start
@@ -279,7 +269,7 @@ jobs:
           cargo nextest run --archive-file nextest-archive.tar.zst --extract-to . --extract-overwrite \
             --workspace-remap . --profile ci --failure-output immediate-final \
             -E 'binary(cross_impl_consistency) & test(=${{ matrix.test }})'
-          echo "::notice title=sweep wall clock::${{ matrix.test }} tmpfs=${{ matrix.tmpfs }}: $(( SECONDS - start_seconds )) s (extract + run)"
+          echo "::notice title=sweep wall clock::${{ matrix.test }}: $(( SECONDS - start_seconds )) s (extract + run)"
 
       - name: Resource summary
         if: always()
