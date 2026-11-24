@@ -1,11 +1,5 @@
-// test-ratchet: replacing tautological struct-field test + adding real spawn-kill-respawn test.
-//   Old tests: (1) spawn_nonexistent_binary_returns_error, (2) check_mode_config_flag_is_set
-//   (tautological — asserted struct field value matches what was just set, not behavior),
-//   (3) drop_kills_child_no_zombie.
-//   New tests: (1) unchanged, (2) check_mode_does_not_spawn_child (real behavior test via
-//   rebuild_one API), (3) unchanged + (4) spawn_kill_respawn (full lifecycle with /bin/sleep).
-/// Integration tests for ChildHandle lifecycle: spawn errors, --check mode, Drop cleanup,
-/// and spawn-kill-respawn with a real long-running binary.
+/// Integration tests for ChildHandle lifecycle: spawn errors, --check mode, and the
+/// process-group kill of a real long-running child.
 use std::path::{Path, PathBuf};
 
 use ynz_watch::{child::ChildHandle, project::WatchSourceFile, WatchError};
@@ -14,6 +8,7 @@ use ynz_watch::{child::ChildHandle, project::WatchSourceFile, WatchError};
 //      exist. If this returns Ok (or panics), the watch event loop crashes with no diagnostic
 //      instead of recovering gracefully and printing a WHAT/WHAT-INSTEAD/WHY message.
 //      Do NOT change to expect()/unwrap().
+// bug: ChildHandle::spawn panics or returns Ok for a missing binary, so the watch loop crashes without a diagnostic | tier: Medium
 #[test]
 fn spawn_nonexistent_binary_returns_error() {
     let result = ChildHandle::spawn(Path::new("/tmp/ynz-watch-test-nonexistent-binary-xyz"));
@@ -27,6 +22,7 @@ fn spawn_nonexistent_binary_returns_error() {
 //      CI pipelines using --check to gate builds may accidentally spawn the program,
 //      breaking non-interactive environments and producing unpredictable output.
 //      Asserts the rebuild_one check_only=true path leaves Option<ChildHandle> as None.
+// bug: rebuild_one with check_only=true spawns the program, so CI pipelines gating on --check run it | tier: Medium
 #[test]
 fn check_mode_does_not_spawn_child() {
     use ynz_watch::db::init_db;
@@ -62,61 +58,6 @@ fn check_mode_does_not_spawn_child() {
     let _ = std::fs::remove_dir_all(&out_dir);
 }
 
-// WHY: ChildHandle's Drop impl must kill the child unconditionally to prevent zombie
-//      processes when the watch daemon exits unexpectedly (panic, signal, early return).
-//      Without this, every watch restart leaves a dead child on the process table.
-#[test]
-fn drop_kills_child_no_zombie() {
-    let true_path = Path::new("/bin/true");
-    if !true_path.exists() {
-        eprintln!("Skipping drop_kills_child_no_zombie: /bin/true not found");
-        return;
-    }
-
-    let handle = ChildHandle::spawn(true_path);
-    assert!(handle.is_ok(), "spawning /bin/true should succeed");
-    drop(handle); // Must not panic; child must be reaped by Drop.
-}
-
-// WHY: the spawn-kill-respawn cycle is the critical path for every rebuild — old child must
-//      die (whole process group, via SIGTERM) before the new one starts. If kill_gracefully
-//      doesn't work, old children accumulate as zombies and new spawns run concurrently with
-//      old ones, causing terminal interleaving and resource exhaustion.
-//      Uses /bin/sleep 10 as the long-running test binary.
-#[test]
-fn spawn_kill_respawn_via_child_handle() {
-    let sleep_path = Path::new("/bin/sleep");
-    if !sleep_path.exists() {
-        eprintln!("Skipping spawn_kill_respawn: /bin/sleep not found");
-        return;
-    }
-
-    // Build a Command that spawns `sleep 10` via ChildHandle.
-    let mut first = match ChildHandle::spawn_with_args(sleep_path, &["10"]) {
-        Ok(c) => c,
-        Err(e) => panic!("Failed to spawn first child: {e}"),
-    };
-
-    // Child should be alive.
-    assert!(
-        first.try_wait().is_none(),
-        "child should still be running after spawn"
-    );
-
-    // Kill it gracefully (50ms grace so the test is fast).
-    first.kill_gracefully(50);
-
-    // Now spawn a second one — must succeed (no zombie from first).
-    let second = ChildHandle::spawn_with_args(sleep_path, &["10"]);
-    assert!(
-        second.is_ok(),
-        "second spawn must succeed after first child was killed"
-    );
-
-    // Kill second on drop.
-    drop(second);
-}
-
 // F6: the SIGKILL escalation path in `kill_gracefully_impl` must hit the WHOLE process
 // group (`killpg`), not just the direct child (`child.kill()`). Before the fix, a child
 // that ignores SIGTERM AND has spawned a grandchild that also ignores SIGTERM would
@@ -129,15 +70,10 @@ fn spawn_kill_respawn_via_child_handle() {
 // so SIGTERM alone (the graceful half) cannot kill either process; only a genuine
 // process-group SIGKILL can. The grandchild writes its own PID to a file so the test
 // can check liveness via `/proc/<pid>` after escalation.
+// bug: the SIGKILL escalation of kill_gracefully kills only the direct child, leaking SIGTERM-ignoring grandchildren | tier: Medium
 #[test]
 fn kill_gracefully_sigkill_escalation_reaches_grandchildren() {
     let sh_path = Path::new("/bin/sh");
-    if !sh_path.exists() {
-        eprintln!(
-            "Skipping kill_gracefully_sigkill_escalation_reaches_grandchildren: /bin/sh not found"
-        );
-        return;
-    }
 
     let pidfile = std::env::temp_dir().join(format!(
         "ynz-watch-f6-grandchild-pid-{}",

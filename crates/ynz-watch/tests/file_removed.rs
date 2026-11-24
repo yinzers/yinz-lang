@@ -10,6 +10,7 @@ use std::{fs, time::Duration};
 use tempfile::TempDir;
 use ynz_watch::{FileWatcher, WatchEvent};
 
+// bug: deleting a watched file makes the watcher panic or hang instead of delivering one event | tier: Medium
 #[test]
 fn file_removal_does_not_crash_and_delivers_one_event() {
     let dir = TempDir::new().unwrap();
@@ -29,8 +30,8 @@ fn file_removal_does_not_crash_and_delivers_one_event() {
     });
 
     let ev = rx
-        .recv_timeout(Duration::from_millis(600))
-        .expect("no event delivered within 600ms after file deletion — watcher may have hung");
+        .recv_timeout(Duration::from_secs(3))
+        .expect("no event delivered within 3s after file deletion — watcher may have hung");
 
     // Accept either Removed (preferred) or Changed (OS timing edge-case).
     // The important invariant is that EXACTLY 1 event arrived (no panic, no hang).

@@ -115,23 +115,33 @@ pub fn negotiate_encoding(client_encodings: Option<&[PositionEncodingKind]>) -> 
 mod tests {
     use super::*;
 
-    #[test]
-    fn negotiation_picks_utf8_when_offered() {
-        let encodings = vec![PositionEncodingKind::UTF8, PositionEncodingKind::UTF16];
-        assert_eq!(negotiate_encoding(Some(&encodings)), PositionEncoding::Utf8);
+    macro_rules! negotiation_case {
+        ($name:ident, $offered:expr, $expected:expr) => {
+            // bug: a client offering no UTF-8 gets UTF-8 positions (or the reverse), so every range lands on the wrong column | tier: Medium
+            #[test]
+            fn $name() {
+                let offered: Option<Vec<PositionEncodingKind>> = $offered;
+                assert_eq!(negotiate_encoding(offered.as_deref()), $expected);
+            }
+        };
     }
 
-    #[test]
-    fn negotiation_falls_back_to_utf16_when_no_utf8() {
-        let encodings = vec![PositionEncodingKind::UTF16];
-        assert_eq!(
-            negotiate_encoding(Some(&encodings)),
-            PositionEncoding::Utf16
-        );
-    }
-
-    #[test]
-    fn negotiation_falls_back_to_utf16_when_none() {
-        assert_eq!(negotiate_encoding(None), PositionEncoding::Utf16);
-    }
+    negotiation_case!(
+        utf8_is_picked_when_offered,
+        Some(vec![
+            PositionEncodingKind::UTF8,
+            PositionEncodingKind::UTF16
+        ]),
+        PositionEncoding::Utf8
+    );
+    negotiation_case!(
+        utf16_is_the_fallback_when_utf8_is_not_offered,
+        Some(vec![PositionEncodingKind::UTF16]),
+        PositionEncoding::Utf16
+    );
+    negotiation_case!(
+        utf16_is_the_default_when_the_client_offers_nothing,
+        None,
+        PositionEncoding::Utf16
+    );
 }

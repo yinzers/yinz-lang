@@ -11,6 +11,7 @@ use std::{
 use tempfile::TempDir;
 use ynz_watch::{FileWatcher, WatchEvent};
 
+// bug: an editor's atomic save (write tempfile + rename) reaches the rebuild loop as several events, triggering several rebuilds | tier: Medium
 #[test]
 fn atomic_write_produces_exactly_one_event() {
     let dir = TempDir::new().unwrap();

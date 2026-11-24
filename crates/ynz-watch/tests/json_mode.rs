@@ -48,93 +48,100 @@ fn make_valid_db(path: &str) -> (ynz_watch::db::WatchDb, PathBuf) {
     (db, p)
 }
 
-// WHY: every --json event must include `schema_version` matching SCHEMA_VERSION constant.
-//      If schema_version is missing or wrong, consumers can't detect schema changes between
-//      intermediate milestones and silently parse fields that no longer exist.
-#[test]
-fn every_emitted_event_has_schema_version() {
-    let shared = Arc::new(Mutex::new(Vec::<u8>::new()));
-    let mut emitter = JsonEmitter::new_writer(CaptureBuf(Arc::clone(&shared)));
+// One named test per event type the emitter serialises. Each emits one event through a real
+// JsonEmitter and checks the single NDJSON line it wrote.
+macro_rules! emitted_event_case {
+    ($name:ident, $build_event:expr, type: $expected_type:literal $(, $extra_key:literal: $extra_value:literal)?) => {
+        // bug: a --json event is missing schema_version, uses a type name other than its kebab-case schema name, or does not occupy exactly one line, so consumers drop or misparse it | tier: Medium
+        #[test]
+        fn $name() {
+            let shared = Arc::new(Mutex::new(Vec::<u8>::new()));
+            let mut emitter = JsonEmitter::new_writer(CaptureBuf(Arc::clone(&shared)));
 
-    let (timestamp, schema_version) = ts();
-    emitter
-        .emit(&WatchEvent::WatchReady {
-            timestamp,
-            schema_version,
-            watching: vec!["foo.ynz".into()],
-        })
-        .unwrap();
+            let (timestamp, schema_version) = ts();
+            let build_event: fn(String, String) -> WatchEvent = $build_event;
+            emitter
+                .emit(&build_event(timestamp, schema_version))
+                .unwrap();
 
-    let (timestamp, schema_version) = ts();
-    emitter
-        .emit(&WatchEvent::BuildStart {
-            timestamp,
-            schema_version,
-            file: "foo.ynz".into(),
-        })
-        .unwrap();
-
-    let bytes = shared.lock().unwrap().clone();
-    let events = collect_events(&bytes);
-    for ev in &events {
-        assert_eq!(
-            ev.get("schema_version").and_then(|v| v.as_str()),
-            Some(SCHEMA_VERSION),
-            "event must have schema_version = SCHEMA_VERSION; got: {ev}"
-        );
-    }
+            let bytes = shared.lock().unwrap().clone();
+            let events = collect_events(&bytes);
+            assert_eq!(events.len(), 1, "one emit must write exactly one line");
+            let event = &events[0];
+            assert_eq!(
+                event.get("schema_version").and_then(|v| v.as_str()),
+                Some(SCHEMA_VERSION),
+                "event must have schema_version = SCHEMA_VERSION; got: {event}"
+            );
+            assert_eq!(
+                event.get("type").and_then(|v| v.as_str()),
+                Some($expected_type),
+                "event type must serialize as the kebab-case schema name"
+            );
+            $(
+                assert_eq!(
+                    event.get($extra_key).and_then(|v| v.as_str()),
+                    Some($extra_value),
+                    "{} must serialize kebab-case",
+                    $extra_key
+                );
+            )?
+        }
+    };
 }
 
-// WHY: the `type` field must use kebab-case JSON names per design/watch.md locked schema.
-//      If serde renames to something else (snake_case, PascalCase), downstream consumers
-//      that pattern-match on `"build-start"` etc. silently drop all events.
-#[test]
-fn event_type_field_uses_kebab_case() {
+emitted_event_case!(
+    watch_ready_event_has_schema_version_and_kebab_type,
+    |timestamp, schema_version| WatchEvent::WatchReady {
+        timestamp,
+        schema_version,
+        watching: vec!["foo.ynz".into()],
+    },
+    type: "watch-ready"
+);
+
+emitted_event_case!(
+    build_start_event_has_schema_version_and_kebab_type,
+    |timestamp, schema_version| WatchEvent::BuildStart {
+        timestamp,
+        schema_version,
+        file: "foo.ynz".into(),
+    },
+    type: "build-start"
+);
+
+emitted_event_case!(
+    child_spawn_event_has_schema_version_and_kebab_type,
+    |timestamp, schema_version| WatchEvent::ChildSpawn {
+        timestamp,
+        schema_version,
+        pid: 42,
+    },
+    type: "child-spawn"
+);
+
+emitted_event_case!(
+    watch_shutdown_event_serializes_ctrl_c_reason,
+    |timestamp, schema_version| WatchEvent::WatchShutdown {
+        timestamp,
+        schema_version,
+        reason: ShutdownReason::CtrlC,
+    },
+    type: "watch-shutdown",
+    "reason": "ctrl-c"
+);
+
+/// Run one headless check-only rebuild of `source_on_disk` through `rebuild_one_with_emitter`
+/// and return every JSON event it emitted.
+fn rebuild_events(path: &str, source_on_disk: &str, out_dir_name: &str) -> Vec<serde_json::Value> {
     let shared = Arc::new(Mutex::new(Vec::<u8>::new()));
-    let mut emitter = JsonEmitter::new_writer(CaptureBuf(Arc::clone(&shared)));
+    let mut emitter_box = JsonEmitter::new_writer(CaptureBuf(Arc::clone(&shared)));
 
-    let (timestamp, schema_version) = ts();
-    emitter
-        .emit(&WatchEvent::BuildStart {
-            timestamp: timestamp.clone(),
-            schema_version: schema_version.clone(),
-            file: "foo.ynz".into(),
-        })
-        .unwrap();
+    // The db starts valid; rebuild_one_with_emitter reads the (possibly broken) text from disk.
+    let (mut db, path) = make_valid_db(path);
+    std::fs::write(&path, source_on_disk).expect("could not write test fixture");
 
-    emitter
-        .emit(&WatchEvent::ChildSpawn {
-            timestamp,
-            schema_version,
-            pid: 42,
-        })
-        .unwrap();
-
-    let bytes = shared.lock().unwrap().clone();
-    let events = collect_events(&bytes);
-    assert_eq!(
-        events[0].get("type").and_then(|v| v.as_str()),
-        Some("build-start"),
-        "BuildStart must serialize type as 'build-start'"
-    );
-    assert_eq!(
-        events[1].get("type").and_then(|v| v.as_str()),
-        Some("child-spawn"),
-        "ChildSpawn must serialize type as 'child-spawn'"
-    );
-}
-
-// WHY: build-end must include `outcome: "ok"` when compilation succeeds. Consumers that
-//      check `"build-end".outcome == "ok"` before deciding to run the program would
-//      silently never run it if the outcome field is wrong or missing.
-#[test]
-fn build_end_outcome_ok_on_success() {
-    let shared = Arc::new(Mutex::new(Vec::<u8>::new()));
-    let buf_clone = Arc::clone(&shared);
-    let mut emitter_box = JsonEmitter::new_writer(CaptureBuf(buf_clone));
-
-    let (mut db, path) = make_valid_db("/tmp/json_mode_ok_test.ynz");
-    let out_dir = std::env::temp_dir().join("ynz-watch-json-test");
+    let out_dir = std::env::temp_dir().join(out_dir_name);
     let _ = std::fs::create_dir_all(&out_dir);
 
     let mut current_child = None;
@@ -150,15 +157,32 @@ fn build_end_outcome_ok_on_success() {
         true, // no_clear: tests run headless
     );
 
+    let _ = std::fs::remove_dir_all(&out_dir);
     let bytes = shared.lock().unwrap().clone();
-    let events = collect_events(&bytes);
+    collect_events(&bytes)
+}
 
-    // Expect build-start + build-end.
-    let build_end = events
+// bug: a successful --json rebuild emits build-end before build-start, or a build-end without outcome "ok" and duration_ms, so CI tooling mis-times or never runs the program | tier: Medium
+#[test]
+fn successful_rebuild_emits_build_start_then_build_end_ok() {
+    let events = rebuild_events(
+        "/tmp/json_mode_ok_test.ynz",
+        "function entrypoint() -> Nothing { print(`hello`) }\n",
+        "ynz-watch-json-test",
+    );
+
+    let types: Vec<&str> = events
         .iter()
-        .find(|ev| ev.get("type").and_then(|v| v.as_str()) == Some("build-end"))
-        .expect("no build-end event emitted");
+        .filter_map(|event| event.get("type").and_then(|v| v.as_str()))
+        .collect();
+    let start_index = types.iter().position(|&kind| kind == "build-start");
+    let end_index = types.iter().position(|&kind| kind == "build-end");
+    assert!(
+        start_index.is_some() && end_index.is_some() && start_index < end_index,
+        "build-start must be emitted before build-end; got order: {types:?}"
+    );
 
+    let build_end = &events[end_index.unwrap()];
     assert_eq!(
         build_end.get("outcome").and_then(|v| v.as_str()),
         Some("ok"),
@@ -168,161 +192,36 @@ fn build_end_outcome_ok_on_success() {
         build_end.get("duration_ms").is_some(),
         "build-end must have duration_ms field"
     );
-
-    let _ = std::fs::remove_dir_all(&out_dir);
 }
 
-// WHY: event ordering invariant — build-start must always precede build-end for the same
-//      file. If build-end arrives before build-start, consumers building a timeline or
-//      measuring build duration get incorrect data. This invariant is load-bearing for
-//      CI tooling that reads --json output.
+// bug: a failing --json rebuild swallows its diagnostics or emits them without the what/what_instead/why/severity/span fields, so a CI dashboard sees an error with no context | tier: Medium
 #[test]
-fn build_start_precedes_build_end() {
-    let shared = Arc::new(Mutex::new(Vec::<u8>::new()));
-    let buf_clone = Arc::clone(&shared);
-    let mut emitter_box = JsonEmitter::new_writer(CaptureBuf(buf_clone));
-
-    let (mut db, path) = make_valid_db("/tmp/json_mode_order_test.ynz");
-    let out_dir = std::env::temp_dir().join("ynz-watch-json-order-test");
-    let _ = std::fs::create_dir_all(&out_dir);
-
-    let mut current_child = None;
-    let _ = rebuild_one_with_emitter(
-        &mut db,
-        &path,
-        &path,
-        &out_dir,
-        true,
-        &mut current_child,
-        Some(&mut emitter_box),
-        true, // force: skip no-change guard
-        true, // no_clear: tests run headless
+fn failing_rebuild_emits_structured_diagnostic_events() {
+    let events = rebuild_events(
+        "/tmp/json_mode_diagnostic_test.ynz",
+        "function entrypoint() -> Nothing {\n    unknownIdent\n}\n",
+        "ynz-watch-json-diag-test",
     );
 
-    let bytes = shared.lock().unwrap().clone();
-    let events = collect_events(&bytes);
-    let types: Vec<&str> = events
+    let first = events
         .iter()
-        .filter_map(|ev| ev.get("type").and_then(|v| v.as_str()))
-        .collect();
+        .find(|event| event.get("type").and_then(|v| v.as_str()) == Some("diagnostic"))
+        .expect("at least one diagnostic event must be emitted for broken code");
 
-    let start_idx = types.iter().position(|&t| t == "build-start");
-    let end_idx = types.iter().position(|&t| t == "build-end");
-
-    assert!(start_idx.is_some(), "build-start must be emitted");
-    assert!(end_idx.is_some(), "build-end must be emitted");
-    assert!(
-        start_idx.unwrap() < end_idx.unwrap(),
-        "build-start must precede build-end; got order: {:?}",
-        types
-    );
-
-    let _ = std::fs::remove_dir_all(&out_dir);
-}
-
-// WHY: diagnostic events must be emitted when compilation fails in --json mode.
-//      If diagnostics are swallowed, a CI dashboard sees `build-end { outcome: "errors" }`
-//      with zero context — operators can't distinguish "unknown identifier" from "syntax error"
-//      and have to re-run in text mode to see what went wrong. Each diagnostic must carry
-//      the three-part WHAT/WHAT-INSTEAD/WHY shape per Golden Rule 3.
-#[test]
-fn diagnostic_events_emitted_on_compile_error() {
-    let shared = Arc::new(Mutex::new(Vec::<u8>::new()));
-    let buf_clone = Arc::clone(&shared);
-    let mut emitter_box = JsonEmitter::new_writer(CaptureBuf(buf_clone));
-
-    // Start with valid source, then switch to broken — rebuild_one_with_emitter reads from disk.
-    let path = PathBuf::from("/tmp/json_mode_diagnostic_test.ynz");
-    let broken_src = "function entrypoint() -> Nothing {\n    unknownIdent\n}\n";
-    let (mut db, _) = make_valid_db("/tmp/json_mode_diagnostic_test.ynz");
-    // Write broken source to disk so rebuild_one_with_emitter's fs::read_to_string sees it.
-    std::fs::write(&path, broken_src).expect("could not write broken test fixture");
-
-    let out_dir = std::env::temp_dir().join("ynz-watch-json-diag-test");
-    let _ = std::fs::create_dir_all(&out_dir);
-
-    let mut current_child = None;
-    let _ = rebuild_one_with_emitter(
-        &mut db,
-        &path,
-        &path,
-        &out_dir,
-        true,
-        &mut current_child,
-        Some(&mut emitter_box),
-        true, // force: skip no-change guard
-        true, // no_clear: tests run headless
-    );
-
-    let bytes = shared.lock().unwrap().clone();
-    let events = collect_events(&bytes);
-
-    let diag_events: Vec<&serde_json::Value> = events
-        .iter()
-        .filter(|ev| ev.get("type").and_then(|v| v.as_str()) == Some("diagnostic"))
-        .collect();
-
-    assert!(
-        !diag_events.is_empty(),
-        "at least one diagnostic event must be emitted for broken code"
-    );
-
-    let first = diag_events[0];
     assert!(
         first
             .get("what")
             .and_then(|v| v.as_str())
-            .map(|s| !s.is_empty())
+            .map(|text| !text.is_empty())
             .unwrap_or(false),
         "diagnostic must have non-empty 'what' field"
     );
+    let missing_fields: Vec<&str> = ["what_instead", "why", "severity", "span"]
+        .into_iter()
+        .filter(|field| first.get(*field).is_none())
+        .collect();
     assert!(
-        first.get("what_instead").is_some(),
-        "diagnostic must have 'what_instead' field"
-    );
-    assert!(
-        first.get("why").is_some(),
-        "diagnostic must have 'why' field"
-    );
-    assert!(
-        first.get("severity").is_some(),
-        "diagnostic must have 'severity' field"
-    );
-    assert!(
-        first.get("span").is_some(),
-        "diagnostic must have 'span' field"
-    );
-
-    let _ = std::fs::remove_dir_all(&out_dir);
-}
-
-// WHY: WatchShutdown with reason ctrl-c must be the last event consumers receive.
-//      If watch-shutdown is missing or not last, consumers can't reliably detect clean
-//      watch exit vs crash. The "watch-shutdown is always last" invariant is in the schema.
-#[test]
-fn watch_shutdown_serializes_correctly() {
-    let shared = Arc::new(Mutex::new(Vec::<u8>::new()));
-    let mut emitter = JsonEmitter::new_writer(CaptureBuf(Arc::clone(&shared)));
-
-    let (timestamp, schema_version) = ts();
-    emitter
-        .emit(&WatchEvent::WatchShutdown {
-            timestamp,
-            schema_version,
-            reason: ShutdownReason::CtrlC,
-        })
-        .unwrap();
-
-    let bytes = shared.lock().unwrap().clone();
-    let events = collect_events(&bytes);
-    assert_eq!(events.len(), 1);
-    assert_eq!(
-        events[0].get("type").and_then(|v| v.as_str()),
-        Some("watch-shutdown")
-    );
-    assert_eq!(
-        events[0].get("reason").and_then(|v| v.as_str()),
-        Some("ctrl-c"),
-        "ShutdownReason::CtrlC must serialize as 'ctrl-c' (kebab-case)"
+        missing_fields.is_empty(),
+        "diagnostic is missing fields {missing_fields:?}"
     );
 }

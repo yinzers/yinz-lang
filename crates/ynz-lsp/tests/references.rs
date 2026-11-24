@@ -60,142 +60,167 @@ fn position_at(src: &str, needle: &str) -> lsp_types::Position {
     LineTable::new(src).byte_offset_to_position(src, offset, PositionEncoding::Utf8)
 }
 
-#[test]
-fn test_references_include_decl_false_excludes_declaration() {
-    let src = "function greet() -> String { return `hi` }\nfunction entrypoint() -> Nothing {\n  let a = greet()\n  let b = greet()\n  let c = greet()\n}\n";
-    let path = "/tmp/ynz_refs_excl.ynz";
-    let (state, uri) = state_single(path, src);
-    let decl_pos = position_at(src, "greet()"); // first occurrence = call, not decl
-                                                // Position on the declaration `function greet`
-    let decl_name_pos = lsp_types::Position {
-        line: 0,
-        character: 9,
-    }; // 'g' of greet
-    let refs = references_response(&state, &uri, decl_name_pos, false, &make_sender());
-    let refs = refs.expect("should return Some (not a non-symbol offset)");
-    // 3 call sites, NOT the declaration.
-    assert_eq!(refs.len(), 3, "expected 3 call sites; got {}", refs.len());
-    let _ = decl_pos;
+/// One references request: the open files, the cursor and what must come back.
+struct Scenario {
+    state: ServerState,
+    uri: lsp_types::Url,
+    position: lsp_types::Position,
+    include_declaration: bool,
+    /// `None`: the handler must answer `None` (unknown file); `Some(n)`: `Some` list of n locations.
+    expected_reference_count: Option<usize>,
 }
 
-#[test]
-fn test_references_include_decl_true_includes_declaration() {
-    let src = "function greet() -> String { return `hi` }\nfunction entrypoint() -> Nothing {\n  let a = greet()\n}\n";
-    let path = "/tmp/ynz_refs_incl.ynz";
-    let (state, uri) = state_single(path, src);
-    let decl_pos = lsp_types::Position {
-        line: 0,
-        character: 9,
-    };
-    let refs = references_response(&state, &uri, decl_pos, true, &make_sender());
-    let refs = refs.expect("should return Some");
-    assert!(
-        refs.len() >= 2,
-        "expected decl + 1 call; got {}",
-        refs.len()
+const GREET_DECLARATION_NAME: lsp_types::Position = lsp_types::Position {
+    line: 0,
+    character: 9,
+};
+
+fn greet_called(times: usize, include_declaration: bool, path: &str) -> Scenario {
+    let calls: String = (0..times)
+        .map(|index| format!("  let v{index} = greet()\n"))
+        .collect();
+    let src = format!(
+        "function greet() -> String {{ return `hi` }}\nfunction entrypoint() -> Nothing {{\n{calls}}}\n"
     );
+    let (state, uri) = state_single(path, &src);
+    Scenario {
+        state,
+        uri,
+        position: GREET_DECLARATION_NAME,
+        include_declaration,
+        expected_reference_count: Some(times + usize::from(include_declaration)),
+    }
 }
 
-#[test]
-fn test_references_whitespace_returns_some_empty_not_none() {
-    // Plan spec: "Empty result returns Some(vec![]) not None — clients distinguish
-    // 'no refs found' vs 'not applicable'." None is reserved for position
-    // conversion failure (invalid URI, out-of-bounds offset), not for
-    // whitespace/keyword positions where there simply are no references.
+fn whitespace_position() -> Scenario {
     let src = "function entrypoint() -> Nothing {   }\n";
-    let path = "/tmp/ynz_refs_ws.ynz";
-    let (state, uri) = state_single(path, src);
-    let pos = lsp_types::Position {
-        line: 0,
-        character: 35,
-    };
-    let refs = references_response(&state, &uri, pos, false, &make_sender());
-    let refs = refs.expect("whitespace returns Some(empty), not None");
-    assert!(refs.is_empty(), "whitespace should produce zero references");
+    let (state, uri) = state_single("/tmp/ynz_refs_ws.ynz", src);
+    Scenario {
+        state,
+        uri,
+        position: lsp_types::Position {
+            line: 0,
+            character: 35,
+        },
+        include_declaration: false,
+        expected_reference_count: Some(0),
+    }
 }
 
-#[test]
-fn test_references_unknown_symbol_returns_empty_vec_not_none() {
-    // A function called with no references (only declared).
+fn declared_but_never_called() -> Scenario {
     let src = "function solo() -> Nothing {}\nfunction entrypoint() -> Nothing {}\n";
-    let path = "/tmp/ynz_refs_solo.ynz";
-    let (state, uri) = state_single(path, src);
-    let decl_pos = lsp_types::Position {
-        line: 0,
-        character: 9,
-    }; // 'solo'
-    let refs = references_response(&state, &uri, decl_pos, false, &make_sender())
-        .expect("declared symbol must return Some(vec)");
-    // No call sites — returns empty vec, not None.
-    assert!(
-        refs.is_empty(),
-        "expected zero call sites; got {}",
-        refs.len()
-    );
+    let (state, uri) = state_single("/tmp/ynz_refs_solo.ynz", src);
+    Scenario {
+        state,
+        uri,
+        position: GREET_DECLARATION_NAME,
+        include_declaration: false,
+        expected_reference_count: Some(0),
+    }
 }
 
-#[test]
-fn test_references_cross_file_symbol_returns_cross_file_locations() {
+fn imported_function_called_twice() -> Scenario {
     let dep_src = "export function announce(name: String) -> String {\n  return name\n}\n";
     let main_src = "import { announce } from `services/players`\nfunction entrypoint() -> Nothing {\n  let a = announce(`Roberto`)\n  let b = announce(`Willie`)\n}\n";
     let (state, main_uri, _dep_uri, _dir) = state_two_files("players", dep_src, main_src);
-    let call_pos = position_at(main_src, "announce(`Roberto`)");
-    let refs = references_response(&state, &main_uri, call_pos, false, &make_sender());
-    let refs = refs.expect("cross-file call must return Some");
-    assert!(
-        refs.len() >= 2,
-        "expected 2 call sites in main file; got {}",
-        refs.len()
-    );
+    Scenario {
+        state,
+        position: position_at(main_src, "announce(`Roberto`)"),
+        uri: main_uri,
+        include_declaration: false,
+        expected_reference_count: Some(2),
+    }
 }
 
-#[test]
-fn test_references_progress_emitted_for_large_project() {
-    // When open_documents > 10 OR estimate > 5, a progress notification fires.
-    // Use a project with >10 open documents (inject synthetically into ServerState).
-    let mut state = ServerState::new(PositionEncoding::Utf8);
-    let path = "/tmp/ynz_refs_progress.ynz";
-    let src = "function greet() -> String { return `hi` }\nfunction entrypoint() -> Nothing {\n  let a = greet()\n}\n";
-    let uri = lsp_types::Url::from_file_path(path).expect("valid path");
-    state.open_document(uri.clone(), src.to_string());
-    // Inject 10 more synthetic documents to trigger progress threshold.
-    for i in 0..10 {
-        let fake_path = format!("/tmp/ynz_fake_{i}.ynz");
-        let fake_uri = lsp_types::Url::from_file_path(&fake_path).expect("valid path");
-        state.open_document(fake_uri, format!("function f{i}() -> Nothing {{}}"));
+fn unknown_file() -> Scenario {
+    Scenario {
+        state: ServerState::new(PositionEncoding::Utf8),
+        uri: lsp_types::Url::from_file_path("/tmp/nonexistent_ynz_file.ynz").unwrap(),
+        position: lsp_types::Position {
+            line: 0,
+            character: 0,
+        },
+        include_declaration: false,
+        expected_reference_count: None,
     }
-    let (tx, rx) = crossbeam_channel::unbounded();
-    let decl_pos = lsp_types::Position {
-        line: 0,
-        character: 9,
-    };
-    let _ = references_response(&state, &uri, decl_pos, false, &tx);
-    // Drain notifications — we should see at least one progress notification.
-    let mut got_progress = false;
-    while let Ok(msg) = rx.try_recv() {
-        if let lsp_server::Message::Notification(n) = msg {
-            if n.method == "$/progress" {
-                got_progress = true;
-            }
+}
+
+macro_rules! references_case {
+    ($name:ident, $scenario:expr) => {
+        // bug: find-references counts the declaration against include_declaration, misses a call site (same or other file), or answers None instead of an empty list for a position without references (None is reserved for an unknown file) | tier: Medium
+        #[test]
+        fn $name() {
+            let scenario: Scenario = $scenario;
+            let references = references_response(
+                &scenario.state,
+                &scenario.uri,
+                scenario.position,
+                scenario.include_declaration,
+                &make_sender(),
+            );
+            assert_eq!(
+                references.map(|locations| locations.len()),
+                scenario.expected_reference_count
+            );
         }
-    }
-    assert!(
-        got_progress,
-        "progress notification must be emitted for >10 open documents"
-    );
+    };
 }
 
+references_case!(
+    declaration_is_excluded_when_not_requested,
+    greet_called(3, false, "/tmp/ynz_refs_excl.ynz")
+);
+references_case!(
+    declaration_is_included_when_requested,
+    greet_called(1, true, "/tmp/ynz_refs_incl.ynz")
+);
+references_case!(
+    whitespace_position_has_an_empty_list_not_none,
+    whitespace_position()
+);
+references_case!(
+    declared_but_never_called_symbol_has_an_empty_list_not_none,
+    declared_but_never_called()
+);
+references_case!(
+    imported_function_finds_its_call_sites_in_the_importing_file,
+    imported_function_called_twice()
+);
+references_case!(unknown_file_answers_none, unknown_file());
+
+// bug: a references search over more than 10 open documents sends no $/progress notification | tier: Medium
 #[test]
-fn test_references_performance_under_500ms() {
-    let src = "function greet() -> String { return `hi` }\nfunction entrypoint() -> Nothing {\n  let a = greet()\n  let b = greet()\n}\n";
-    let path = "/tmp/ynz_refs_perf.ynz";
-    let (state, uri) = state_single(path, src);
-    let decl_pos = lsp_types::Position {
-        line: 0,
-        character: 9,
-    };
+fn references_over_many_open_documents_report_progress() {
+    let (mut state, uri) = state_single(
+        "/tmp/ynz_refs_progress.ynz",
+        "function greet() -> String { return `hi` }\nfunction entrypoint() -> Nothing {\n  let a = greet()\n}\n",
+    );
+    for index in 0..10 {
+        let fake_uri = lsp_types::Url::from_file_path(format!("/tmp/ynz_fake_{index}.ynz"))
+            .expect("valid path");
+        state.open_document(fake_uri, format!("function f{index}() -> Nothing {{}}"));
+    }
+    let (sender, receiver) = crossbeam_channel::unbounded();
+    let _ = references_response(&state, &uri, GREET_DECLARATION_NAME, false, &sender);
+    let progress_notifications = receiver
+        .try_iter()
+        .filter(|message| matches!(message, lsp_server::Message::Notification(n) if n.method == "$/progress"))
+        .count();
+    assert!(progress_notifications >= 1, "no $/progress notification");
+}
+
+// bug: a cold references request takes over 500 ms | tier: Medium
+#[test]
+fn nightly_references_performance_under_500ms() {
+    let scenario = greet_called(2, false, "/tmp/ynz_refs_perf.ynz");
     let start = std::time::Instant::now();
-    let _ = references_response(&state, &uri, decl_pos, false, &make_sender());
+    let _ = references_response(
+        &scenario.state,
+        &scenario.uri,
+        scenario.position,
+        false,
+        &make_sender(),
+    );
     let elapsed = start.elapsed();
     assert!(
         elapsed.as_millis() < 500,
@@ -204,48 +229,28 @@ fn test_references_performance_under_500ms() {
     );
 }
 
+// bug: two $/progress begin notifications share a token, so the client mixes up concurrent searches | tier: Medium
 #[test]
-fn test_references_unknown_uri_returns_none() {
-    // None is reserved for "unknown URI or invalid position", not for "no refs".
-    let state = ServerState::new(PositionEncoding::Utf8);
-    let unknown_uri = lsp_types::Url::from_file_path("/tmp/nonexistent_ynz_file.ynz").unwrap();
-    let pos = lsp_types::Position {
-        line: 0,
-        character: 0,
-    };
-    assert!(
-        references_response(&state, &unknown_uri, pos, false, &make_sender()).is_none(),
-        "unknown URI must return None, not Some(empty)"
-    );
-}
-
-#[test]
-fn test_progress_tokens_are_unique() {
-    // WHY: concurrent or rapid references requests must not emit colliding $/progress tokens.
-    // The atomic counter guarantees uniqueness; this test asserts the emitted token strings differ.
+fn progress_tokens_are_unique() {
     use ynz_lsp::progress::ProgressTracker;
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let (sender, receiver) = crossbeam_channel::unbounded();
     for _ in 0..5 {
-        let tracker = ProgressTracker::begin("test", tx.clone());
+        let tracker = ProgressTracker::begin("test", sender.clone());
         tracker.end(None);
     }
-    let mut tokens: Vec<String> = vec![];
-    while let Ok(msg) = rx.try_recv() {
-        if let lsp_server::Message::Notification(n) = msg {
-            if n.method == "$/progress" {
-                if let Some(token) = n.params.get("token").and_then(|t| t.as_str()) {
-                    tokens.push(token.to_string());
-                }
-            }
-        }
-    }
-    // begin emits 1 notif each, end emits 1 notif each → 10 total (5 begin + 5 end).
-    // The `begin` notifications carry the token we care about.
-    let begin_tokens: Vec<_> = tokens.iter().step_by(2).collect(); // every other = begin
-    let unique: std::collections::HashSet<_> = begin_tokens.iter().collect();
-    assert_eq!(
-        unique.len(),
-        begin_tokens.len(),
-        "all 5 progress tokens must be distinct"
-    );
+    // begin and end each send one notification: every other message is a begin.
+    let tokens: Vec<String> = receiver
+        .try_iter()
+        .filter_map(|message| match message {
+            lsp_server::Message::Notification(n) if n.method == "$/progress" => n
+                .params
+                .get("token")
+                .and_then(|token| token.as_str())
+                .map(str::to_string),
+            _ => None,
+        })
+        .collect();
+    let begin_tokens: Vec<&String> = tokens.iter().step_by(2).collect();
+    let unique: std::collections::HashSet<&&String> = begin_tokens.iter().collect();
+    assert_eq!(unique.len(), begin_tokens.len(), "tokens must be distinct");
 }
