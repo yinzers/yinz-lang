@@ -1,50 +1,17 @@
 //! Semantic round-trip tests: `parse(format(x)).ast == parse(x).ast` modulo trivia.
 //!
 //! This is the load-bearing safety invariant for the formatter: it must never
-//! change program semantics.  For every fixture, we verify:
+//! change program semantics.  For every clean `.ynz` file in a sweep root we verify:
 //!   1. `format(source)` succeeds (no parse errors introduced).
 //!   2. `ast_eq_modulo_trivia(original_ast, reformatted_ast)` — same program.
+//!
+//! One generated table of sweeps (one named test per root), plus two named edge cases.
 
-use std::{
-    path::{Path, PathBuf},
-    sync::atomic::{AtomicUsize, Ordering},
-};
+mod common;
 
-/// Run `check` over every file across all available cores.
-///
-/// Same shape as the canonical `parallel_sweep` in
-/// `crates/ynz-driver/tests/cross_impl_consistency.rs` (duplicated rather than shared because
-/// these are separate crates' test targets, with no shared test-support crate between them).
-/// Per `.claude/rules/test-parallelism.md`, the four independence questions are answered here
-/// so the next reader does not re-derive them:
-///
-///   1. No shared mutable state — `check_semantic_roundtrip` builds its OWN
-///      `ynz_parser::CompilerDb::default()` per call; nothing is threaded between files.
-///   2. No ordering dependency — each file is parsed, formatted, and re-parsed in isolation.
-///   3. No shared filesystem path — the check is read-only (`read_to_string`); it writes
-///      nothing and spawns no subprocess.
-///   4. No global process state — no env mutation, no `set_current_dir`, no singleton.
-///
-/// A failing file panics inside its worker with the path already in the assert message;
-/// `std::thread::scope` propagates that panic on join, so a failure still fails the test.
-/// This matches the previous serial behavior, which also stopped at the first bad file.
-fn check_all_parallel(files: &[PathBuf], check: impl Fn(&Path) + Sync) {
-    let workers = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4)
-        .min(files.len().max(1));
-    let cursor = AtomicUsize::new(0);
+use std::path::{Path, PathBuf};
 
-    std::thread::scope(|scope| {
-        for _ in 0..workers {
-            scope.spawn(|| loop {
-                let idx = cursor.fetch_add(1, Ordering::Relaxed);
-                let Some(file) = files.get(idx) else { break };
-                check(file);
-            });
-        }
-    });
-}
+use common::{check_all_parallel, driver_fixture_files, example_files, fmt_fixture_files};
 
 fn check_semantic_roundtrip(path: &Path) {
     let source = std::fs::read_to_string(path).expect("could not read fixture");
@@ -67,16 +34,9 @@ fn check_semantic_roundtrip(path: &Path) {
         return;
     }
 
-    let formatted = match ynz_fmt::format(&source) {
-        Ok(f) => f,
-        Err(e) => {
-            eprintln!(
-                "semantic_roundtrip: skipping {} — format error: {e}",
-                path.display()
-            );
-            return;
-        }
-    };
+    let formatted = ynz_fmt::format(&source).unwrap_or_else(|format_error| {
+        panic!("format failed on clean {}: {format_error}", path.display())
+    });
 
     let db_fmt = ynz_parser::CompilerDb::default();
     let sf_fmt = ynz_parser::SourceFile::new(&db_fmt, "<formatted>".into(), formatted.clone());
@@ -96,62 +56,52 @@ fn check_semantic_roundtrip(path: &Path) {
     );
 }
 
-fn walk_ynz_files(dir: &Path) -> Vec<std::path::PathBuf> {
-    let mut files = vec![];
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.is_dir() {
-                files.extend(walk_ynz_files(&p));
-            } else if p.extension().and_then(|e| e.to_str()) == Some("ynz") {
-                files.push(p);
-            }
+/// One sweep per fixture root: every clean file in it formats to the same program.
+macro_rules! roundtrip_sweep_cases {
+    ($($case:ident: $files:expr;)+) => {$(
+        // bug: format() changes what a program means, or emits source that no longer parses, so format-on-save silently breaks user code | tier: High
+        #[test]
+        fn $case() {
+            let files: Vec<PathBuf> = $files;
+            check_all_parallel(&files, check_semantic_roundtrip);
         }
-    }
-    files
+    )+};
 }
 
+roundtrip_sweep_cases! {
+    fmt_fixtures_roundtrip: fmt_fixture_files();
+    examples_roundtrip: example_files();
+    driver_fixtures_roundtrip: driver_fixture_files();
+}
+
+// bug: format() errors on an empty file, so format-on-save breaks on a new file | tier: Medium
 #[test]
-fn fmt_fixtures_roundtrip() {
-    let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
-    let files = walk_ynz_files(&base);
+fn empty_source_formats_without_error() {
+    let formatted = ynz_fmt::format("").expect("empty source should not error");
     assert!(
-        !files.is_empty(),
-        "no fixture files found under tests/fixtures"
+        formatted.is_empty() || formatted == "\n",
+        "empty source produced unexpected output: {formatted:?}"
     );
-    for file in &files {
-        check_semantic_roundtrip(file);
-    }
 }
 
+// WHY: the lexer reads `>>` as ONE token (no maximal-munch split), so a
+// nested generic in final argument position MUST keep the space between
+// the consecutive `>`s or format's output does not re-parse (RED-proven:
+// the driver-fixture idempotency sweep failed on the first nested-generic
+// annotation in the tree, v0.3-M5 P2 fix round 2).
+// bug: format() joins the closing `>`s of a nested generic into `>>`, so its output no longer re-parses | tier: High
 #[test]
-fn examples_roundtrip() {
-    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(|p| p.parent())
-        .expect("could not find workspace root");
-    let examples_dir = workspace_root.join("examples");
-    if !examples_dir.exists() {
-        return;
-    }
-    let files: Vec<PathBuf> = walk_ynz_files(&examples_dir)
-        .into_iter()
-        // fmt_demo is intentionally non-canonical; skip it.
-        .filter(|f| !f.to_string_lossy().contains("fmt_demo"))
-        .collect();
-    check_all_parallel(&files, check_semantic_roundtrip);
-}
-
-#[test]
-fn driver_fixtures_roundtrip() {
-    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(|p| p.parent())
-        .expect("could not find workspace root");
-    let fixtures_dir = workspace_root.join("crates/ynz-driver/tests/fixtures");
-    if !fixtures_dir.exists() {
-        return;
-    }
-    let files = walk_ynz_files(&fixtures_dir);
-    check_all_parallel(&files, check_semantic_roundtrip);
+fn nested_generic_keeps_lexer_required_space() {
+    let source =
+        "function f() -> Nothing {\n  let picks: Map<String, Maybe<Int> > = { `a`: 1 }\n}\n";
+    let formatted = ynz_fmt::format(source).expect("format failed");
+    assert!(
+        formatted.contains("Map<String, Maybe<Int> >"),
+        "nested generic must keep the space before the outer `>`; got:\n{formatted}"
+    );
+    let reformatted = ynz_fmt::format(&formatted).expect("format output must re-parse");
+    assert_eq!(
+        formatted, reformatted,
+        "formatter is not idempotent on nested generics"
+    );
 }

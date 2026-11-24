@@ -1,8 +1,0 @@
-function double(x: Int) -> Int {
-  return x + x
-}
-
-function entrypoint() -> Nothing {
-  const result = double(21)
-  print(result.toString())
-}

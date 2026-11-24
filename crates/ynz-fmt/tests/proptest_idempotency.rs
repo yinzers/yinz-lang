@@ -19,16 +19,15 @@ use proptest::prelude::*;
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
+    // bug: format() changes the meaning of a generated program or is not idempotent on it, which format-on-save would apply to user code | tier: High
     #[test]
     fn random_ast_semantic_roundtrip(module in arb_module()) {
         let source = ynz_fmt::walker::emit_module(&module);
-        let formatted = match ynz_fmt::format(&source) {
-            Ok(f) => f,
-            Err(_) => {
-                // emit_module produced source the parser rejected — skip.
-                return Ok(());
-            }
-        };
+        // emit_module produced source the parser rejected: not a formatter input. Counted
+        // as a rejected case, so a generator that mostly emits rejects fails the run.
+        let formatted = ynz_fmt::format(&source);
+        prop_assume!(formatted.is_ok());
+        let formatted = formatted.expect("format result was just checked");
 
         // Semantic round-trip: parse(format(emit(ast))) ~= parse(emit(ast)) modulo trivia.
         let db_orig = ynz_parser::CompilerDb::default();
@@ -36,9 +35,7 @@ proptest! {
             ynz_parser::SourceFile::new(&db_orig, "<orig>".into(), source.clone());
         let orig_parse = ynz_parser::parse_query(&db_orig, sf_orig);
 
-        if !orig_parse.diagnostics.is_empty() {
-            return Ok(()); // emit_module produced invalid source; skip.
-        }
+        prop_assume!(orig_parse.diagnostics.is_empty());
 
         let db_fmt = ynz_parser::CompilerDb::default();
         let sf_fmt = ynz_parser::SourceFile::new(&db_fmt, "<fmt>".into(), formatted.clone());

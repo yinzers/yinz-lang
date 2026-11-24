@@ -1,3 +1,0 @@
-function greet(name: String) -> Nothing {
-  print(`Hello, ${name}!`)
-}

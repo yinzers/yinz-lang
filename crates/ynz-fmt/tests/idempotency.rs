@@ -1,91 +1,55 @@
-//! Idempotency property test: `format(format(x)) == format(x)` for every fixture.
-//!
-//! This test walks all `.ynz` files reachable from the fixture directories and asserts
-//! that formatting twice produces the same result as formatting once.
+//! Idempotency sweeps: `format(format(x)) == format(x)` for every clean `.ynz` file in a
+//! sweep root. One generated table, one named test per root.
 
-use std::path::Path;
+mod common;
+
+use std::path::{Path, PathBuf};
+
+use common::{
+    check_all_parallel, driver_fixture_files, example_files, fmt_fixture_files, parses_with_errors,
+};
 
 fn check_idempotent(path: &Path) {
     let source = std::fs::read_to_string(path).expect("could not read fixture");
-    match ynz_fmt::format(&source) {
-        Err(e) => {
-            // Fixtures with parse errors are intentional error-gallery files — not idempotency targets.
-            // Log the skip explicitly so the test surface is visible.
-            eprintln!("idempotency: skipping {} — {e}", path.display());
-        }
-        Ok(formatted) => {
-            let formatted2 = ynz_fmt::format(&formatted).expect("format(format(x)) failed");
-            assert_eq!(
-                formatted,
-                formatted2,
-                "formatter is not idempotent on {}",
-                path.display()
-            );
-        }
-    }
-}
-
-fn walk_ynz_files(dir: &Path) -> Vec<std::path::PathBuf> {
-    let mut files = vec![];
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.is_dir() {
-                files.extend(walk_ynz_files(&p));
-            } else if p.extension().and_then(|e| e.to_str()) == Some("ynz") {
-                files.push(p);
-            }
-        }
-    }
-    files
-}
-
-#[test]
-fn all_walker_fixtures_are_idempotent() {
-    let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
-    let files = walk_ynz_files(&base);
-    assert!(
-        !files.is_empty(),
-        "no fixture files found under tests/fixtures"
-    );
-    for file in &files {
-        check_idempotent(file);
-    }
-}
-
-#[test]
-fn all_examples_are_idempotent() {
-    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(|p| p.parent())
-        .expect("could not find workspace root");
-    let examples_dir = workspace_root.join("examples");
-    if !examples_dir.exists() {
-        return; // no examples dir — skip
-    }
-    let files = walk_ynz_files(&examples_dir);
-    for file in &files {
-        let path_str = file.to_string_lossy();
-        // Skip non-canonical demo fixture
-        if path_str.contains("fmt_demo") {
-            continue;
-        }
-        check_idempotent(file);
-    }
-}
-
-#[test]
-fn all_driver_fixtures_are_idempotent() {
-    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(|p| p.parent())
-        .expect("could not find workspace root");
-    let fixtures_dir = workspace_root.join("crates/ynz-driver/tests/fixtures");
-    if !fixtures_dir.exists() {
+    if parses_with_errors(&path.to_string_lossy(), &source) {
+        // Fixtures with parse errors are intentional error-gallery files — not idempotency targets.
+        // Log the skip explicitly so the test surface is visible.
+        eprintln!(
+            "idempotency: skipping {} — has parse errors",
+            path.display()
+        );
         return;
     }
-    let files = walk_ynz_files(&fixtures_dir);
-    for file in &files {
-        check_idempotent(file);
-    }
+    let formatted = ynz_fmt::format(&source).unwrap_or_else(|format_error| {
+        panic!("format failed on clean {}: {format_error}", path.display())
+    });
+    let formatted_twice = ynz_fmt::format(&formatted).unwrap_or_else(|format_error| {
+        panic!(
+            "format(format(x)) failed on {}: {format_error}",
+            path.display()
+        )
+    });
+    assert_eq!(
+        formatted,
+        formatted_twice,
+        "formatter is not idempotent on {}",
+        path.display()
+    );
+}
+
+macro_rules! idempotency_sweep_cases {
+    ($($case:ident: $files:expr;)+) => {$(
+        // bug: formatting an already formatted file changes it again, so every save rewrites the file and diffs never settle | tier: High
+        #[test]
+        fn $case() {
+            let files: Vec<PathBuf> = $files;
+            check_all_parallel(&files, check_idempotent);
+        }
+    )+};
+}
+
+idempotency_sweep_cases! {
+    fmt_fixtures_are_idempotent: fmt_fixture_files();
+    examples_are_idempotent: example_files();
+    driver_fixtures_are_idempotent: driver_fixture_files();
 }
