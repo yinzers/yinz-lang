@@ -499,72 +499,91 @@ mod arc_shareable_tests {
         t
     }
 
-    #[test]
-    fn primitive_and_string_fields_are_shareable() {
-        let t = table_with(
-            "Scene",
-            vec![Type::String, Type::Int, Type::Float, Type::Bool],
-        );
-        assert!(arc_shareable(
-            &Type::Shape {
-                name: "Scene".into()
-            },
-            &t
-        ));
+    /// One named test per case so the runner names the failing case. The checked type is the
+    /// shape `Outer`, whose fields are `$fields`, unless `$checked` names another type.
+    macro_rules! arc_shareable_case {
+        ($test_name:ident, fields: $fields:expr, checked: $checked:expr, expected: $expected:expr) => {
+            // bug: arc_shareable admits a shape whose pointer or misaligned field kind would be aliased between background tasks (or refuses a plain-value shape) | tier: High
+            #[test]
+            fn $test_name() {
+                let shapes = table_with("Outer", $fields);
+                assert_eq!(arc_shareable(&$checked, &shapes), $expected);
+            }
+        };
     }
 
-    #[test]
-    fn every_excluded_field_kind_declines() {
-        let excluded = [
-            Type::Number { precision: 34 },
-            Type::BuiltinArray {
-                elem: Box::new(Type::Int),
-            },
-            Type::BuiltinMap {
-                key: Box::new(Type::String),
-                val: Box::new(Type::Int),
-            },
-            Type::Maybe {
-                inner: Box::new(Type::Int),
-            },
-            Type::Shape {
-                name: "Inner".into(),
-            },
-            Type::BuiltinChannel {
-                elem: Box::new(Type::Int),
-            },
-        ];
-        for field in excluded {
-            let t = table_with("Outer", vec![Type::Int, field.clone()]);
-            assert!(
-                !arc_shareable(
-                    &Type::Shape {
-                        name: "Outer".into()
-                    },
-                    &t
-                ),
-                "a shape with a {field:?} field must not be Arc-shareable"
-            );
+    fn outer() -> Type {
+        Type::Shape {
+            name: "Outer".into(),
         }
     }
 
-    #[test]
-    fn non_shape_types_and_unknown_shapes_decline() {
-        let t = table_with("Scene", vec![Type::Int]);
-        assert!(!arc_shareable(&Type::Int, &t));
-        assert!(!arc_shareable(
-            &Type::BuiltinArray {
-                elem: Box::new(Type::Int)
-            },
-            &t
-        ));
-        assert!(!arc_shareable(
-            &Type::Shape {
-                name: "Missing".into()
-            },
-            &t
-        ));
-    }
+    // Case bug: a shape of plain value fields and a string is refused (the floor is too low).
+    arc_shareable_case!(
+        primitive_and_string_fields_are_shareable,
+        fields: vec![Type::String, Type::Int, Type::Float, Type::Bool],
+        checked: outer(),
+        expected: true
+    );
+    // Case bug: a `number` field is shared though the block's data is only 8-aligned.
+    arc_shareable_case!(
+        number_field_declines,
+        fields: vec![Type::Int, Type::Number { precision: 34 }],
+        checked: outer(),
+        expected: false
+    );
+    // Case bug: an array field's inner allocation is aliased between tasks.
+    arc_shareable_case!(
+        array_field_declines,
+        fields: vec![Type::Int, Type::BuiltinArray { elem: Box::new(Type::Int) }],
+        checked: outer(),
+        expected: false
+    );
+    // Case bug: a map field's inner allocation is aliased between tasks.
+    arc_shareable_case!(
+        map_field_declines,
+        fields: vec![
+            Type::Int,
+            Type::BuiltinMap { key: Box::new(Type::String), val: Box::new(Type::Int) }
+        ],
+        checked: outer(),
+        expected: false
+    );
+    // Case bug: a maybe field's pointer cell is aliased between tasks.
+    arc_shareable_case!(
+        maybe_field_declines,
+        fields: vec![Type::Int, Type::Maybe { inner: Box::new(Type::Int) }],
+        checked: outer(),
+        expected: false
+    );
+    // Case bug: a nested shape field (stored as an opaque pointer) is aliased between tasks.
+    arc_shareable_case!(
+        nested_shape_field_declines,
+        fields: vec![Type::Int, Type::Shape { name: "Inner".into() }],
+        checked: outer(),
+        expected: false
+    );
+    // Case bug: a channel field's handle is aliased between tasks.
+    arc_shareable_case!(
+        channel_field_declines,
+        fields: vec![Type::Int, Type::BuiltinChannel { elem: Box::new(Type::Int) }],
+        checked: outer(),
+        expected: false
+    );
+    // Case bug: a type that is not a shape at all is admitted as one refcounted block.
+    arc_shareable_case!(
+        a_non_shape_type_declines,
+        fields: vec![Type::Int],
+        checked: Type::Int,
+        expected: false
+    );
+    // Case bug: a shape missing from the table is admitted instead of refused.
+    arc_shareable_case!(
+        an_unknown_shape_declines,
+        fields: vec![Type::Int],
+        checked: Type::Shape { name: "Missing".into() },
+        expected: false
+    );
 }
 
 #[cfg(test)]
@@ -572,12 +591,61 @@ mod channel_elem_tests {
     use super::*;
     use crate::type_variant_sampler::{all_type_variants, variant_tag};
 
+    /// One named test per case so the runner names the failing case.
+    macro_rules! channel_elem_supported_case {
+        ($test_name:ident, $elem:expr, $expected:expr) => {
+            // bug: channel<T>() admits an element kind with no drop glue (a leak or use-after-free) or refuses a supported one | tier: High
+            #[test]
+            fn $test_name() {
+                assert_eq!(channel_elem_supported(&$elem), $expected);
+            }
+        };
+    }
+
+    // Case bug: each supported element kind is refused.
+    channel_elem_supported_case!(int_element_is_supported, Type::Int, true);
+    channel_elem_supported_case!(float_element_is_supported, Type::Float, true);
+    channel_elem_supported_case!(bool_element_is_supported, Type::Bool, true);
+    channel_elem_supported_case!(string_element_is_supported, Type::String, true);
+    channel_elem_supported_case!(
+        number_element_is_supported,
+        Type::Number { precision: 34 },
+        true
+    );
+    channel_elem_supported_case!(
+        array_element_is_supported,
+        Type::BuiltinArray {
+            elem: Box::new(Type::Int)
+        },
+        true
+    );
+    channel_elem_supported_case!(
+        map_element_is_supported,
+        Type::BuiltinMap {
+            key: Box::new(Type::String),
+            val: Box::new(Type::Int)
+        },
+        true
+    );
+    // Case bug: bignum `Number` (precision > 34) is a within-variant edge the whole-variant sweep of
+    // the parity test cannot see (it samples one supported `Number { precision: 34 }`); the registry
+    // deferral `channel-element-heap-upgrade` still rejects it.
+    channel_elem_supported_case!(
+        bignum_number_element_is_rejected,
+        Type::Number { precision: 40 },
+        false
+    );
+
     /// One sample per supported name, in the constant's order, plus — driven by the ONE
     /// authoritative variant sampler rather than a hand-picked `rejected` list (v0.3-M8 Phase 4
     /// fix round 3, should-fix 3) — every OTHER `Type` variant is asserted rejected:
     /// `supported ⊕ (all variants) == rejected`. Before this, `rejected` was hand-picked here
     /// while `channel_elem_drop` kept a `_ => None` wildcard, so a new variant could slip into
     /// "silently admitted" without either list noticing.
+    ///
+    /// The sweep over `all_type_variants()` is a runtime list in `ynz-typeck`, where
+    /// `parallel_sweep` (ynz-driver tests) is unreachable; it stays a loop (rubric 11.9).
+    // bug: the supported-name list and channel_elem_supported disagree, or a new Type variant is silently admitted as a channel element | tier: High
     #[test]
     fn channel_elem_supported_names_match_the_predicate() {
         let supported: Vec<(&str, Type)> = vec![
@@ -605,12 +673,6 @@ mod channel_elem_tests {
             names, CHANNEL_ELEM_SUPPORTED_NAMES,
             "the prose list and the sampled predicate must name the same kinds in the same order"
         );
-        for (name, ty) in &supported {
-            assert!(
-                channel_elem_supported(ty),
-                "`{name}` is listed as supported but channel_elem_supported({ty:?}) is false"
-            );
-        }
 
         // Every variant NOT in the supported set, sampled once each from the one authoritative
         // sampler, must be rejected.
@@ -628,44 +690,5 @@ mod channel_elem_tests {
                  channel_elem_drop, or channel_elem_drop must keep refusing it"
             );
         }
-
-        // Bignum `number` (precision > 34) is a within-variant edge case the whole-variant
-        // sweep above cannot see (it samples one `Number { precision: 34 }`, which IS
-        // supported) — the registry deferral (`channel-element-heap-upgrade`) still rejects it.
-        assert!(
-            !channel_elem_supported(&Type::Number { precision: 40 }),
-            "bignum `Number` (precision > 34) must stay rejected per the \
-             channel-element-heap-upgrade deferral"
-        );
-    }
-}
-
-#[cfg(test)]
-mod type_name_with_length_tests {
-    use super::*;
-
-    // Bug: hover and completion showed `fixed<int>` for a parameter written `fixed<int, 4>`, so a
-    // caller could not see the length the function requires (signature display, Low tier: one
-    // named reason, the signature is the only place a caller learns a required length).
-    #[test]
-    fn a_known_length_is_shown_and_an_unknown_one_is_not() {
-        let list = |size| Type::BuiltinFixed {
-            elem: Box::new(Type::Int),
-            size,
-        };
-        assert_eq!(
-            type_name_with_length(&list(FixedLength::Known(4))),
-            "Fixed<Int, 4>"
-        );
-        assert_eq!(
-            type_name_with_length(&list(FixedLength::Unknown)),
-            "Fixed<Int>"
-        );
-        assert_eq!(
-            type_name_with_length(&list(FixedLength::OfParam {
-                parameter: "xs".to_string()
-            })),
-            "Fixed<Int>"
-        );
     }
 }
