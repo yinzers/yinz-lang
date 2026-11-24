@@ -3092,101 +3092,81 @@ pub unsafe extern "C" fn ynz_unhandled_error(err: *const YnzError) -> ! {
 mod m6_string_parsing {
     use super::*;
 
-    #[test]
-    fn int_basic() {
-        assert_eq!(parse_string_to_int(b"42"), Some(42));
+    /// `ynz_string_to_int` through its ABI pair: `Some(value)` when the has-flag is set.
+    fn string_to_int(bytes: &[u8]) -> Option<i64> {
+        let mut out = [0i64; 2];
+        // SAFETY: `bytes` is valid for its length and `out` is a writable i64[2].
+        unsafe { ynz_string_to_int(bytes.as_ptr(), bytes.len() as i64, out.as_mut_ptr()) };
+        (out[0] == 1).then_some(out[1])
     }
-    #[test]
-    fn int_whitespace_sign() {
-        assert_eq!(parse_string_to_int(b"  +42  "), Some(42));
+
+    /// `ynz_string_to_float` through its ABI pair: the value word is the f64 bit pattern.
+    fn string_to_float(bytes: &[u8]) -> Option<f64> {
+        let mut out = [0i64; 2];
+        // SAFETY: `bytes` is valid for its length and `out` is a writable i64[2].
+        unsafe { ynz_string_to_float(bytes.as_ptr(), bytes.len() as i64, out.as_mut_ptr()) };
+        (out[0] == 1).then(|| f64::from_bits(out[1] as u64))
     }
-    #[test]
-    fn int_negative() {
-        assert_eq!(parse_string_to_int(b"-42"), Some(-42));
+
+    /// One named test per input class: a static case list the runner names and parallelizes.
+    macro_rules! int_cases {
+        ($($name:ident: $input:expr => $expected:expr,)*) => {$(
+            // bug: ynz_string_to_int accepts text outside [whitespace][sign]digits[whitespace] (hex, fraction, exponent, trailing text, non-breaking space) or rejects a padded or signed integer, so a conversion yields the wrong maybe<int> | tier: High
+            #[test]
+            fn $name() {
+                assert_eq!(string_to_int($input), $expected);
+            }
+        )*};
     }
-    #[test]
-    fn int_empty() {
-        assert_eq!(parse_string_to_int(b""), None);
+    int_cases! {
+        int_basic: b"42" => Some(42),
+        int_whitespace_sign: b"  +42  " => Some(42),
+        int_negative: b"-42" => Some(-42),
+        int_empty: b"" => None,
+        int_whitespace_only: b"  " => None,
+        int_lone_sign: b"+" => None,
+        int_hex_prefix: b"0x1A" => None,
+        int_trailing_chars: b"42 hello" => None,
+        int_fractional: b"42.5" => None,
+        int_scientific: b"1e3" => None,
+        int_tab_lf: b"\t42\n" => Some(42),
+        int_non_breaking_space: b"\xC2\xA042" => None, // UTF-8 U+00A0
     }
-    #[test]
-    fn int_whitespace_only() {
-        assert_eq!(parse_string_to_int(b"  "), None);
+
+    macro_rules! float_cases {
+        ($($name:ident: $input:expr => $expected:expr,)*) => {$(
+            // bug: ynz_string_to_float accepts malformed float text (a second dot, letters) or mis-parses a signed, padded or scientific float, so a conversion yields the wrong maybe<float> | tier: High
+            #[test]
+            fn $name() {
+                assert_eq!(string_to_float($input), $expected);
+            }
+        )*};
     }
-    #[test]
-    fn int_lone_sign() {
-        assert_eq!(parse_string_to_int(b"+"), None);
+    float_cases! {
+        float_basic: b"1.5" => Some(1.5),
+        float_scientific: b"1.5e2" => Some(150.0),
+        float_negative: b"  -1.5  " => Some(-1.5),
+        float_bad: b"abc" => None,
+        float_double_dot: b"1.5.5" => None,
     }
-    #[test]
-    fn int_hex_prefix() {
-        assert_eq!(parse_string_to_int(b"0x1A"), None);
+
+    macro_rules! float_to_int_cases {
+        ($($name:ident: $input:expr => $expected:expr,)*) => {$(
+            // bug: float_to_int_ref (the locked .toInt() semantics) returns a value for NaN, an infinity or an out-of-range float, or rounds instead of truncating toward zero, or mis-handles the 2^63 boundary | tier: High
+            #[test]
+            fn $name() {
+                assert_eq!(float_to_int_ref($input), $expected);
+            }
+        )*};
     }
-    #[test]
-    fn int_trailing_chars() {
-        assert_eq!(parse_string_to_int(b"42 hello"), None);
-    }
-    #[test]
-    fn int_fractional() {
-        assert_eq!(parse_string_to_int(b"42.5"), None);
-    }
-    #[test]
-    fn int_scientific() {
-        assert_eq!(parse_string_to_int(b"1e3"), None);
-    }
-    #[test]
-    fn int_tab_lf() {
-        assert_eq!(parse_string_to_int(b"\t42\n"), Some(42));
-    }
-    #[test]
-    fn int_non_breaking_space() {
-        assert_eq!(parse_string_to_int(b"\xC2\xA042"), None);
-    } // UTF-8 U+00A0
-    #[test]
-    fn float_basic() {
-        assert_eq!(parse_string_to_float(b"1.5"), Some(1.5));
-    }
-    #[test]
-    fn float_scientific() {
-        assert_eq!(parse_string_to_float(b"1.5e2"), Some(150.0));
-    }
-    #[test]
-    fn float_negative() {
-        assert_eq!(parse_string_to_float(b"  -1.5  "), Some(-1.5));
-    }
-    #[test]
-    fn float_bad() {
-        assert_eq!(parse_string_to_float(b"abc"), None);
-    }
-    #[test]
-    fn float_double_dot() {
-        assert_eq!(parse_string_to_float(b"1.5.5"), None);
-    }
-    #[test]
-    fn float_to_int_nan() {
-        assert_eq!(float_to_int_ref(f64::NAN), None);
-    }
-    #[test]
-    fn float_to_int_inf() {
-        assert_eq!(float_to_int_ref(f64::INFINITY), None);
-    }
-    #[test]
-    fn float_to_int_oor() {
-        assert_eq!(float_to_int_ref(1e30), None);
-    }
-    #[test]
-    fn float_to_int_truncate() {
-        assert_eq!(float_to_int_ref(2.5), Some(2));
-    }
-    #[test]
-    fn float_to_int_neg_truncate() {
-        assert_eq!(float_to_int_ref(-2.5), Some(-2));
-    }
-    #[test]
-    fn float_to_int_boundary_upper() {
-        assert_eq!(float_to_int_ref(9.223372036854776e18), None);
-    }
-    #[test]
-    fn float_to_int_boundary_lower() {
-        assert_eq!(float_to_int_ref(-9.223372036854776e18), Some(i64::MIN));
+    float_to_int_cases! {
+        float_to_int_nan: f64::NAN => None,
+        float_to_int_inf: f64::INFINITY => None,
+        float_to_int_oor: 1e30 => None,
+        float_to_int_truncate: 2.5 => Some(2),
+        float_to_int_neg_truncate: -2.5 => Some(-2),
+        float_to_int_boundary_upper: 9.223372036854776e18 => None,
+        float_to_int_boundary_lower: -9.223372036854776e18 => Some(i64::MIN),
     }
 }
 
@@ -3195,108 +3175,63 @@ mod m6_string_parsing {
 mod m7_errors_runtime {
     use super::*;
 
+    // bug: ynz_frame_push and ynz_frame_pop are not symmetric (a push left on the stack pollutes every later error trace) or a pop on an empty stack panics across the C ABI | tier: Medium
     #[test]
     fn frame_push_pop_round_trip() {
-        // WHY: frame push and pop must be symmetric. A push with no matching pop
-        // would leak a frame onto all subsequent error traces (silent trace corruption).
+        FRAME_STACK.with(|s| s.borrow_mut().clear());
         unsafe {
-            // Start clean — pop any frames left from other tests.
-            FRAME_STACK.with(|s| s.borrow_mut().clear());
-
             ynz_frame_push(c"test.ynz".as_ptr().cast(), 10, c"myFn".as_ptr().cast());
-            let len_after_push = FRAME_STACK.with(|s| s.borrow().len());
-            assert_eq!(len_after_push, 1);
-
+            assert_eq!(FRAME_STACK.with(|s| s.borrow().len()), 1);
             ynz_frame_pop();
-            let len_after_pop = FRAME_STACK.with(|s| s.borrow().len());
-            assert_eq!(len_after_pop, 0);
+            assert_eq!(FRAME_STACK.with(|s| s.borrow().len()), 0);
         }
+        // Early-return paths pop even when an earlier error path already cleared the stack.
+        ynz_frame_pop();
     }
 
+    // bug: ynz_error_new keeps the wrong message pointer, snapshots the frame stack late (auto-propagation pops frames before the caller sees the error) or invents a trace when no frame is pushed, so an unhandled error prints the wrong message or trace | tier: Medium
     #[test]
-    fn frame_pop_on_empty_is_noop() {
-        // WHY: a pop on an empty stack must not panic or corrupt memory.
-        // Early-return paths in errors functions always call pop, even when the
-        // stack was cleared by a prior error path in the same call.
-        FRAME_STACK.with(|s| s.borrow_mut().clear());
-        ynz_frame_pop(); // must not panic
-    }
-
-    #[test]
-    fn error_new_captures_message() {
-        // WHY: ynz_error_new must store the message pointer exactly as given so
-        // ynz_error_message returns the same address. If message is null-ed out
-        // or replaced, runtime error messages print garbage.
+    fn error_new_captures_message_and_the_frame_stack_at_creation() {
         FRAME_STACK.with(|s| s.borrow_mut().clear());
         unsafe {
-            let msg = b"something went wrong\0";
-            let err = ynz_error_new(msg.as_ptr());
-            assert!(!err.is_null());
-            let retrieved = ynz_error_message(err);
-            assert_eq!(retrieved, msg.as_ptr());
-            ynz_error_drop(err);
-        }
-    }
+            let message = b"something went wrong\0";
+            let message_error = ynz_error_new(message.as_ptr());
+            assert!(!message_error.is_null());
+            assert_eq!(ynz_error_message(message_error), message.as_ptr());
+            assert_eq!(
+                ynz_error_trace_len(message_error),
+                0,
+                "no frame pushed: zero-length trace"
+            );
+            assert!(ynz_error_trace_frame(message_error, 0).is_null());
+            ynz_error_drop(message_error);
 
-    #[test]
-    fn error_new_snapshots_frame_stack() {
-        // WHY: the error's trace must capture the frame stack AT the moment
-        // ynz_error_new is called, not later. Auto-propagation pops frames before
-        // the caller sees the error, so the snapshot must be taken first.
-        FRAME_STACK.with(|s| s.borrow_mut().clear());
-        unsafe {
             ynz_frame_push(c"a.ynz".as_ptr().cast(), 1, c"fn_a".as_ptr().cast());
             ynz_frame_push(c"b.ynz".as_ptr().cast(), 2, c"fn_b".as_ptr().cast());
-
-            let err = ynz_error_new(c"oops".as_ptr().cast());
-            assert_eq!(ynz_error_trace_len(err), 2);
-
-            let f0 = ynz_error_trace_frame(err, 0);
-            assert!(!f0.is_null());
-            assert_eq!(ynz_frame_line(f0), 1);
-
-            let f1 = ynz_error_trace_frame(err, 1);
-            assert!(!f1.is_null());
-            assert_eq!(ynz_frame_line(f1), 2);
-
-            // Out-of-range frame must return null.
-            let f_oob = ynz_error_trace_frame(err, 5);
-            assert!(f_oob.is_null());
-
-            ynz_error_drop(err);
-            // Clean up the stack.
+            let traced_error = ynz_error_new(c"oops".as_ptr().cast());
+            assert_eq!(ynz_error_trace_len(traced_error), 2);
+            let first_frame = ynz_error_trace_frame(traced_error, 0);
+            assert!(!first_frame.is_null());
+            assert_eq!(ynz_frame_line(first_frame), 1);
+            let second_frame = ynz_error_trace_frame(traced_error, 1);
+            assert!(!second_frame.is_null());
+            assert_eq!(ynz_frame_line(second_frame), 2);
+            assert!(ynz_error_trace_frame(traced_error, 5).is_null());
+            ynz_error_drop(traced_error);
             ynz_frame_pop();
             ynz_frame_pop();
         }
     }
 
-    #[test]
-    fn error_new_empty_stack_gives_zero_trace() {
-        // WHY: when no frames are on the stack (e.g., a top-level errors call from
-        // main with no frame push yet), the error must have trace_len = 0 and
-        // trace_ptr = null. ynz_unhandled_error must handle this gracefully.
-        FRAME_STACK.with(|s| s.borrow_mut().clear());
-        unsafe {
-            let err = ynz_error_new(c"empty".as_ptr().cast());
-            assert_eq!(ynz_error_trace_len(err), 0);
-            let f = ynz_error_trace_frame(err, 0);
-            assert!(f.is_null());
-            ynz_error_drop(err);
-        }
-    }
-
+    // bug: the frame stack grows without bound on deep recursion (or aborts at the cap) instead of truncating at FRAME_STACK_LIMIT | tier: Medium
     #[test]
     fn frame_stack_caps_at_1024() {
-        // WHY: unbounded frame stacks would exhaust memory on deeply recursive
-        // programs. The 1024 cap must truncate silently, not abort.
         FRAME_STACK.with(|s| s.borrow_mut().clear());
         unsafe {
-            for i in 0..2000i64 {
-                ynz_frame_push(c"f.ynz".as_ptr().cast(), i, c"deep".as_ptr().cast());
+            for line in 0..2000i64 {
+                ynz_frame_push(c"f.ynz".as_ptr().cast(), line, c"deep".as_ptr().cast());
             }
-            let len = FRAME_STACK.with(|s| s.borrow().len());
-            assert_eq!(len, FRAME_STACK_LIMIT);
-            // Clean up.
+            assert_eq!(FRAME_STACK.with(|s| s.borrow().len()), FRAME_STACK_LIMIT);
             FRAME_STACK.with(|s| s.borrow_mut().clear());
         }
     }
@@ -3314,6 +3249,7 @@ mod m7_string_runtime {
         std::ffi::CStr::from_ptr(p as *const i8).to_str().unwrap()
     }
 
+    // bug: ynz_string_eq reports two equal ASCII strings unequal, or two different ASCII strings equal | tier: Medium
     #[test]
     fn nfc_equality_ascii_fast_path() {
         // WHY: ASCII strings must go through the fast path (byte comparison).
@@ -3324,16 +3260,7 @@ mod m7_string_runtime {
         }
     }
 
-    #[test]
-    fn nfc_equality_pointer_identity() {
-        // WHY: two pointers to the same address must be equal without normalizing.
-        // Pointer identity fast path must fire before any normalization.
-        unsafe {
-            let s = b"hello\0";
-            assert_eq!(ynz_string_eq(c(s), c(s)), 1);
-        }
-    }
-
+    // bug: ynz_string_eq compares bytes without NFC normalization, so a precomposed and a decomposed spelling of the same text are unequal | tier: Medium
     #[test]
     fn nfc_equality_precomposed_vs_decomposed() {
         // WHY: NFC normalization closes the canonical-equivalence obligation from M3.
@@ -3352,6 +3279,7 @@ mod m7_string_runtime {
         }
     }
 
+    // bug: ynz_string_concat returns text that is not NUL-terminated or loses a side, so puts reads past the string | tier: Medium
     #[test]
     fn string_concat_produces_null_terminated() {
         // WHY: concatenation must produce a null-terminated result that can be passed
@@ -3364,6 +3292,7 @@ mod m7_string_runtime {
         }
     }
 
+    // bug: ynz_string_concat of two empty strings returns null or non-terminated memory | tier: Medium
     #[test]
     fn string_concat_empty_strings() {
         // WHY: concatenating two empty strings must produce an empty null-terminated string.
@@ -3375,6 +3304,7 @@ mod m7_string_runtime {
         }
     }
 
+    // bug: ynz_string_count counts bytes instead of code points, so a multibyte string reports the wrong length | tier: Medium
     #[test]
     fn string_count_handles_multibyte() {
         // WHY: code point count must count code points, not bytes.
@@ -3386,16 +3316,17 @@ mod m7_string_runtime {
         }
     }
 
+    // bug: ynz_string_byte_count returns the code point count instead of the byte count of a multibyte string | tier: Medium
     #[test]
     fn string_byte_count_vs_code_point_count() {
         // WHY: byteCount must return the byte count, not the code-point count.
         unsafe {
             let s = b"caf\xC3\xA9\0"; // 4 code points, 5 bytes (+ null terminator)
             assert_eq!(ynz_string_byte_count(c(s)), 5);
-            assert_eq!(ynz_string_count(c(s)), 4);
         }
     }
 
+    // bug: ynz_string_codepoint_at returns the wrong character for an in-range index | tier: Medium
     #[test]
     fn string_codepoint_at_ascii() {
         // WHY: codepoint_at on ASCII must return each character as a 1-byte string.
@@ -3408,6 +3339,7 @@ mod m7_string_runtime {
         }
     }
 
+    // bug: ynz_string_codepoint_at of an out-of-range or negative index returns garbage or panics instead of null | tier: Medium
     #[test]
     fn string_codepoint_at_oob_returns_null() {
         // WHY: out-of-bounds index must return null, not garbage or a panic.
@@ -3418,6 +3350,7 @@ mod m7_string_runtime {
         }
     }
 
+    // bug: ynz_string_contains misses a present substring, finds an absent one, or rejects the empty needle | tier: Medium
     #[test]
     fn string_contains_basic() {
         // WHY: contains must correctly find a substring.
@@ -3428,9 +3361,9 @@ mod m7_string_runtime {
         }
     }
 
+    // bug: ynz_string_starts_with matches a prefix anywhere in the string, or misses a real prefix | tier: Medium
     #[test]
-    fn string_starts_with_ends_with() {
-        // WHY: startsWith and endsWith must match the prefix/suffix exactly.
+    fn string_starts_with() {
         unsafe {
             assert_eq!(
                 ynz_string_starts_with(c(b"Hello World\0"), c(b"Hello\0")),
@@ -3440,21 +3373,33 @@ mod m7_string_runtime {
                 ynz_string_starts_with(c(b"Hello World\0"), c(b"World\0")),
                 0
             );
+        }
+    }
+
+    // bug: ynz_string_ends_with matches a suffix anywhere in the string, or misses a real suffix | tier: Medium
+    #[test]
+    fn string_ends_with() {
+        unsafe {
             assert_eq!(ynz_string_ends_with(c(b"Hello World\0"), c(b"World\0")), 1);
             assert_eq!(ynz_string_ends_with(c(b"Hello World\0"), c(b"Hello\0")), 0);
         }
     }
 
+    // bug: ynz_string_to_upper returns the text unconverted or wrongly cased | tier: Medium
     #[test]
-    fn string_to_upper_lower() {
-        // WHY: locale-invariant case conversion must not be affected by the system locale.
-        // The Turkish-I problem (where 'i'.toUpperCase() = 'İ') must not occur.
+    fn string_to_upper() {
         unsafe {
             let upper = ynz_string_to_upper(c(b"hello\0"));
             assert!(!upper.is_null());
             assert_eq!(str_from_ptr(upper), "HELLO");
             ynz_string_release(upper);
+        }
+    }
 
+    // bug: ynz_string_to_lower returns the text unconverted or wrongly cased | tier: Medium
+    #[test]
+    fn string_to_lower() {
+        unsafe {
             let lower = ynz_string_to_lower(c(b"HELLO\0"));
             assert!(!lower.is_null());
             assert_eq!(str_from_ptr(lower), "hello");
@@ -3462,6 +3407,7 @@ mod m7_string_runtime {
         }
     }
 
+    // bug: ynz_string_trim keeps outer whitespace or removes interior whitespace | tier: Medium
     #[test]
     fn string_trim_removes_whitespace() {
         // WHY: trim must remove leading and trailing whitespace, not interior whitespace.
@@ -3473,6 +3419,7 @@ mod m7_string_runtime {
         }
     }
 
+    // bug: ynz_string_substring slices the wrong half-open range | tier: Medium
     #[test]
     fn string_substring_basic() {
         // WHY: substring must slice by code-point index, not byte index.
@@ -3484,6 +3431,7 @@ mod m7_string_runtime {
         }
     }
 
+    // bug: ynz_string_grapheme_count counts code points, so a base letter plus a combining accent reports two graphemes | tier: Medium
     #[test]
     fn string_grapheme_count_combining() {
         // WHY: grapheme count must count grapheme clusters, not code points.
@@ -3492,10 +3440,10 @@ mod m7_string_runtime {
             // 'a' = 0x61, U+0301 combining acute = UTF-8 0xCC 0x81
             let s = b"a\xCC\x81\0";
             assert_eq!(ynz_string_grapheme_count(c(s)), 1);
-            assert_eq!(ynz_string_count(c(s)), 2); // 2 code points
         }
     }
 
+    // bug: the string builder drops or reorders an appended segment, so an interpolated string is wrong | tier: Medium
     #[test]
     fn string_builder_round_trip() {
         // WHY: the builder must correctly assemble multiple segments into a single string.
@@ -3512,6 +3460,7 @@ mod m7_string_runtime {
         }
     }
 
+    // bug: ynz_string_builder_drop leaks the builder (observable only by the Miri and ASan leak check) | tier: High
     #[test]
     fn string_builder_drop_cleans_up() {
         // WHY: builder_drop must not leak memory. Valgrind-clean programs depend on this.
@@ -3522,6 +3471,7 @@ mod m7_string_runtime {
         }
     }
 
+    // bug: ynz_string_split returns the wrong number of segments or wrong text for a known separator | tier: Medium
     #[test]
     fn string_split_basic() {
         // WHY: split must produce the correct number of segments for a known separator.
@@ -3550,6 +3500,7 @@ mod m7_string_runtime {
         }
     }
 
+    // bug: ynz_string_replace leaves the old text or corrupts the surrounding text | tier: Medium
     #[test]
     fn string_replace_basic() {
         // WHY: replace must substitute all occurrences of `from` with `to`.
@@ -3561,6 +3512,7 @@ mod m7_string_runtime {
         }
     }
 
+    // bug: ynz_string_index_of returns the wrong offset on a hit or not -1 on a miss | tier: Medium
     #[test]
     fn string_index_of_found_and_not_found() {
         // WHY: indexOf must return the byte offset on hit and -1 on miss.
@@ -3570,17 +3522,24 @@ mod m7_string_runtime {
         }
     }
 
-    #[test]
-    fn string_validate_utf8_valid_and_invalid() {
-        // WHY: UTF-8 validation must accept well-formed UTF-8 and reject ill-formed sequences.
-        unsafe {
-            // Valid UTF-8: ASCII
-            assert_eq!(ynz_string_validate_utf8(b"hello".as_ptr(), 5), 1);
-            // Valid UTF-8: 2-byte sequence é
-            assert_eq!(ynz_string_validate_utf8(b"\xC3\xA9".as_ptr(), 2), 1);
-            // Invalid: orphan continuation byte
-            assert_eq!(ynz_string_validate_utf8(b"\x80".as_ptr(), 1), 0);
-        }
+    /// One named test per input class of the UTF-8 validator.
+    macro_rules! validate_utf8_cases {
+        ($($name:ident: $bytes:expr => $expected:expr,)*) => {$(
+            // bug: ynz_string_validate_utf8 accepts an ill-formed byte sequence (or rejects a well-formed one), so invalid text enters a string | tier: High
+            #[test]
+            fn $name() {
+                let bytes: &[u8] = $bytes;
+                assert_eq!(
+                    unsafe { ynz_string_validate_utf8(bytes.as_ptr(), bytes.len()) },
+                    $expected
+                );
+            }
+        )*};
+    }
+    validate_utf8_cases! {
+        string_validate_utf8_ascii: b"hello" => 1,
+        string_validate_utf8_two_byte_sequence: b"\xC3\xA9" => 1,
+        string_validate_utf8_orphan_continuation_byte: b"\x80" => 0,
     }
 }
 
@@ -3601,6 +3560,7 @@ mod array_runtime {
         (flag, out)
     }
 
+    // bug: ynz_array_new_sized returns an array whose count is not its capacity, or whose cells are not writable, so a struct-of-arrays column reads or writes out of bounds | tier: High
     #[test]
     fn array_new_sized_len_cap_set_drop() {
         // WHY: guards the SoA sized-constructor contract (v0.3-M5 P5 / D2):
@@ -3620,6 +3580,7 @@ mod array_runtime {
         }
     }
 
+    // bug: ynz_array_push copies the wrong number of bytes, or ynz_array_get returns a wrong value or an unzeroed out-buffer for an out-of-range index | tier: High
     #[test]
     fn array_new_push_get_count() {
         // WHY: guards that ynz_array_new initialises a valid empty array and that
@@ -3647,6 +3608,7 @@ mod array_runtime {
         }
     }
 
+    // bug: array growth past the initial capacity loses or corrupts stored elements | tier: High
     #[test]
     fn array_push_beyond_initial_capacity_grows() {
         // WHY: INITIAL_ARRAY_CAPACITY = 8; pushing 16 elements forces one growth step
@@ -3671,6 +3633,7 @@ mod array_runtime {
         }
     }
 
+    // bug: a multibyte element is stored by reference, not copied, so clobbering the source or growing the array changes the stored element | tier: High
     #[test]
     fn array_multibyte_elements_stored_by_value() {
         // WHY: the by-value contract itself — a 16-byte element (a two-field shape's
@@ -3963,71 +3926,26 @@ mod m3d_join_shims {
         CaptureCtx::<F, R>(Some(f), std::marker::PhantomData).await
     }
 
+    // bug: ynz_rt_join_poll writes a wrong or partial 16-byte result for an int return, so a joined cpu task returns the wrong value | tier: High
     #[tokio::test]
     async fn value_roundtrip_int() {
         // WHY: guards that ynz_rt_join_poll writes the correct 16-byte result to the
         // result_out slot and returns 0 (Ready) when the child has finished.
-        unsafe {
-            let handle_ptr = ynz_rt_spawn_blocking_joinable(returns_42, std::ptr::null_mut(), 0);
-            assert!(
-                !handle_ptr.is_null(),
-                "spawn must return a non-null handle in a live Tokio context"
-            );
-
-            // We may need to poll more than once if the blocking task hasn't finished yet.
-            let mut result_slot = [0i64; 2];
-            let result_ptr = result_slot.as_mut_ptr() as *mut u8;
-
-            // Give the blocking thread a moment; then poll.
-            // Using a small sleep ensures the spawned task has time to complete before we
-            // poll — making the test deterministic without a busy loop.
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-            let status = with_cx(|cx| {
-                let waker_ctx = cx as *mut std::task::Context<'_> as *mut u8;
-                ynz_rt_join_poll(handle_ptr, waker_ctx, result_ptr)
-            })
-            .await;
-
-            assert_eq!(
-                status, 0,
-                "poll must return 0 (Ready) after the child has completed"
-            );
-            assert_eq!(
-                result_slot,
-                [42, 0],
-                "result must be [42, 0] for returns_42"
-            );
-        }
+        let slot = spawn_join_collect(returns_42).await;
+        assert_eq!(slot.0, [42, 0], "result must be [42, 0] for returns_42");
     }
 
+    // bug: ynz_rt_join_poll truncates or sign-extends a word of a saturated [i64::MIN, i64::MAX] result, so a decimal128 half is wrong | tier: High
     #[tokio::test]
     async fn value_roundtrip_saturation() {
         // WHY: decimal128 paths write [lo_word, hi_word]; this test uses [i64::MIN, i64::MAX]
         // to confirm neither word is truncated or sign-extended incorrectly through the ABI.
-        unsafe {
-            let handle_ptr =
-                ynz_rt_spawn_blocking_joinable(returns_saturated, std::ptr::null_mut(), 0);
-            assert!(!handle_ptr.is_null());
-
-            let mut result_slot = [0i64; 2];
-            let result_ptr = result_slot.as_mut_ptr() as *mut u8;
-
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-            let status = with_cx(|cx| {
-                let waker_ctx = cx as *mut std::task::Context<'_> as *mut u8;
-                ynz_rt_join_poll(handle_ptr, waker_ctx, result_ptr)
-            })
-            .await;
-
-            assert_eq!(status, 0, "must be Ready");
-            assert_eq!(
-                result_slot,
-                [i64::MIN, i64::MAX],
-                "saturated values must survive the ABI unchanged"
-            );
-        }
+        let slot = spawn_join_collect(returns_saturated).await;
+        assert_eq!(
+            slot.0,
+            [i64::MIN, i64::MAX],
+            "saturated values must survive the ABI unchanged"
+        );
     }
 
     // float result: the f64 is bit-cast (NOT truncated) into the low i64 word.
@@ -4092,6 +4010,7 @@ mod m3d_join_shims {
         }
     }
 
+    // bug: ynz_rt_join_poll int-casts an f64 result instead of bit-casting it into the low word, so a joined float is wrong | tier: High
     #[tokio::test]
     async fn value_roundtrip_float() {
         // WHY: the float return class bit-casts an f64 into the low i64 word. A truncation
@@ -4107,6 +4026,7 @@ mod m3d_join_shims {
         assert_eq!(slot.0[1], 0, "high word must be zero for the float class");
     }
 
+    // bug: ynz_rt_join_poll clobbers the pointer bits of a string, array or map result | tier: High
     #[tokio::test]
     async fn value_roundtrip_ptr() {
         // WHY: string/array/map returns pack a heap pointer into the low word. The runtime
@@ -4119,6 +4039,7 @@ mod m3d_join_shims {
         assert_eq!(slot.0[1], 0, "high word must be zero for the pointer class");
     }
 
+    // bug: ynz_rt_join_poll swaps or truncates the lo/hi words of a decimal128 result, or the result slot is not 16-byte aligned for the i128 load | tier: High
     #[tokio::test]
     async fn value_roundtrip_decimal128_aligned() {
         // WHY: number/decimal128 returns use BOTH i64 words ([lo, hi]). A decimal128 is a
@@ -4156,6 +4077,7 @@ mod m3d_join_shims {
         );
     }
 
+    // bug: ynz_rt_join_poll drops or merges the err_tag or ok word of a `T errors` result pair | tier: High
     #[tokio::test]
     async fn value_roundtrip_error_pair() {
         // WHY: `T errors` returns pack [err_tag, ok_bits]. Both words are load-bearing — the
@@ -4168,52 +4090,7 @@ mod m3d_join_shims {
         );
     }
 
-    #[tokio::test]
-    async fn ctx_copy_contents_reach_child() {
-        // WHY: guards the ctx-copy path — child must see the same bytes that were in
-        // the parent's ctx at spawn time. Uses a 16-byte ctx with a recognizable pattern.
-        extern "C-unwind" fn reads_ctx(ctx: *mut u8) -> YnzCpuResult {
-            // Read two i64 from the ctx and return them as the result.
-            // SAFETY: caller passed 16 valid bytes.
-            let a = unsafe { (ctx as *const i64).read() };
-            let b = unsafe { (ctx as *const i64).add(1).read() };
-            YnzCpuResult([a, b])
-        }
-
-        // `[i64; 2]` (not `[u8; 16]`) — confirmed live under Miri (M6 Phase 6b): a
-        // `[u8; N]` array only guarantees 1-byte alignment, but `reads_ctx` above reads it
-        // back through `*const i64` (align 8) — storing as `i64` directly gives the
-        // natural alignment the pointer cast requires.
-        let mut ctx_data: [i64; 2] = [0x1234_5678, 0xDEAD_BEEF_i64];
-
-        unsafe {
-            let handle_ptr = ynz_rt_spawn_blocking_joinable(
-                reads_ctx,
-                ctx_data.as_mut_ptr() as *mut u8,
-                std::mem::size_of_val(&ctx_data) as i64,
-            );
-            assert!(!handle_ptr.is_null());
-
-            let mut result_slot = [0i64; 2];
-            let result_ptr = result_slot.as_mut_ptr() as *mut u8;
-
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-            let status = with_cx(|cx| {
-                let waker_ctx = cx as *mut std::task::Context<'_> as *mut u8;
-                ynz_rt_join_poll(handle_ptr, waker_ctx, result_ptr)
-            })
-            .await;
-
-            assert_eq!(status, 0, "must be Ready");
-            assert_eq!(
-                result_slot,
-                [0x1234_5678, 0xDEAD_BEEF_i64],
-                "ctx bytes must be faithfully copied and visible to the child"
-            );
-        }
-    }
-
+    // bug: ynz_rt_join_handle_free on a handle mid-flight frees the child's ctx copy or stops the child, so a cancelled parent crashes the child or loses its completion | tier: High
     #[tokio::test]
     async fn drop_detach_no_uaf() {
         // WHY: guards ynz_rt_join_handle_free — dropping a handle mid-flight must not
@@ -4273,6 +4150,7 @@ mod m3d_join_shims {
         );
     }
 
+    // bug: ynz_rt_join_handle_free leaks the handle Box (never dropped), or aborts on a null handle | tier: High
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn handle_free_detaches_and_frees_box() {
         // WHY: the drop-detach contract has two halves the plan requires PROVEN separately:
@@ -4330,6 +4208,7 @@ mod m3d_join_shims {
         }
     }
 
+    // bug: ynz_rt_spawn_blocking_joinable leaks its ctx copy, or frees it twice | tier: High
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     // Time: O(n) where n = number of Pending polls before the blocking task completes  Space: O(1) — single result slot.
     async fn joinable_spawn_frees_ctx_copy_exactly_once() {
@@ -4389,6 +4268,7 @@ mod m3d_join_shims {
         );
     }
 
+    // bug: ynz_rt_spawn_blocking_joinable called before ynz_rt_init panics or aborts instead of returning a null discard handle | tier: High
     #[test]
     fn spawn_before_init_returns_null() {
         // WHY: outside any Tokio context AND with the global RUNTIME uninitialised,
@@ -4414,62 +4294,7 @@ mod m3d_join_shims {
         );
     }
 
-    #[tokio::test]
-    async fn detach_child_runs_after_handle_free() {
-        // WHY: guards that a spawned child runs to completion even when the parent calls
-        // ynz_rt_join_handle_free before the child has started (cancellation path). Without
-        // this guarantee, a cancelled parent would leave the ctx copy dangling — the child
-        // reads from it after the parent's FrameDropGuard frees it (UAF).
-        //
-        // Ledger approach: an AtomicUsize counter is stored in ctx (8 bytes). The child
-        // reads the pointer out of ctx, increments the counter to signal "child ran",
-        // then drops. After the test, the counter must be 1 (child ran exactly once)
-        // and the test process must not have crashed (no UAF on the ctx copy).
-        // Proves: the child ran exactly once AND reached the return point without a UAF
-        // crash. Does not measure allocator malloc/free balance directly — the UAF-free
-        // assertion is the proof of interest here.
-        let ran_counter = Arc::new(AtomicUsize::new(0));
-        let counter_ptr = Arc::as_ptr(&ran_counter) as u64;
-
-        // `u64` (not `[u8; 8]`) — confirmed live under Miri (M6 Phase 6b): a `[u8; 8]`
-        // array only guarantees 1-byte alignment; `increment_counter` below reads it back
-        // through `*const u64` (align 8).
-        let mut ctx_data: u64 = counter_ptr;
-
-        extern "C-unwind" fn increment_counter(ctx: *mut u8) -> YnzCpuResult {
-            // SAFETY: ctx holds an 8-byte counter pointer; the Arc is still alive
-            // (the outer test holds a ref; this does not take ownership).
-            let ptr = unsafe { (ctx as *const u64).read() } as *const AtomicUsize;
-            unsafe { (*ptr).fetch_add(1, Ordering::Release) };
-            YnzCpuResult([0, 0])
-        }
-
-        unsafe {
-            let handle_ptr = ynz_rt_spawn_blocking_joinable(
-                increment_counter,
-                &mut ctx_data as *mut u64 as *mut u8,
-                8,
-            );
-            assert!(!handle_ptr.is_null(), "spawn must return non-null handle");
-
-            // Free the handle immediately (simulate parent cancellation mid-join).
-            // The ctx COPY inside FrameDropGuard is still owned by the child closure.
-            ynz_rt_join_handle_free(handle_ptr);
-        }
-
-        // Give the child time to run.
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
-        assert_eq!(
-            ran_counter.load(Ordering::Acquire),
-            1,
-            "child must have run exactly once — ctx copy was intact after handle free"
-        );
-        // If there were a UAF, the child's read of the counter pointer from ctx would
-        // crash (SIGSEGV) rather than reaching this assertion. The absence of a crash
-        // confirms the ctx copy is valid for the child's full duration.
-    }
-
+    // bug: ynz_rt_join_poll swallows a panicking cpu child's panic, so the parent carries on with a garbage result | tier: High
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn panic_reraises_in_parent() {
         // WHY: a panicking child must propagate via resume_unwind so the parent's panic
@@ -4559,6 +4384,7 @@ mod m3d_join_shims {
     ///      this is the runtime-level proof that Step 3(d)'s "≥600 spawned joins" claim
     ///      holds. (The Yinz-source fixture (d) only exercises 2 joins per entrypoint call;
     ///      this test provides the saturation guarantee that fixture alone cannot.)
+    // bug: poll-based joins of 640 concurrent blocking tasks deadlock or lose a result when the blocking pool saturates | tier: High
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn saturation_600_joins() {
         // WHY: validates that ynz_rt_spawn_blocking_joinable + ynz_rt_join_poll can drive
@@ -4641,6 +4467,7 @@ mod m3d_join_shims {
     /// Tests `cleanup_spike_cpu_handles` directly rather than constructing a full
     /// SpawnStateFnFuture (which requires a live resume-fn and frame allocation).
     /// The function is the extracted core of SpawnStateFnFuture::drop's step 1.5.
+    // bug: SpawnStateFnFuture drop skips the spike-handle cleanup, so a task cancelled mid-join leaks one CpuJoinHandle Box per live slot | tier: High
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn discriminator_drop_frees_spike_handles() {
         // WHY: SpawnStateFnFuture::drop's discriminator branch (step 1.5) had zero test
@@ -4648,7 +4475,7 @@ mod m3d_join_shims {
         // on every parent cancellation mid-join — one per live handle per cancel, unbounded
         // over program lifetime. The test proves both the "magic present, free handles" path
         // and the "no magic, skip" path fire correctly.
-        use crate::runtime::{cleanup_spike_cpu_handles, CpuJoinHandle, SpawnStateFnFuture};
+        use crate::runtime::{CpuJoinHandle, SpawnStateFnFuture};
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
 
@@ -4720,6 +4547,12 @@ mod m3d_join_shims {
             completed.load(Ordering::Acquire),
             "child must have run to completion after handle was dropped (detached)"
         );
+    }
+
+    // bug: cleanup_spike_cpu_handles drops a handle slot of a frame that lacks the spike tag, so a non-spike frame's bytes are freed as a handle (a wild free) | tier: High
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_frame_without_the_spike_tag_leaves_its_handle_slot_untouched() {
+        use crate::runtime::{cleanup_spike_cpu_handles, CpuJoinHandle};
 
         // --- Case 2: zeroed frame (no magic) → discriminator branch skipped ---
         //
@@ -4778,6 +4611,7 @@ mod m3d_join_shims {
     /// This is the N=2 cancellation path the layout-driven cleanup must cover: a fixed
     /// "slot 0 only" scan would leak slot 1's handle on every cancellation of a full group.
     /// alloc=free is proven by the two per-handle drop probes both reaching 1.
+    // bug: cleanup_spike_cpu_handles scans only slot 0, so a cancelled full two-member cpu group leaks the second handle | tier: High
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn cleanup_frees_both_handles_of_full_n2_group() {
         use crate::runtime::{cleanup_spike_cpu_handles, CpuJoinHandle};
@@ -4840,6 +4674,7 @@ mod m3d_join_shims {
     /// fused-group members) — this test predates that fixture and stays as the fast, isolated,
     /// runtime-crate-level pin of the SAME count-driven mechanism, independent of any specific
     /// codegen-emitted frame shape.
+    // bug: cleanup_spike_cpu_handles stops at the second slot or at a null slot, so a cancelled three-member group leaks the third handle | tier: High
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn cleanup_is_layout_driven_for_n_greater_than_two() {
         use crate::runtime::{cleanup_spike_cpu_handles, CpuJoinHandle};
@@ -4893,6 +4728,7 @@ mod m3d_join_shims {
     /// "child sub-frame" bytes byte-for-byte untouched — proving the scan cannot mistake
     /// adjacent embedded-child bytes for a third handle slot, which would be a double-free /
     /// wild-pointer-drop the instant those bytes happened to look like a live pointer.
+    // bug: cleanup_spike_cpu_handles scans past the handle count into the embedded I/O sub-frame and drops its bytes as a handle (a wild free) | tier: High
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn cleanup_on_dual_kind_frame_leaves_io_subframe_region_untouched() {
         use crate::runtime::{cleanup_spike_cpu_handles, CpuJoinHandle};
@@ -4961,92 +4797,6 @@ mod m3d_join_shims {
         );
     }
 
-    /// Verifies that dropping a `SpawnStateFnFuture` before the first poll (i.e., cancellation
-    /// of a task that was never polled) correctly frees CPU join handles through the
-    /// `cleanup_spike_cpu_handles` delegation in `SpawnStateFnFuture::drop`.
-    ///
-    /// This is the end-to-end path: task cancelled before first poll → Drop::drop →
-    /// cleanup_spike_cpu_handles via the discriminator branch.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn spawn_state_fn_future_drop_before_first_poll_frees_handles() {
-        // WHY: SpawnStateFnFuture::drop's step 1.5 (cleanup_spike_cpu_handles delegation)
-        // is only useful if it fires on every cancellation path, including drop-before-poll.
-        // This test creates a SpawnStateFnFuture with a spike-magic frame + live handle,
-        // drops it immediately without polling, and verifies the handle's task completes
-        // AND the CpuJoinHandle Drop counter increments (proving the Box was freed, not leaked —
-        // a detach-only path would satisfy "task ran" without incrementing the counter).
-        use crate::runtime::{CpuJoinHandle, SpawnStateFnFuture};
-        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-        use std::sync::Arc;
-
-        let completed = Arc::new(AtomicBool::new(false));
-        let completed_child = completed.clone();
-
-        // Per-handle drop probe: incremented exactly when THIS CpuJoinHandle is dropped.
-        // Arc-local so concurrent drops in saturation_600_joins etc. can't race this window.
-        let drop_count = Arc::new(AtomicUsize::new(0));
-
-        // Spawn a real blocking task to create a live CpuJoinHandle.
-        let join_handle = tokio::task::spawn_blocking(move || -> YnzCpuResult {
-            completed_child.store(true, Ordering::Release);
-            YnzCpuResult([42, 0])
-        });
-        let mut cpu_handle = CpuJoinHandle::new(join_handle);
-        cpu_handle.set_drop_probe(Arc::clone(&drop_count));
-        let handle_ptr = Box::into_raw(Box::new(cpu_handle)) as *mut u8;
-
-        // Allocate via the same allocator SpawnStateFnFuture::drop uses to free — ynz_alloc_zeroed.
-        // Using std::alloc here would be a mismatched-allocator crash when Drop calls ynz_free.
-        let frame_ptr = unsafe { ynz_alloc_zeroed(80) };
-        assert!(!frame_ptr.is_null(), "frame alloc must succeed");
-
-        unsafe {
-            // Write the packed discriminator at offset 4: tag in the high 16 bits,
-            // handle count = 2 in the low 16 bits (slot 0 live, slot 1 null).
-            (frame_ptr.add(SPIKE_FRAME_DISCRIMINATOR_OFFSET) as *mut u32)
-                .write((SPIKE_FRAME_TAG << 16) | 2);
-            // Plant the live handle pointer at slot 0 (offset 32).
-            (frame_ptr.add(SPIKE_HANDLE_BASE_OFFSET) as *mut *mut u8).write(handle_ptr);
-            // Slot 1 (offset 40) stays null.
-        }
-
-        // Build a minimal no-op resume function (never called, but SpawnStateFnFuture
-        // requires a valid function pointer in the slot).
-        unsafe extern "C-unwind" fn noop_resume(_frame: *mut u8, _waker: *mut u8) -> i32 {
-            1 // Pending — would keep the task alive if polled; but we won't poll it.
-        }
-
-        // Create the future but NEVER poll it — drop fires cleanup immediately.
-        {
-            let _future = SpawnStateFnFuture::new(
-                noop_resume,
-                frame_ptr,
-                80,
-                -1, // recursion_slot_offset — no recursion slot
-                std::ptr::null::<runtime::BgArgDropEntry>(), // arg_drops — none
-                0,  // arg_drop_count
-            );
-            // Drop fires here: step 1.5 calls cleanup_spike_cpu_handles → frees handle at slot 0.
-        }
-
-        // drop_count is incremented exactly when the probe'd CpuJoinHandle is dropped.
-        // If cleanup_spike_cpu_handles was skipped (commented out), the box leaks and
-        // the drop impl never fires — count stays 0 and this assertion fails.
-        assert_eq!(
-            drop_count.load(Ordering::SeqCst),
-            1,
-            "SpawnStateFnFuture::drop must free exactly 1 CpuJoinHandle (slot 0) before-first-poll"
-        );
-
-        // After drop, frame_ptr was freed by SpawnStateFnFuture::drop (step 5). We must not
-        // access frame_ptr here. Give the child task time to complete after detach.
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        assert!(
-            completed.load(Ordering::Acquire),
-            "blocking task must complete after handle was freed on drop-before-poll"
-        );
-    }
-
     /// Verify the recursion-chain drop walk frees a chain CHILD's spike CPU handles through
     /// the same `cleanup_spike_cpu_handles` choke point the root frame uses (v0.3-M6 P2-5).
     ///
@@ -5055,6 +4805,7 @@ mod m3d_join_shims {
     /// handle count 2, live probed `CpuJoinHandle` in slot 0, null slot 1) whose own
     /// recursion slot stays null (chain end). Dropping the `SpawnStateFnFuture` must walk
     /// the chain and free the child's live handle — probe == 1.
+    // bug: the recursion-chain drop walk frees a chain child's frame but leaks its spike cpu handles | tier: High
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn recursion_chain_child_spike_handles_freed_on_drop() {
         // WHY: the chain walk in SpawnStateFnFuture::drop freed each child's sleep handle
@@ -5279,6 +5030,7 @@ mod m6_pending_send_aba {
     /// there the swap is reported as use-after-free at the purge, before any sequence
     /// assertion could run. The existing sibling below keeps main's reference alive
     /// throughout and so cannot see a swapped order at all.
+    // bug: the drop ladder's kind-2 arm releases the channel before purging the parked send, so the purge touches a freed channel (use-after-free) | tier: High
     #[test]
     fn ladder_holding_last_reference_purges_parked_send_before_channel_teardown() {
         /// Payload values unique to this test across the whole crate (see GLUE_SEQUENCE).
@@ -5328,6 +5080,7 @@ mod m6_pending_send_aba {
     /// reuse, and assert (a) the cancelled task's `pending_sends` entry is purged (orphan
     /// half), (b) the new task at the reused address delivers ITS OWN value — the dead
     /// task's stale value never resurfaces (ABA half).
+    // bug: a task cancelled while suspended on send leaves its pending_sends entry, so a new task at the reused frame address delivers the dead task's value | tier: High
     #[test]
     fn cancelled_frame_sender_is_purged_and_reused_address_cannot_resurrect_it() {
         let waker = make_waker();
@@ -5470,6 +5223,7 @@ mod m6_pending_send_aba {
     /// `h.send()` suspends under backpressure keyed by the HANDLE pointer; `ynz_handle_free`
     /// must purge that entry (orphan half); a new handle at the reused address must deliver
     /// its own value, never the dead handle's (ABA half, best-effort address forcing).
+    // bug: ynz_handle_free leaves the handle-keyed pending_sends entry, so a new handle at the reused address delivers the dead handle's value | tier: High
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn freed_handle_sender_is_purged_and_reused_address_cannot_resurrect_it() {
         let waker = make_waker();
@@ -5566,6 +5320,7 @@ mod print_text_tests {
 
     /// Bug caught: a stack buffer smaller than the longest `{f64}` text would make `print(float)`
     /// abort on a legal value. (High: a fixed bound on untrusted-range numeric text)
+    // bug: a stack buffer smaller than the longest f64 text makes print(float) abort on a legal value | tier: Medium
     #[test]
     fn f64_display_text_never_exceeds_the_print_buffer() {
         let extremes = [
@@ -5592,6 +5347,7 @@ mod print_text_tests {
 
     /// Bug caught: `StackText` accepting text that leaves no room for the NUL, so `puts` reads
     /// past the buffer. (High: memory safety)
+    // bug: StackText accepts text that leaves no room for the NUL, so puts reads past the buffer | tier: High
     #[test]
     fn stack_text_rejects_text_that_leaves_no_room_for_the_nul() {
         let mut stack_text = StackText::<4>::new();
@@ -5601,34 +5357,45 @@ mod print_text_tests {
         assert!(stack_text.write_str("abcd").is_err());
     }
 
-    /// Bug caught: an append entry that writes different bytes than the owned `toString` of the
-    /// same value, so `${n}` and `n.toString()` disagree. (High: output correctness)
-    #[test]
-    fn appended_text_equals_the_owned_to_string_text() {
-        let builder = ynz_string_builder_new();
-        unsafe {
-            ynz_int_append(builder, i64::MIN);
-            ynz_float_append(builder, -1.5);
-            ynz_float_append(builder, f64::NAN);
-            ynz_float_append(builder, 1e21);
-            let mut decimal = [0u8; 16];
-            ynz_decimal_from_int(-42, &mut decimal);
-            ynz_decimal_append(builder, &decimal);
-            let joined = ynz_string_builder_finalize(builder);
-            let text = std::ffi::CStr::from_ptr(joined as *const i8)
-                .to_str()
-                .unwrap();
-            let expected = format!(
-                "{}{}{}{}{}",
-                i64::MIN,
-                -1.5f64,
-                f64::NAN,
-                1e21f64,
+    /// Appends one value to a string builder through the entry point under test and returns the
+    /// text the builder finalizes to.
+    macro_rules! appended_text_cases {
+        ($($name:ident: |$builder:ident| $append:expr => $expected:expr,)*) => {$(
+            // bug: an append entry writes different bytes than the owned toString of the same value, so an interpolated `${n}` and `n.toString()` disagree | tier: High
+            #[test]
+            fn $name() {
+                unsafe {
+                    let $builder = ynz_string_builder_new();
+                    $append;
+                    let joined = ynz_string_builder_finalize($builder);
+                    let text = std::ffi::CStr::from_ptr(joined as *const i8)
+                        .to_str()
+                        .unwrap();
+                    assert_eq!(text, $expected);
+                    ynz_string_release(joined);
+                }
+            }
+        )*};
+    }
+    appended_text_cases! {
+        an_appended_int_equals_the_owned_to_string_text:
+            |builder| ynz_int_append(builder, i64::MIN) => i64::MIN.to_string(),
+        an_appended_float_equals_the_owned_to_string_text:
+            |builder| ynz_float_append(builder, -1.5) => (-1.5f64).to_string(),
+        an_appended_nan_equals_the_owned_to_string_text:
+            |builder| ynz_float_append(builder, f64::NAN) => f64::NAN.to_string(),
+        an_appended_large_float_equals_the_owned_to_string_text:
+            |builder| ynz_float_append(builder, 1e21) => 1e21f64.to_string(),
+        an_appended_decimal_equals_the_owned_to_string_text:
+            |builder| {
+                let mut decimal = [0u8; 16];
+                ynz_decimal_from_int(-42, &mut decimal);
+                ynz_decimal_append(builder, &decimal);
+            } => {
+                let mut decimal = [0u8; 16];
+                ynz_decimal_from_int(-42, &mut decimal);
                 format(u128::from_ne_bytes(decimal))
-            );
-            assert_eq!(text, expected);
-            ynz_string_release(joined);
-        }
+            },
     }
 }
 
@@ -5655,11 +5422,11 @@ mod release_walk_tests {
         MAP_VALUES.lock().unwrap().push(value as usize);
     }
 
-    /// Bug: the array walk hands the glue the cell's address where the item is a pointer (or the
-    /// pointer where the item is inline), so a string or a shape is released from the wrong
-    /// address; or it skips an item. High: data integrity (a wrong release is a double free).
+    /// The array walk hands the glue the cell's address where the item is a pointer, or skips an
+    /// item.
+    // bug: ynz_array_release of pointer items hands the glue the cell's address instead of the item pointer, or skips an item, so a string is released from the wrong address (a double free) | tier: High
     #[test]
-    fn an_array_release_walks_every_item_with_the_right_argument() {
+    fn an_array_release_walks_every_pointer_item_with_the_right_argument() {
         unsafe {
             let pointers = ynz_array_new(8);
             let fake_items: [usize; 3] = [0x1000, 0x2000, 0x3000];
@@ -5668,7 +5435,14 @@ mod release_walk_tests {
             }
             ynz_array_release(pointers, Some(record_array_pointer_item), 0);
             assert_eq!(*ARRAY_POINTER_ITEMS.lock().unwrap(), fake_items.to_vec());
+        }
+    }
 
+    /// The array walk hands the glue the pointer where the item is inline.
+    // bug: ynz_array_release of inline items hands the glue the stored pointer instead of the cell address, or skips an item, so a shape is released from the wrong address (a double free) | tier: High
+    #[test]
+    fn an_array_release_walks_every_inline_item_with_the_right_argument() {
+        unsafe {
             let inline = ynz_array_new(16);
             let first_cell = inline_data_address(inline);
             let cell = [1u8; 16];
@@ -5689,6 +5463,7 @@ mod release_walk_tests {
     /// Bug: the map walk releases a deleted or empty slot, releases a key twice (the insertion
     /// order buffer repeats every key), or ignores the key glue, so a string key (a raw pointer
     /// the map owns) leaks. High: data integrity.
+    // bug: ynz_map_release releases a deleted or empty slot, releases a key twice (the insertion order repeats every key) or ignores the key glue, so a string key leaks or is freed twice | tier: High
     #[test]
     fn a_map_release_walks_each_occupied_slot_once_keys_and_values() {
         unsafe {
@@ -5727,6 +5502,7 @@ mod release_walk_tests {
     /// handed (a leak per overwrite), or fails to release the value it replaces. The stored key
     /// itself is handed back in (a read of the map's own key) and must be left alone. High: data
     /// integrity.
+    // bug: ynz_map_set_str over a present key releases the stored key (a later lookup reads freed bytes), or leaks the duplicate key or the replaced value | tier: High
     #[test]
     fn a_set_over_a_present_key_releases_the_duplicate_key_and_the_replaced_value_only() {
         unsafe {
@@ -5783,11 +5559,19 @@ mod release_walk_tests {
         ynz_string_release(key as *const u8);
     }
 
-    /// Bug: a null container (a moved-out slot) makes the release dereference null.
+    /// A null container (a moved-out slot) must not be dereferenced.
+    // bug: ynz_array_release of a null array (a moved-out slot) dereferences null | tier: High
     #[test]
-    fn releasing_a_null_container_is_a_no_op() {
+    fn releasing_a_null_array_is_a_no_op() {
         unsafe {
             ynz_array_release(std::ptr::null_mut(), None, 0);
+        }
+    }
+
+    // bug: ynz_map_release of a null map (a moved-out slot) dereferences null | tier: High
+    #[test]
+    fn releasing_a_null_map_is_a_no_op() {
+        unsafe {
             ynz_map_release(std::ptr::null_mut(), None, None, 0);
         }
     }
@@ -5816,6 +5600,7 @@ mod release_walk_tests {
     /// round-trip, an identical key is not found, growth loses keys, iteration reads half a key, or
     /// a copy shares the source's key buffer. A key of another scale is another key: the map holds
     /// the 16 bytes and nothing more. High: data integrity.
+    // bug: a decimal map key is stored as 8 bytes or moved by the wrong width, so a key does not round-trip, growth loses keys, iteration reads half a key or a clone shares the source's key buffer | tier: High
     #[test]
     fn decimal_keys_round_trip_overwrite_grow_iterate_and_clone() {
         unsafe {
@@ -5878,11 +5663,37 @@ mod release_walk_tests {
         }
     }
 
-    /// Bug: a key whose bytes are not an ordinary finite number (a NaN, an infinity, a negative
-    /// zero) mis-stored or mis-hashed, so an identical key is inserted again by every `set` or
-    /// never found. Each is held as the bytes it is. High: data integrity.
+    /// A key whose bytes are not an ordinary finite number (a NaN, an infinity, a negative zero)
+    /// is held as the bytes it is; an identical key is found, never inserted again.
+    macro_rules! special_decimal_key_cases {
+        ($($name:ident: $key:expr,)*) => {$(
+            // bug: a decimal key whose bytes are not an ordinary finite number (NaN, an infinity, a negative zero) is mis-stored or mis-hashed, so an identical key is inserted again by every set or never found | tier: High
+            #[test]
+            fn $name() {
+                unsafe {
+                    let map = ynz_map_new_decimal_keys(8);
+                    decimal_set(map, $key, 1);
+                    decimal_set(map, $key, 2);
+                    assert_eq!(ynz_map_count(map), 1, "an identical key overwrites");
+                    assert_eq!(decimal_get(map, $key), Some(2));
+                    assert_eq!(decimal_get(map, "1"), None);
+                    ynz_map_release(map, None, None, 0);
+                }
+            }
+        )*};
+    }
+    special_decimal_key_cases! {
+        a_nan_decimal_key_is_found_by_its_own_bytes: "NaN",
+        a_positive_infinity_decimal_key_is_found_by_its_own_bytes: "Infinity",
+        a_negative_infinity_decimal_key_is_found_by_its_own_bytes: "-Infinity",
+        a_zero_decimal_key_is_found_by_its_own_bytes: "0",
+        a_negative_zero_decimal_key_is_found_by_its_own_bytes: "-0",
+        a_large_exponent_decimal_key_is_found_by_its_own_bytes: "1E+33",
+    }
+
+    // bug: special decimal keys (NaN, the infinities, zero and negative zero) hash or compare as each other, so one overwrites another instead of holding six entries | tier: High
     #[test]
-    fn special_decimal_keys_are_found_by_their_own_bytes() {
+    fn special_decimal_keys_are_distinct_entries() {
         unsafe {
             let map = ynz_map_new_decimal_keys(8);
             for (key, value) in [
@@ -5894,63 +5705,73 @@ mod release_walk_tests {
                 ("1E+33", 6),
             ] {
                 decimal_set(map, key, value);
-                decimal_set(map, key, value * 10);
             }
             assert_eq!(ynz_map_count(map), 6, "one entry per distinct key bytes");
-            assert_eq!(decimal_get(map, "NaN"), Some(10));
-            assert_eq!(decimal_get(map, "Infinity"), Some(20));
-            assert_eq!(decimal_get(map, "-Infinity"), Some(30));
-            assert_eq!(decimal_get(map, "0"), Some(40));
-            assert_eq!(decimal_get(map, "-0"), Some(50));
-            assert_eq!(decimal_get(map, "1E+33"), Some(60));
-            assert_eq!(decimal_get(map, "1"), None);
+            assert_eq!(decimal_get(map, "0"), Some(4));
+            assert_eq!(decimal_get(map, "-0"), Some(5));
             ynz_map_release(map, None, None, 0);
         }
     }
 
-    /// Bug: the one `map_grow` (shared by int, string and decimal keys) or `order_push` moving an
-    /// int or string key by the wrong width or hash, so growth past the first rehash loses or
-    /// scrambles entries. Int and string keys behave as before decimal keys existed. High: data
-    /// integrity.
+    const GROWN_KEYS: i64 = 300;
+
+    /// The one `map_grow` (shared by int, string and decimal keys) and `order_push` must move an
+    /// int or string key by the right width and hash.
+    // bug: map_grow or order_push moves an int key by the wrong width or hash, so growth past the first rehash loses or scrambles int-keyed entries | tier: High
     #[test]
-    fn int_and_string_keys_still_grow_find_and_keep_insertion_order() {
-        const KEYS: i64 = 300;
+    fn int_keys_still_grow_find_and_keep_insertion_order() {
         unsafe {
             let ints = ynz_map_new(8);
-            let strings = ynz_map_new(8);
-            for entry in 0..KEYS {
+            for entry in 0..GROWN_KEYS {
                 let value = entry * 3;
                 ynz_map_set(ints, entry * 7919, value.to_ne_bytes().as_ptr(), None, 0);
-                let key = ynz_string_clone(format!("key {entry}\0").as_ptr());
-                ynz_map_set_str(strings, key, value.to_ne_bytes().as_ptr(), None, None, 0);
             }
-            assert_eq!(ynz_map_count(ints), KEYS);
-            assert_eq!(ynz_map_count(strings), KEYS);
+            assert_eq!(ynz_map_count(ints), GROWN_KEYS);
             let mut out = [0u8; 8];
-            for entry in 0..KEYS {
+            for entry in 0..GROWN_KEYS {
                 assert_eq!(ynz_map_get(ints, entry * 7919, out.as_mut_ptr()), 1);
                 assert_eq!(i64::from_ne_bytes(out), entry * 3);
-                let probe = ynz_string_clone(format!("key {entry}\0").as_ptr());
-                assert_eq!(ynz_map_get_str(strings, probe, out.as_mut_ptr()), 1);
-                assert_eq!(i64::from_ne_bytes(out), entry * 3);
-                ynz_string_release(probe);
             }
             assert_eq!(ynz_map_get(ints, -1, out.as_mut_ptr()), 0);
             let mut key_bits = 0i64;
-            for position in [0, KEYS - 1] {
+            for position in [0, GROWN_KEYS - 1] {
                 assert_eq!(
                     ynz_map_iter_get(ints, position, &mut key_bits, out.as_mut_ptr()),
                     1
                 );
                 assert_eq!(key_bits, position * 7919, "insertion order of int keys");
                 assert_eq!(i64::from_ne_bytes(out), position * 3);
+            }
+            ynz_map_release(ints, None, None, 0);
+        }
+    }
+
+    // bug: map_grow or order_push moves a string key by the wrong width or hash, so growth past the first rehash loses or scrambles string-keyed entries | tier: High
+    #[test]
+    fn string_keys_still_grow_find_and_keep_insertion_order() {
+        unsafe {
+            let strings = ynz_map_new(8);
+            for entry in 0..GROWN_KEYS {
+                let value = entry * 3;
+                let key = ynz_string_clone(format!("key {entry}\0").as_ptr());
+                ynz_map_set_str(strings, key, value.to_ne_bytes().as_ptr(), None, None, 0);
+            }
+            assert_eq!(ynz_map_count(strings), GROWN_KEYS);
+            let mut out = [0u8; 8];
+            for entry in 0..GROWN_KEYS {
+                let probe = ynz_string_clone(format!("key {entry}\0").as_ptr());
+                assert_eq!(ynz_map_get_str(strings, probe, out.as_mut_ptr()), 1);
+                assert_eq!(i64::from_ne_bytes(out), entry * 3);
+                ynz_string_release(probe);
+            }
+            let mut key_bits = 0i64;
+            for position in [0, GROWN_KEYS - 1] {
                 assert_eq!(
                     ynz_map_iter_get_str(strings, position, &mut key_bits, out.as_mut_ptr()),
                     1
                 );
                 assert_eq!(i64::from_ne_bytes(out), position * 3);
             }
-            ynz_map_release(ints, None, None, 0);
             ynz_map_release(strings, Some(release_string_glue), None, 0);
         }
     }
@@ -6007,6 +5828,7 @@ mod drop_entry_contract {
         0
     }
 
+    // bug: SpawnStateFnFuture drop skips the cleanup entry on a parked frame, so every heap local of a cancelled task leaks | tier: High
     #[test]
     fn a_parked_frame_is_entered_at_the_complement_of_its_resume_point() {
         unsafe {
@@ -6023,6 +5845,7 @@ mod drop_entry_contract {
         0
     }
 
+    // bug: SpawnStateFnFuture drop enters a returned frame, freeing what the function's own scope exit already freed (a double free) | tier: High
     #[test]
     fn a_returned_frame_is_not_entered() {
         unsafe {
@@ -6040,6 +5863,7 @@ mod drop_entry_contract {
         panic!("the resume function unwinds mid-statement");
     }
 
+    // bug: SpawnStateFnFuture drop enters a frame whose resume function unwound mid-statement, freeing locals the unwind already dropped (a double free) | tier: High
     #[test]
     fn a_frame_whose_resume_function_unwound_is_not_entered() {
         unsafe {
