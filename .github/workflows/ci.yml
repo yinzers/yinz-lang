@@ -445,6 +445,32 @@ jobs:
           cargo miri test -p ynz-runtime ${{ matrix.target.flag }} 2>&1 | tee miri.log
           .github/scripts/sum-test-results.sh miri.log
 
+  # TRIAL (card #681, draft PR only): the former single whole-crate Miri invocation, on the same
+  # pinned nightly, so the card can quote test count and wall clock before against after the
+  # split. Delete with the tmpfs column when the findings are filed.
+  miri-baseline:
+    name: Miri baseline (whole crate, former single job)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install Rust nightly (rust-src + miri)
+        uses: ./.github/actions/setup-rust
+        with:
+          toolchain: nightly-2026-11-20
+          components: rust-src, miri
+          cache-name: miri-baseline
+
+      - name: Miri (ynz-runtime, whole crate)
+        shell: bash
+        run: |
+          set -euo pipefail
+          start_seconds="${SECONDS}"
+          cargo miri test -p ynz-runtime 2>&1 | tee miri.log
+          .github/scripts/sum-test-results.sh miri.log
+          echo "::notice title=miri baseline wall clock::whole crate: $(( SECONDS - start_seconds )) s"
+
   sanitizers:
     name: Sanitizers (TSan / ASan) — ynz-runtime
     runs-on: ubuntu-24.04
