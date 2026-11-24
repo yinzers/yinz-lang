@@ -1436,81 +1436,10 @@ mod promotion_tests {
     use super::*;
     use ynz_parser::{CompilerDb, SourceFile};
 
-    /// Inputs `compute_cpu_promotions` consumes, assembled from a real sig + check
-    /// pass on single-file source — exactly what `cpu_promotion_query` builds.
-    struct PromoInputs {
-        module: Module,
-        sig_table: SignatureTable,
-        shape_table: ShapeTable,
-        imported_fns: std::collections::HashMap<String, FunctionSig>,
-        base_suspends: std::collections::HashSet<String>,
-        expr_types: std::collections::HashMap<(usize, usize), crate::types::Type>,
-        release_plan: crate::release_plan::ReleasePlan,
-    }
-
-    fn build_inputs(src: &str) -> PromoInputs {
-        let mut db = CompilerDb::default();
-        let sf = SourceFile::new(&db, "test.ynz".to_string(), src.to_string());
-        db.register_source(sf);
-
-        let parse = parse_query(&db, sf);
-        let sig_output = module_signatures_query(&db, sf);
-        let check_out = check_query(&db, sf);
-
-        let mut sig_table = sig_output.sig_table.clone();
-        for (name, sig) in &sig_output.imported_fns {
-            sig_table
-                .fns
-                .entry(name.clone())
-                .or_insert_with(|| sig.clone());
-        }
-        for (name, sig) in sig_table.fns.iter_mut() {
-            if check_out.suspends_set.contains(name.as_str()) {
-                sig.suspends = true;
-            }
-            if check_out.does_real_work_set.contains(name.as_str()) {
-                sig.does_real_work = true;
-            }
-        }
-
-        PromoInputs {
-            module: parse.module.clone(),
-            sig_table,
-            shape_table: sig_output.shape_table.clone(),
-            imported_fns: sig_output.imported_fns.clone(),
-            base_suspends: check_out.suspends_set.clone(),
-            expr_types: check_out.typed_module.expr_types.clone(),
-            release_plan: check_out.typed_module.release_plan.clone(),
-        }
-    }
-
-    fn promote(
-        inputs: &PromoInputs,
-        kernel: bool,
-        no_auto: bool,
-    ) -> std::collections::HashSet<String> {
-        let imported_fn_names: std::collections::HashSet<String> =
-            inputs.imported_fns.keys().cloned().collect();
-        let imported_suspending: std::collections::HashSet<String> = inputs
-            .imported_fns
-            .iter()
-            .filter(|(_, s)| s.suspends)
-            .map(|(n, _)| n.clone())
-            .collect();
-        compute_cpu_promotions(
-            &inputs.module,
-            &inputs.sig_table,
-            &inputs.shape_table,
-            &inputs.imported_fns,
-            &inputs.base_suspends,
-            &imported_fn_names,
-            &imported_suspending,
-            &inputs.expr_types,
-            kernel,
-            no_auto,
-            &inputs.release_plan,
-        )
-    }
+    /// Serializes every test that reads or writes the process-global `YNZ_NO_AUTO_PARALLEL` env
+    /// var (`cpu_promotion_query` reads it at its entry); under plain `cargo test` the tests of
+    /// this module share one process, and one test's `set_var` would race another's query.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     const FIB: &str = r#"
 function fib(n: Int) -> Int {
@@ -1519,708 +1448,231 @@ function fib(n: Int) -> Int {
 }
 "#;
 
-    #[test]
-    fn clean_two_member_cpu_group_promotes() {
-        // WHY: the headline pattern — two independent heavy CPU calls become a CPU
-        // group, so the enclosing function promotes to a state machine.
-        let src = format!(
-            r#"{FIB}
-function entrypoint() -> Nothing {{
-    let a = fib(20)
-    let b = fib(21)
-    print(a)
-    print(b)
-}}
-"#
-        );
-        let inputs = build_inputs(&src);
-        let promoted = promote(&inputs, false, false);
-        assert!(
-            promoted.contains("entrypoint"),
-            "clean 2-member CPU group must promote the host; got: {promoted:?}"
-        );
-        // fib is self-recursive (a cycle of size 1 is NOT a mutual cycle) and is a
-        // CALLEE, not a host with its own CPU group — it must not be promoted.
-        assert!(
-            !promoted.contains("fib"),
-            "the callee fib must not be promoted"
-        );
+    fn source_file(db: &mut CompilerDb, file_name: &str, source: &str) -> SourceFile {
+        let source_file = SourceFile::new(db, file_name.to_string(), source.to_string());
+        db.register_source(source_file);
+        source_file
     }
 
-    #[test]
-    fn same_callee_cpu_pair_promotes() {
-        // WHY: Research Finding 6 — same-callee CPU calls CAN parallelize (per-
-        // invocation ctx), unlike the suspending same-callee restriction.
-        let src = format!(
-            r#"{FIB}
-function entrypoint() -> Nothing {{
-    let a = fib(20)
-    let b = fib(20)
-    print(a)
-    print(b)
-}}
-"#
-        );
-        let inputs = build_inputs(&src);
-        let promoted = promote(&inputs, false, false);
-        assert!(
-            promoted.contains("entrypoint"),
-            "same-callee CPU pair must promote the host; got: {promoted:?}"
-        );
-    }
-
-    #[test]
-    fn trivial_leaf_calls_do_not_promote() {
-        // WHY: the worth-it proxy — two calls to a trivial leaf are not worth spawning.
-        let src = r#"
-function add(n: Int) -> Int { return n + 1 }
-function entrypoint() -> Nothing {
-    let a = add(20)
-    let b = add(21)
-    print(a)
-    print(b)
-}
-"#;
-        let inputs = build_inputs(src);
-        let promoted = promote(&inputs, false, false);
-        assert!(
-            promoted.is_empty(),
-            "trivial-leaf calls must NOT promote; got: {promoted:?}"
-        );
-    }
-
-    #[test]
-    fn data_dependent_calls_do_not_promote() {
-        // WHY: a data dependency breaks the group → no parallel group → no promotion.
-        let src = format!(
-            r#"{FIB}
-function entrypoint() -> Nothing {{
-    let a = fib(20)
-    let b = fib(a)
-    print(a)
-    print(b)
-}}
-"#
-        );
-        let inputs = build_inputs(&src);
-        let promoted = promote(&inputs, false, false);
-        assert!(
-            promoted.is_empty(),
-            "data-dependent calls must NOT form a CPU group; got: {promoted:?}"
-        );
-    }
-
-    #[test]
-    fn mutual_cycle_member_never_promotes() {
-        // WHY: functions in a mutual call cycle are never promoted (mixed-layout
-        // mutual-suspension prevention). Even with a CPU group, a cyclic host declines.
-        let src = format!(
-            r#"{FIB}
-function pingHost() -> Nothing {{
-    let a = fib(20)
-    let b = fib(21)
-    print(a)
-    print(b)
-    pongHost()
-}}
-function pongHost() -> Nothing {{
-    pingHost()
-}}
-function entrypoint() -> Nothing {{ pingHost() }}
-"#
-        );
-        let inputs = build_inputs(&src);
-        let promoted = promote(&inputs, false, false);
-        assert!(
-            !promoted.contains("pingHost"),
-            "a mutual-cycle member must never promote; got: {promoted:?}"
-        );
-        assert!(!promoted.contains("pongHost"));
-        // The MutualSuspensionCycle decline (via the candidacy-gate cyclic-member
-        // exclusion) must keep the program compiling clean — promotion never introduces
-        // a new compile error.
-        assert!(
-            !has_errors(&src),
-            "the mutual-cycle decline must keep the program compiling with no new errors"
-        );
-    }
-
-    #[test]
-    fn no_auto_parallel_flag_declines_all() {
-        // WHY: the program-wide escape hatch — promotion declines entirely.
-        let src = format!(
-            r#"{FIB}
-function entrypoint() -> Nothing {{
-    let a = fib(20)
-    let b = fib(21)
-    print(a)
-    print(b)
-}}
-"#
-        );
-        let inputs = build_inputs(&src);
-        let promoted = promote(&inputs, false, /*no_auto=*/ true);
-        assert!(
-            promoted.is_empty(),
-            "--no-auto-parallel must decline all promotions; got: {promoted:?}"
-        );
-    }
-
-    #[test]
-    fn kernel_mode_declines_all() {
-        // WHY: kernel mode has no scheduler to spawn onto — promotion declines
-        // (inline-sequential fallback, never an error).
-        let src = format!(
-            r#"{FIB}
-function entrypoint() -> Nothing {{
-    let a = fib(20)
-    let b = fib(21)
-    print(a)
-    print(b)
-}}
-"#
-        );
-        let inputs = build_inputs(&src);
-        let promoted = promote(&inputs, /*kernel=*/ true, false);
-        assert!(
-            promoted.is_empty(),
-            "kernel mode must decline all promotions; got: {promoted:?}"
-        );
-    }
-
-    #[test]
-    fn promotion_is_deterministic_across_runs() {
-        // WHY: the candidate + rollback fixpoint must be order-independent.
-        let src = format!(
-            r#"{FIB}
-function sumTo(n: Int) -> Int {{
-    let t = 0
-    let i = 0
-    while (i < n) {{ t = t + i; i = i + 1 }}
-    return t
-}}
-function entrypoint() -> Nothing {{
-    let a = fib(20)
-    let b = sumTo(21)
-    print(a)
-    print(b)
-}}
-"#
-        );
-        let inputs = build_inputs(&src);
-        let a = promote(&inputs, false, false);
-        let b = promote(&inputs, false, false);
-        assert_eq!(a, b, "promotion set must be deterministic");
-        assert!(a.contains("entrypoint"));
-    }
-
-    /// Serializes every test that reads or writes the process-global
-    /// `YNZ_NO_AUTO_PARALLEL` env var (the salsa query reads it at its entry). Without
-    /// this lock, one test's `set_var` races another test's query and both flake. Any
-    /// test that calls `cpu_promotion_query` (which reads the env var) holds this lock.
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    #[test]
-    fn salsa_query_respects_no_auto_parallel_env() {
-        // WHY: the salsa query reads YNZ_NO_AUTO_PARALLEL at its entry — verify the
-        // gate wiring (separate from the pure-fn flag tests). The ENV_LOCK serializes
-        // this against any other env-var-touching test; the var is restored after.
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let src = format!(
-            r#"{FIB}
-function entrypoint() -> Nothing {{
-    let a = fib(20)
-    let b = fib(21)
-    print(a)
-    print(b)
-}}
-"#
-        );
-        let mut db = CompilerDb::default();
-        let sf = SourceFile::new(&db, "envtest.ynz".to_string(), src);
-        db.register_source(sf);
-
-        // Sanity: without the flag, the host promotes.
+    /// The functions `cpu_promotion_query` promotes, with the kill switch off.
+    fn promoted_functions(source: &str) -> std::collections::HashSet<String> {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::remove_var("YNZ_NO_AUTO_PARALLEL");
-        let on = cpu_promotion_query(&db, sf);
-        assert!(
-            on.promoted.contains("entrypoint"),
-            "without --no-auto-parallel the host should promote; got: {:?}",
-            on.promoted
-        );
-
-        // With the flag set, the query declines entirely.
-        std::env::set_var("YNZ_NO_AUTO_PARALLEL", "1");
-        // A fresh db so the salsa cache re-evaluates with the env var visible.
-        let mut db2 = CompilerDb::default();
-        let src2 = format!(
-            r#"{FIB}
-function entrypoint() -> Nothing {{
-    let a = fib(20)
-    let b = fib(21)
-    print(a)
-    print(b)
-}}
-"#
-        );
-        let sf2 = SourceFile::new(&db2, "envtest2.ynz".to_string(), src2);
-        db2.register_source(sf2);
-        let off = cpu_promotion_query(&db2, sf2);
-        std::env::remove_var("YNZ_NO_AUTO_PARALLEL");
-        assert!(
-            off.promoted.is_empty(),
-            "with --no-auto-parallel the query must decline; got: {:?}",
-            off.promoted
-        );
+        let mut db = CompilerDb::default();
+        let source_file = source_file(&mut db, "test.ynz", source);
+        cpu_promotion_query(&db, source_file).promoted.clone()
     }
 
-    // Guard-probe decline: a CPU group whose host would trip a suspension guard declines
-    // silently and the program still compiles with no new errors.
-
-    /// Run the full check pass and return whether it produced any ERROR diagnostic.
-    fn has_errors(src: &str) -> bool {
+    /// The `what` text of every error-severity diagnostic the check pass emits.
+    fn error_whats(source: &str) -> Vec<String> {
         let mut db = CompilerDb::default();
-        let sf = SourceFile::new(&db, "guard.ynz".to_string(), src.to_string());
-        db.register_source(sf);
-        let check_out = check_query(&db, sf);
-        let has_err = check_out
+        let source_file = source_file(&mut db, "guard.ynz", source);
+        check_query(&db, source_file)
             .diagnostics
             .iter()
-            .any(|d| d.severity == ynz_diagnostics::Severity::Error);
-        has_err
-    }
-
-    /// Collect the `what` text of every error-severity diagnostic the check pass emits.
-    /// Used by the for-with-wait decline fixtures to prove the PRE-EXISTING for-wait guard
-    /// (not anything M3d added) is what rejected the shape, and that the RIGHT guard fired.
-    fn error_whats(src: &str) -> Vec<String> {
-        let mut db = CompilerDb::default();
-        let sf = SourceFile::new(&db, "guard.ynz".to_string(), src.to_string());
-        db.register_source(sf);
-        let check_out = check_query(&db, sf);
-        check_out
-            .diagnostics
-            .iter()
-            .filter(|d| d.severity == ynz_diagnostics::Severity::Error)
-            .map(|d| d.what.clone())
+            .filter(|diagnostic| diagnostic.severity == ynz_diagnostics::Severity::Error)
+            .map(|diagnostic| diagnostic.what.clone())
             .collect()
     }
 
-    #[test]
-    fn wide_shape_return_host_declines_and_compiles_clean() {
-        // WHY (WideValueSuspendingReturn decline): a host that returns a bare Shape
-        // and ALSO has a CPU pair must NOT promote — promoting it would make it a
-        // suspending function returning a Shape, which the wide-return guard rejects.
-        // The decline keeps it sequential, so it must still compile with zero errors.
-        let src = format!(
-            r#"{FIB}
-shape Point {{
-    x: Int
-    y: Int
-}}
-function makePoint() -> Point {{
-    let a = fib(20)
-    let b = fib(21)
-    return {{ x: a, y: b }}
-}}
-function entrypoint() -> Nothing {{
-    let p = makePoint()
-    print(p.x)
-}}
-"#
-        );
-        let inputs = build_inputs(&src);
-        let promoted = promote(&inputs, false, false);
-        assert!(
-            !promoted.contains("makePoint"),
-            "a wide-Shape-return host must decline promotion; got: {promoted:?}"
-        );
-        assert!(
-            !has_errors(&src),
-            "the wide-return decline must keep the program compiling with no new errors"
-        );
+    /// One named test per case so the runner names the failing case. Each case lists the functions
+    /// that must be promoted and the ones that must not, and the program must still compile with
+    /// no error (promotion never introduces one).
+    macro_rules! promotion_case {
+        ($test_name:ident, source: $source:expr, promoted: [$($promoted:expr),*], declined: [$($declined:expr),*]) => {
+            // bug: cpu_promotion_query promotes a host that cannot become a state machine (the checker then rejects a program that compiled before: a silent compile break) or declines one that can (the lost parallel speed-up) | tier: Medium
+            #[test]
+            fn $test_name() {
+                let source: String = $source;
+                let promoted = promoted_functions(&source);
+                $(assert!(promoted.contains($promoted), "{} must be promoted; got {promoted:?}", $promoted);)*
+                $(assert!(!promoted.contains($declined), "{} must NOT be promoted; got {promoted:?}", $declined);)*
+                assert_eq!(error_whats(&source), Vec::<String>::new(), "promotion must not introduce an error");
+            }
+        };
     }
 
-    #[test]
-    fn nested_shape_crossing_local_host_declines_and_compiles_clean() {
-        // WHY (nested-shape crossing decline): a shape value with a nested-shape field,
-        // bound to a local that crosses the CPU join, cannot be frame-embedded yet.
-        // Promoting the host trips the crossing-local guard, so promotion declines and
-        // the program compiles clean sequentially (no new error).
-        let src = format!(
-            r#"{FIB}
-shape Inner {{
-    v: Int
-}}
-shape Outer {{
-    inner: Inner
-    tag: Int
-}}
-function makeOuter() -> Outer {{
-    let i: Inner = {{ v: 1 }}
-    return {{ inner: i, tag: 2 }}
-}}
-function entrypoint() -> Nothing {{
-    let w = makeOuter()
-    let a = fib(20)
-    let b = fib(21)
-    print(a)
-    print(b)
-    print(w.tag)
-}}
-"#
-        );
-        let inputs = build_inputs(&src);
-        let promoted = promote(&inputs, false, false);
-        assert!(
-            !promoted.contains("entrypoint"),
-            "a nested-shape-crossing-local host must decline promotion; got: {promoted:?}"
-        );
-        assert!(
-            !has_errors(&src),
-            "the crossing-local decline must keep the program compiling with no new errors"
-        );
-    }
+    // Thirteen cases here, three for-with-wait cases and two query cases below (18 for one query), over
+    // the Medium guide of three, justified in the lane report: each is a
+    // different decline guard or seed of the promotion probe (a distinct code path with its own
+    // shipped bug), not a variation of one input.
 
-    #[test]
-    fn cpu_callee_in_noncandidate_caller_subexpr_does_not_roll_back_sound_candidate() {
-        // WHY (per-candidate CPU-callee seeding): the guard probe seeds a promoted
-        // function's CPU callees into `suspending_fns` so a local crossing the CPU join
-        // is visible. That seed must be PER-CANDIDATE — augmenting the probe's suspending
-        // set ONLY when probing the candidate itself. A NON-candidate caller that happens
-        // to call the same CPU callee in a sub-expression position (`let x = fib(10) + 1`)
-        // must NOT be probed against `fib` as a suspending function: it isn't promoted, so
-        // `fib` is an ordinary call there. A global seed would fire
-        // `suspending_calls_in_subexpr_position` on the non-candidate caller and roll back
-        // the SOUND candidate it transitively calls — a false negative.
-        let src = format!(
-            r#"{FIB}
-function caller() -> Nothing {{
-    let a = fib(20)
-    let b = fib(21)
-    print(a)
-    print(b)
-}}
-function wrapper() -> Nothing {{
-    let x = fib(10) + 1
-    print(x)
-    caller()
-}}
-function entrypoint() -> Nothing {{
-    wrapper()
-}}
-"#
-        );
-        let inputs = build_inputs(&src);
-        let promoted = promote(&inputs, false, false);
-        assert!(
-            promoted.contains("caller"),
-            "a sound CPU candidate must promote even when a non-candidate caller calls \
-             the same CPU callee in a sub-expression; the seed must be per-candidate. \
-             got: {promoted:?}"
-        );
-    }
+    // Case bug: the headline pair of independent heavy calls does not promote its host (the callee `fib` is not a host).
+    promotion_case!(
+        a_clean_two_member_cpu_group_promotes_its_host,
+        source: [FIB, "function entrypoint() -> Nothing {\n    let a = fib(20)\n    let b = fib(21)\n    print(a)\n    print(b)\n}\n"].concat(),
+        promoted: ["entrypoint"],
+        declined: ["fib"]
+    );
+    // Case bug: two calls of the SAME callee are refused the way suspending same-callee calls are (research finding 6).
+    promotion_case!(
+        a_same_callee_cpu_pair_promotes,
+        source: [FIB, "function entrypoint() -> Nothing {\n    let a = fib(20)\n    let b = fib(20)\n    print(a)\n    print(b)\n}\n"].concat(),
+        promoted: ["entrypoint"],
+        declined: []
+    );
+    // Case bug: calls to a trivial leaf are spawned (the worth-it proxy is ignored).
+    promotion_case!(
+        calls_to_a_trivial_leaf_do_not_promote,
+        source: "function add(n: Int) -> Int { return n + 1 }\nfunction entrypoint() -> Nothing {\n    let a = add(20)\n    let b = add(21)\n    print(a)\n    print(b)\n}\n".to_string(),
+        promoted: [],
+        declined: ["entrypoint"]
+    );
+    // Case bug: a data dependency between the calls still forms a parallel group.
+    promotion_case!(
+        data_dependent_calls_do_not_promote,
+        source: [FIB, "function entrypoint() -> Nothing {\n    let a = fib(20)\n    let b = fib(a)\n    print(a)\n    print(b)\n}\n"].concat(),
+        promoted: [],
+        declined: ["entrypoint"]
+    );
+    // Case bug: a member of a mutual call cycle is promoted (mixed-layout mutual suspension).
+    promotion_case!(
+        a_mutual_cycle_member_never_promotes,
+        source: [FIB, "function pingHost() -> Nothing {\n    let a = fib(20)\n    let b = fib(21)\n    print(a)\n    print(b)\n    pongHost()\n}\nfunction pongHost() -> Nothing {\n    pingHost()\n}\nfunction entrypoint() -> Nothing { pingHost() }\n"].concat(),
+        promoted: [],
+        declined: ["pingHost", "pongHost"]
+    );
+    // Case bug (WideValueSuspendingReturn): a host returning a bare shape is promoted into a suspending function the wide-return guard rejects.
+    promotion_case!(
+        a_host_returning_a_wide_shape_declines,
+        source: [FIB, "shape Point {\n    x: Int\n    y: Int\n}\nfunction makePoint() -> Point {\n    let a = fib(20)\n    let b = fib(21)\n    return { x: a, y: b }\n}\nfunction entrypoint() -> Nothing {\n    let p = makePoint()\n    print(p.x)\n}\n"].concat(),
+        promoted: [],
+        declined: ["makePoint"]
+    );
+    // Case bug: a nested-shape local that crosses the CPU join is promoted (it cannot be frame-embedded yet).
+    promotion_case!(
+        a_host_with_a_nested_shape_local_across_the_join_declines,
+        source: [FIB, "shape Inner {\n    v: Int\n}\nshape Outer {\n    inner: Inner\n    tag: Int\n}\nfunction makeOuter() -> Outer {\n    let i: Inner = { v: 1 }\n    return { inner: i, tag: 2 }\n}\nfunction entrypoint() -> Nothing {\n    let w = makeOuter()\n    let a = fib(20)\n    let b = fib(21)\n    print(a)\n    print(b)\n    print(w.tag)\n}\n"].concat(),
+        promoted: [],
+        declined: ["entrypoint"]
+    );
+    // Case bug: the guard probe seeds a CPU callee globally, so a NON-candidate caller that uses it in a sub-expression rolls back a sound candidate.
+    promotion_case!(
+        a_noncandidate_callers_subexpression_call_does_not_roll_back_a_sound_candidate,
+        source: [FIB, "function caller() -> Nothing {\n    let a = fib(20)\n    let b = fib(21)\n    print(a)\n    print(b)\n}\nfunction wrapper() -> Nothing {\n    let x = fib(10) + 1\n    print(x)\n    caller()\n}\nfunction entrypoint() -> Nothing {\n    wrapper()\n}\n"].concat(),
+        promoted: ["caller"],
+        declined: []
+    );
+    // Case bug (ShadowsCrossingLocal): a host whose parameter is re-declared by a nested `let` is promoted and the checker then rejects it.
+    promotion_case!(
+        a_host_with_a_nested_parameter_shadow_declines,
+        source: [FIB, "function host(seed: Int) -> Nothing {\n    let a = fib(20)\n    let b = fib(21)\n    if (a > 0) {\n        let seed = a + b\n        print(seed)\n    }\n    print(a)\n    print(b)\n}\nfunction entrypoint() -> Nothing {\n    host(1)\n}\n"].concat(),
+        promoted: [],
+        declined: ["host"]
+    );
+    // Case bug: a lifted guard (v0.3-M5): an Array<Shape> with runtime fields crossing the join is still declined.
+    promotion_case!(
+        a_host_with_a_runtime_field_array_of_shapes_across_the_join_promotes,
+        source: [FIB, "shape Item {\n    id: Int\n    qty: Int\n}\nfunction entrypoint() -> Nothing {\n    let qval = 10\n    let items: Array<Item> = [{ id: 1, qty: qval }, { id: 2, qty: qval }]\n    let a = fib(20)\n    let b = fib(21)\n    print(a)\n    print(b)\n    let total = 0\n    for (it in items) {\n        total = total + it.qty\n    }\n    print(total)\n}\n"].concat(),
+        promoted: ["entrypoint"],
+        declined: []
+    );
+    // Case bug: the three wait-gated for-loop guards fire on loops with no `wait` and block a valid pair.
+    promotion_case!(
+        wait_free_for_loops_do_not_block_promotion,
+        source: [FIB, "function makeArray() -> Array<Int> {\n    return [1, 2, 3]\n}\nfunction entrypoint() -> Nothing {\n    let sum = 0\n    for (i in range(0, 3)) {\n        sum = sum + i\n    }\n    let nums: Fixed<Int> = [10, 20, 30]\n    for (n in nums) {\n        sum = sum + n\n    }\n    for (m in makeArray()) {\n        sum = sum + m\n    }\n    print(sum)\n    let a = fib(20)\n    let b = fib(21)\n    print(a)\n    print(b)\n}\n"].concat(),
+        promoted: ["entrypoint"],
+        declined: []
+    );
+    // Case bug (base_suspends lifted): a suspending host with a clean top-level CPU group no longer promotes once the skip is lifted.
+    promotion_case!(
+        a_suspending_host_with_a_clean_cpu_group_promotes,
+        source: [FIB, "function entrypoint() -> Nothing {\n    let a = fib(20)\n    let b = fib(21)\n    wait sleep(0)\n    print(a)\n    print(b)\n}\n"].concat(),
+        promoted: ["entrypoint"],
+        declined: []
+    );
+    // Case bug (E6 guard-probe extension): a suspending host whose own CPU callee is also called in a sub-expression (`fib(22) + 1`) stays promoted; the hazard shows only when the probe seeds this candidate's callee.
+    promotion_case!(
+        a_suspending_host_with_a_subexpression_call_to_its_cpu_callee_declines,
+        source: [FIB, "function entrypoint() -> Nothing {\n    let a = fib(20)\n    let b = fib(21)\n    let c = fib(22) + 1\n    wait sleep(0)\n    print(a + b + c)\n}\n"].concat(),
+        promoted: [],
+        declined: ["entrypoint"]
+    );
 
-    #[test]
-    fn param_nested_let_shadow_host_declines_and_compiles_clean() {
-        // WHY (ShadowsCrossingLocal — parameter nested-shadow decline): a host with a
-        // CPU pair (making it a promotion candidate) AND a parameter re-declared by a
-        // `let` inside a NESTED block. The real checker's parameter-shadow guard
-        // (`param_has_nested_let_shadow`, Shape (a)) fires on ANY nested `let <param>`,
-        // even one not gated behind a top-level `wait`. If promotion turned this host
-        // into a state machine, `check_function` would reject it as `ShadowsCrossingLocal`
-        // — a silent compile break. The promotion probe MUST therefore detect the same
-        // nested param shadow and decline, keeping the host sequential and clean.
-        let src = format!(
-            r#"{FIB}
-function host(seed: Int) -> Nothing {{
-    let a = fib(20)
-    let b = fib(21)
-    if (a > 0) {{
-        let seed = a + b
-        print(seed)
-    }}
-    print(a)
-    print(b)
-}}
-function entrypoint() -> Nothing {{
-    host(1)
-}}
-"#
-        );
-        let inputs = build_inputs(&src);
-        let promoted = promote(&inputs, false, false);
-        assert!(
-            !promoted.contains("host"),
-            "a host with a nested parameter shadow must decline promotion (else \
-             check_function would later reject it as ShadowsCrossingLocal); got: {promoted:?}"
-        );
-        assert!(
-            !has_errors(&src),
-            "the parameter-shadow decline must keep the program compiling with no new errors"
-        );
-    }
-
-    #[test]
-    fn array_shape_runtime_field_crossing_host_promotes_and_compiles_clean() {
-        // WHY (ArrayShapeRuntimeFieldWithWait LIFTED, v0.3-M5 Phase 3): an `array<Shape>`
-        // whose elements have runtime-computed field values, bound to a local that crosses
-        // the CPU join, is now SAFE to frame-embed — the by-value ABI cut stores element
-        // bytes inline in the heap buffer (stable owner across any suspension), so
-        // `check_function` no longer rejects the promoted SM host and the probe must no
-        // longer decline it. This is the INVERSE of the pre-M5 decline test: the host
-        // must now PROMOTE, and the program must still compile with no errors. If this
-        // test starts failing with a decline, a rejection path for runtime-field
-        // array<Shape> crossings has been reintroduced — that class was lifted, not moved.
-        let src = format!(
-            r#"{FIB}
-shape Item {{
-    id: Int
-    qty: Int
-}}
-function entrypoint() -> Nothing {{
-    let qval = 10
-    let items: Array<Item> = [{{ id: 1, qty: qval }}, {{ id: 2, qty: qval }}]
-    let a = fib(20)
-    let b = fib(21)
-    print(a)
-    print(b)
-    let total = 0
-    for (it in items) {{
-        total = total + it.qty
-    }}
-    print(total)
-}}
-"#
-        );
-        let inputs = build_inputs(&src);
-        let promoted = promote(&inputs, false, false);
-        assert!(
-            promoted.contains("entrypoint"),
-            "an Array<Shape>-runtime-field crossing-local host must now PROMOTE (guard \
-             lifted by v0.3-M5 by-value storage); got: {promoted:?}"
-        );
-        assert!(
-            !has_errors(&src),
-            "the promoted Array<Shape>-runtime-field host must compile with no errors"
-        );
-    }
-
-    #[test]
-    fn wait_free_for_loop_does_not_block_promotion() {
-        // WHY (non-interference): a wait-FREE for-loop sitting beside a valid CPU pair must
-        // NOT spuriously block promotion. The three for-with-wait guards (StoredRangeWithWait
-        // / FixedArrayIterWithWait / ExpressionIterWithWait) are gated behind
-        // `has_explicit_waits` — they fire only on a `for` loop whose body contains an
-        // explicit `wait`. None of these loops carries a `wait`, so none of the guards apply,
-        // and the top-level CPU pair (`fib(20)` / `fib(21)`) promotes normally. This proves
-        // the wait-gated guards impose no cost on ordinary wait-free loops.
-        //
-        // (Those guards CAN fire — see `*_wait_host_declines_promotion` below, which drive
-        // each guard via a `for` body that waits on a non-suspending callee. This test only
-        // covers the complementary case: a wait-free loop doesn't get caught in the crossfire.)
-        let src = format!(
-            r#"{FIB}
-function makeArray() -> Array<Int> {{
-    return [1, 2, 3]
-}}
-function entrypoint() -> Nothing {{
-    let sum = 0
-    for (i in range(0, 3)) {{
-        sum = sum + i
-    }}
-    let nums: Fixed<Int> = [10, 20, 30]
-    for (n in nums) {{
-        sum = sum + n
-    }}
-    for (m in makeArray()) {{
-        sum = sum + m
-    }}
-    print(sum)
-    let a = fib(20)
-    let b = fib(21)
-    print(a)
-    print(b)
-}}
-"#
-        );
-        // The program is clean pre-promotion: no `wait`, so no for-with-wait guard fires.
-        assert!(
-            !has_errors(&src),
-            "a for-loop over a stored range/fixed/expr WITHOUT a wait must compile clean"
-        );
-        let inputs = build_inputs(&src);
-        let promoted = promote(&inputs, false, false);
-        assert!(
-            promoted.contains("entrypoint"),
-            "the CPU pair must promote; wait-free for-loops impose no decline. got: {promoted:?}"
-        );
-    }
-
-    // A trivial non-suspending callee for the three decline fixtures below. Waiting on it
-    // gives the host an explicit `wait` (so the for-with-wait guard reaches it) WITHOUT
-    // making the host I/O-suspending (it reaches no may-block call), so the host stays a
-    // CPU-promotion candidate. `wait tick()` only earns a "never suspends" WARNING — never
-    // an error — so the ONLY error each fixture sees is its for-with-wait guard.
+    // A trivial non-suspending callee: waiting on it gives the host an explicit `wait` (so the
+    // for-with-wait guard reaches it) without making it I/O-suspending, so it stays a CPU candidate.
     const TICK: &str = r#"
 function tick() -> Int {
     return 1
 }
 "#;
 
+    /// For-with-wait hosts: the shapes never compiled (the existing for-with-wait guard errors), so
+    /// the contract is: not promoted, and the one pre-existing guard named by `guard_text` fires.
+    macro_rules! for_with_wait_case {
+        ($test_name:ident, source: $source:expr, guard_text: $guard_text:expr) => {
+            // bug: a host whose `for` body waits on a stored range / fixed list / call-expression iterator is promoted into a state machine that cannot recover the iterator across the suspension, or promotion changes which guard error the user sees | tier: Medium
+            #[test]
+            fn $test_name() {
+                let source: String = $source;
+                let promoted = promoted_functions(&source);
+                assert!(!promoted.contains("entrypoint"), "got {promoted:?}");
+                let whats = error_whats(&source);
+                assert!(
+                    whats.iter().any(|what| what.contains($guard_text)),
+                    "must hit the guard {:?}; got errors {whats:?}",
+                    $guard_text
+                );
+            }
+        };
+    }
+
+    // Case bug: the StoredRangeWithWait guard (iterator is a stored `range` variable).
+    for_with_wait_case!(
+        a_stored_range_for_loop_that_waits_declines_promotion,
+        source: [FIB, TICK, "function entrypoint() -> Nothing {\n    let r = range(0, 3)\n    for (i in r) {\n        wait tick()\n    }\n    let a = fib(20)\n    let b = fib(21)\n    print(a)\n    print(b)\n}\n"].concat(),
+        guard_text: "stored range variable cannot yet be the iterator"
+    );
+    // Case bug: the FixedArrayIterWithWait guard (iterator is a `Fixed<T>` array).
+    for_with_wait_case!(
+        a_fixed_array_for_loop_that_waits_declines_promotion,
+        source: [FIB, TICK, "function entrypoint() -> Nothing {\n    let nums: Fixed<Int> = [10, 20, 30]\n    for (n in nums) {\n        wait tick()\n    }\n    let a = fib(20)\n    let b = fib(21)\n    print(a)\n    print(b)\n}\n"].concat(),
+        guard_text: "`Fixed<T>` array cannot be the iterator"
+    );
+    // Case bug: the ExpressionIterWithWait guard (iterator is a non-`range` call expression).
+    for_with_wait_case!(
+        a_call_expression_for_loop_that_waits_declines_promotion,
+        source: [FIB, TICK, "function makeArray() -> Array<Int> {\n    return [1, 2, 3]\n}\nfunction entrypoint() -> Nothing {\n    for (m in makeArray()) {\n        wait tick()\n    }\n    let a = fib(20)\n    let b = fib(21)\n    print(a)\n    print(b)\n}\n"].concat(),
+        guard_text: "call-expression iterator cannot yet be used"
+    );
+
+    // bug: cpu_promotion_query ignores the `--no-auto-parallel` kill switch (YNZ_NO_AUTO_PARALLEL), so the user's off switch does not turn promotion off | tier: Medium
     #[test]
-    fn stored_range_wait_host_declines_promotion() {
-        // WHY: these three guard shapes (this one + the fixed/expr fixtures below) ERROR
-        // pre-M3d via the EXISTING for-with-wait guards (check.rs ~590) — a `for` whose body
-        // waits cannot yet recover a stored-range / fixed / call-expr iterator across the
-        // suspension. So, unlike the 5 valid-but-unpromotable guards (which compile clean),
-        // the contract here is "NOT promoted + the pre-existing diagnostic is unchanged"
-        // (M3d introduced ZERO NEW diagnostics) — NOT "compiles clean". Step 7's
-        // "compiled pre-M3d" precondition does not apply: these shapes never compiled.
-        //
-        // This fixture isolates the StoredRangeWithWait guard: `r` is a stored `range(...)`
-        // variable, so the for-loop iterator is an `Ident` of `Type::Range`. The top-level
-        // `fib(20)` / `fib(21)` pair makes the host a genuine CPU-promotion candidate, so
-        // `!promoted` is NON-vacuous: the probe reaches this candidate and the for-wait guard
-        // declines it.
-        let src = format!(
-            r#"{FIB}{TICK}
-function entrypoint() -> Nothing {{
-    let r = range(0, 3)
-    for (i in r) {{
-        wait tick()
-    }}
-    let a = fib(20)
-    let b = fib(21)
-    print(a)
-    print(b)
-}}
-"#
-        );
-        // Non-vacuous decline: the host IS a CPU candidate (the fib pair), but the
-        // StoredRangeWithWait guard fires in the probe and rolls it back.
-        let inputs = build_inputs(&src);
-        let promoted = promote(&inputs, false, false);
+    fn the_no_auto_parallel_switch_declines_every_promotion() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let source = [
+            FIB,
+            "function entrypoint() -> Nothing {\n    let a = fib(20)\n    let b = fib(21)\n    print(a)\n    print(b)\n}\n",
+        ]
+        .concat();
+
+        std::env::remove_var("YNZ_NO_AUTO_PARALLEL");
+        let mut db_without_switch = CompilerDb::default();
+        let file_without_switch = source_file(&mut db_without_switch, "envtest.ynz", &source);
+        let promoted_without_switch = cpu_promotion_query(&db_without_switch, file_without_switch);
         assert!(
-            !promoted.contains("entrypoint"),
-            "a stored-range for-with-wait host must decline promotion; got: {promoted:?}"
+            promoted_without_switch.promoted.contains("entrypoint"),
+            "without the switch the host should promote; got: {:?}",
+            promoted_without_switch.promoted
         );
-        // Zero NEW diagnostics: the only error is the PRE-EXISTING StoredRangeWithWait guard,
-        // and it is THIS guard (not the fixed/expr one) — isolating the intended guard.
-        let whats = error_whats(&src);
+
+        // A fresh db, so the salsa cache re-evaluates with the env var visible.
+        std::env::set_var("YNZ_NO_AUTO_PARALLEL", "1");
+        let mut db_with_switch = CompilerDb::default();
+        let file_with_switch = source_file(&mut db_with_switch, "envtest2.ynz", &source);
+        let promoted_with_switch = cpu_promotion_query(&db_with_switch, file_with_switch);
+        std::env::remove_var("YNZ_NO_AUTO_PARALLEL");
         assert!(
-            whats
-                .iter()
-                .any(|w| w.contains("stored range variable cannot yet be the iterator")),
-            "must hit the StoredRangeWithWait guard; got errors: {whats:?}"
-        );
-        assert!(
-            !whats
-                .iter()
-                .any(|w| w.contains("`Fixed<T>` array") || w.contains("call-expression iterator")),
-            "must isolate StoredRangeWithWait — no fixed/expr guard should fire; got: {whats:?}"
+            promoted_with_switch.promoted.is_empty(),
+            "with the switch the query must decline; got: {:?}",
+            promoted_with_switch.promoted
         );
     }
 
+    // bug: an importer's call to an imported loop/recursion callee is not worth-it, because the callee's `does_real_work` flag does not ride the export table (cross-module propagation) | tier: Medium
     #[test]
-    fn fixed_array_iter_wait_host_declines_promotion() {
-        // WHY: see `stored_range_wait_host_declines_promotion` — these guard shapes error
-        // pre-M3d, so the contract is "NOT promoted + pre-existing diagnostic unchanged".
-        //
-        // This fixture isolates the FixedArrayIterWithWait guard: `nums: fixed<int>` makes
-        // the for-loop iterator an `Ident` of `Type::BuiltinFixed`. The fib pair makes the
-        // host a real CPU candidate, so the `!promoted` decline is non-vacuous.
-        let src = format!(
-            r#"{FIB}{TICK}
-function entrypoint() -> Nothing {{
-    let nums: Fixed<Int> = [10, 20, 30]
-    for (n in nums) {{
-        wait tick()
-    }}
-    let a = fib(20)
-    let b = fib(21)
-    print(a)
-    print(b)
-}}
-"#
-        );
-        let inputs = build_inputs(&src);
-        let promoted = promote(&inputs, false, false);
-        assert!(
-            !promoted.contains("entrypoint"),
-            "a Fixed<T>-iter for-with-wait host must decline promotion; got: {promoted:?}"
-        );
-        let whats = error_whats(&src);
-        assert!(
-            whats
-                .iter()
-                .any(|w| w.contains("`Fixed<T>` array cannot be the iterator")),
-            "must hit the FixedArrayIterWithWait guard; got errors: {whats:?}"
-        );
-        assert!(
-            !whats
-                .iter()
-                .any(|w| w.contains("stored range variable")
-                    || w.contains("call-expression iterator")),
-            "must isolate FixedArrayIterWithWait — no stored-range/expr guard; got: {whats:?}"
-        );
-    }
-
-    #[test]
-    fn expression_iter_wait_host_declines_promotion() {
-        // WHY: see `stored_range_wait_host_declines_promotion` — these guard shapes error
-        // pre-M3d, so the contract is "NOT promoted + pre-existing diagnostic unchanged".
-        //
-        // This fixture isolates the ExpressionIterWithWait guard: the for-loop iterates a
-        // call expression (`makeArray()`, a non-`range` call), not a plain identifier. The
-        // fib pair makes the host a real CPU candidate, so the `!promoted` decline is
-        // non-vacuous.
-        let src = format!(
-            r#"{FIB}{TICK}
-function makeArray() -> Array<Int> {{
-    return [1, 2, 3]
-}}
-function entrypoint() -> Nothing {{
-    for (m in makeArray()) {{
-        wait tick()
-    }}
-    let a = fib(20)
-    let b = fib(21)
-    print(a)
-    print(b)
-}}
-"#
-        );
-        let inputs = build_inputs(&src);
-        let promoted = promote(&inputs, false, false);
-        assert!(
-            !promoted.contains("entrypoint"),
-            "a call-expr-iter for-with-wait host must decline promotion; got: {promoted:?}"
-        );
-        let whats = error_whats(&src);
-        assert!(
-            whats
-                .iter()
-                .any(|w| w.contains("call-expression iterator cannot yet be used")),
-            "must hit the ExpressionIterWithWait guard; got errors: {whats:?}"
-        );
-        assert!(
-            !whats
-                .iter()
-                .any(|w| w.contains("stored range variable") || w.contains("`Fixed<T>` array")),
-            "must isolate ExpressionIterWithWait — no stored-range/fixed guard; got: {whats:?}"
-        );
-    }
-
-    #[test]
-    fn imported_real_work_callee_promotes_importer() {
-        // WHY (AC: does_real_work cross-module propagation): an importer that calls an
-        // imported loop/recursion callee TWICE in independent statements must promote —
-        // the imported callee's `does_real_work` flag rides the export table, so the
-        // importer's CPU candidacy sees it as worth-it. A two-file project proves the
-        // cross-module worth-it propagation end-to-end through the salsa queries.
-        // Holds ENV_LOCK because this calls `cpu_promotion_query` (reads the env var).
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    fn an_imported_real_work_callee_promotes_its_importer() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let dir = std::env::temp_dir().join(format!(
             "ynz_m3d_promo_{}",
             std::time::SystemTime::now()
@@ -2232,7 +1684,7 @@ function entrypoint() -> Nothing {{
         std::fs::write(dir.join("yinz.toml"), "[project]\nname = \"test\"\n")
             .expect("write yinz.toml");
 
-        let dep_src = r#"
+        let dependency_source = r#"
 export function heavy(n: Int) -> Int {
     let total = 0
     let i = 0
@@ -2243,7 +1695,7 @@ export function heavy(n: Int) -> Int {
     return total
 }
 "#;
-        let main_src = r#"
+        let main_source = r#"
 import { heavy } from `lib`
 function entrypoint() -> Nothing {
     let a = heavy(20)
@@ -2252,130 +1704,23 @@ function entrypoint() -> Nothing {
     print(b)
 }
 "#;
-        let dep_path = dir.join("lib.ynz");
+        let dependency_path = dir.join("lib.ynz");
         let main_path = dir.join("entrypoint.ynz");
-        std::fs::write(&dep_path, dep_src).expect("write dep");
-        std::fs::write(&main_path, main_src).expect("write main");
+        std::fs::write(&dependency_path, dependency_source).expect("write dep");
+        std::fs::write(&main_path, main_source).expect("write main");
 
         let mut db = CompilerDb::default();
-        let sf_dep = SourceFile::new(&db, dep_path.display().to_string(), dep_src.to_string());
-        let sf_main = SourceFile::new(&db, main_path.display().to_string(), main_src.to_string());
-        db.register_source(sf_dep);
-        db.register_source(sf_main);
+        source_file(&mut db, &dependency_path.display().to_string(), dependency_source);
+        let main_file = source_file(&mut db, &main_path.display().to_string(), main_source);
 
         std::env::remove_var("YNZ_NO_AUTO_PARALLEL");
-        let promoted = cpu_promotion_query(&db, sf_main);
+        let promoted = cpu_promotion_query(&db, main_file);
         let _ = std::fs::remove_dir_all(&dir);
 
         assert!(
             promoted.promoted.contains("entrypoint"),
             "importer must promote calls to an imported real-work callee; got: {:?}",
             promoted.promoted
-        );
-    }
-
-    #[test]
-    fn guard_clean_host_still_compiles_clean() {
-        // WHY (control): the SAME shapes WITHOUT a CPU group compile clean — proving
-        // the decline cases above aren't masking a pre-existing error, and that the
-        // guard corpus's diagnostics are identical pre/post the promotion logic
-        // (here: zero errors in both, because P2 emits no new diagnostics at all).
-        let src = r#"
-shape Point {
-    x: Int
-    y: Int
-}
-function makePoint(seed: Int) -> Point {
-    return { x: seed, y: seed }
-}
-function entrypoint() -> Nothing {
-    let p = makePoint(3)
-    print(p.x)
-}
-"#;
-        assert!(
-            !has_errors(src),
-            "the guard-clean control must compile with no errors"
-        );
-    }
-
-    // v0.3-M3g Phase 2: `base_suspends` host promotion + guard-probe extension (E6).
-    // These probe `compute_cpu_promotions`'s `promoted` set DIRECTLY — the precise, internal
-    // proof that the integration-level `v03_m3g_*_declines_byte_identical` fixtures cannot give
-    // by themselves, because `admitted_cpu_group`'s Phase-2 temporary co-resident-suspension
-    // decline ALSO forces every such fixture to 0 spawns regardless of whether this typeck-side
-    // set is correct. Both proofs matter: the fixtures lock the observable (byte-identical)
-    // behavior; these unit tests lock the underlying `promoted`-set correctness the fixtures
-    // can't directly see.
-
-    #[test]
-    fn base_suspends_host_with_clean_cpu_group_promotes() {
-        // WHY: a suspending host (`wait sleep(...)`) that ALSO owns a clean (non-guard-tripping)
-        // top-level CPU group must now be a genuine `promoted` candidate — the `base_suspends`
-        // skip this phase lifts from `compute_cpu_promotions`'s candidate identification. This
-        // is the positive companion to the E6 decline test below: lifting the skip must not
-        // ALSO make every base_suspends host universally decline via the guard-probe — a clean
-        // one must still promote.
-        let src = format!(
-            r#"{FIB}
-function entrypoint() -> Nothing {{
-    let a = fib(20)
-    let b = fib(21)
-    wait sleep(0)
-    print(a)
-    print(b)
-}}
-"#
-        );
-        let inputs = build_inputs(&src);
-        let promoted = promote(&inputs, false, false);
-        assert!(
-            promoted.contains("entrypoint"),
-            "a base_suspends host with a clean top-level CPU group must promote once the \
-             base_suspends skip is lifted; got: {promoted:?}"
-        );
-    }
-
-    #[test]
-    fn base_suspends_host_with_subexpr_position_guard_declines_promotion() {
-        // WHY (E6 proof): `entrypoint` is a `base_suspends` host (`wait sleep(0)`) that ALSO
-        // owns its own top-level CPU group (`fib(20)`, `fib(21)`) — a genuine candidate once
-        // the base_suspends skip is lifted — PLUS a THIRD, separate call to the same CPU-group
-        // callee used in a sub-expression position (`fib(22) + 1`). `fib` is NOT suspending
-        // under the REAL suspend set (ordinary `check_query` never flags this — it compiles
-        // clean), so the hazard is invisible to the plain compile pass. It becomes visible ONLY
-        // when the guard-probe augments `suspending_fns` with THIS candidate's own CPU-group
-        // callee (`fib`, per-candidate seeding), which is exactly the E6 extension: the
-        // guard-probe must now probe `base_suspends` hosts that are themselves direct
-        // candidates, not just skip them. If the E6 extension regresses (the guard-probe loop
-        // reverts to skipping `base_suspends` hosts entirely), this candidate would wrongly stay
-        // in `promoted` — this test would then fail to observe the decline.
-        let src = format!(
-            r#"{FIB}
-function entrypoint() -> Nothing {{
-    let a = fib(20)
-    let b = fib(21)
-    let c = fib(22) + 1
-    wait sleep(0)
-    print(a + b + c)
-}}
-"#
-        );
-        // Non-vacuous control: the program compiles clean BEFORE promotion is even considered —
-        // `fib(22) + 1` is not a suspending-call-in-subexpr-position violation under the real
-        // suspend set, so this isn't accidentally testing a pre-existing hard compile error.
-        assert!(
-            !has_errors(&src),
-            "the subexpr-position fib call must compile clean under the REAL suspend set \
-             (fib never suspends) — this test must isolate the guard-probe decline, not a \
-             pre-existing compile error"
-        );
-        let inputs = build_inputs(&src);
-        let promoted = promote(&inputs, false, false);
-        assert!(
-            !promoted.contains("entrypoint"),
-            "a base_suspends host whose own CPU-group callee ALSO appears in a sub-expression \
-             position elsewhere must decline promotion (E6 guard-probe extension); got: {promoted:?}"
         );
     }
 }
