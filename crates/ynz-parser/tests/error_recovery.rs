@@ -3,7 +3,8 @@
 //! thread and fails by timeout instead of hanging CI.
 //!
 //! One generated table, one named test per source: the four reproducers of the
-//! `parse_block` infinite loop and the two gallery files that reproducibly hung it.
+//! `parse_block` infinite loop and the two gallery files that reproducibly hung it
+//! (a gallery case reads its file at run time; the harness is the same).
 
 use std::sync::mpsc;
 use std::time::Duration;
@@ -50,17 +51,6 @@ macro_rules! terminating_parse_cases {
     )+};
 }
 
-/// Same guarantee for the gallery files that reproducibly hung the parser before the fix.
-macro_rules! terminating_gallery_cases {
-    ($($case:ident: $file_name:expr;)+) => {$(
-        // bug: a parser recovery loop re-enters on a token it never consumed and hangs the process | tier: High
-        #[test]
-        fn $case() {
-            assert_parse_terminates($file_name.to_string(), gallery_source($file_name));
-        }
-    )+};
-}
-
 terminating_parse_cases! {
     function_declared_inside_function_body_terminates:
         "function outer() -> Nothing {\n  function inner() -> Nothing { }\n}";
@@ -72,7 +62,7 @@ terminating_parse_cases! {
         "function asyncExample() -> Nothing {\n  async function inner() -> Nothing { }\n}";
 }
 
-terminating_gallery_cases! {
-    gallery_m1_errors_terminates: "m1_errors.ynz";
-    gallery_v0_2_m1_errors_terminates: "v0_2_m1_errors.ynz";
+terminating_parse_cases! {
+    gallery_m1_errors_terminates: gallery_source("m1_errors.ynz");
+    gallery_v0_2_m1_errors_terminates: gallery_source("v0_2_m1_errors.ynz");
 }
