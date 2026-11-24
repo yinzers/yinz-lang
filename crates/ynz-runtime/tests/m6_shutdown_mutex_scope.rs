@@ -25,6 +25,7 @@ use ynz_runtime::runtime::{ynz_rt_init, ynz_rt_shutdown, ynz_rt_spawn_blocking};
 // This test proves the fix mirrors `ynz_rt_run_entrypoint`'s already-correct pattern
 // (extract-then-release-then-block): a concurrent contender must return promptly, not
 // after the drained task's ~600ms sleep.
+// bug: ynz_rt_shutdown holds the global RUNTIME mutex across its drain window, so a concurrent ynz_rt_spawn_blocking call blocks for the whole drain instead of failing fast | tier: High
 #[test]
 fn shutdown_does_not_hold_runtime_mutex_across_drain_window() {
     static TASK_DONE: AtomicBool = AtomicBool::new(false);
