@@ -1,0 +1,24 @@
+name: Install cargo-nextest (pinned)
+description: Installs one exact cargo-nextest release into ~/.cargo/bin. Bump the version here, once.
+
+inputs:
+  version:
+    description: >-
+      cargo-nextest release. 0.9.76 or later is needed for default-filter and
+      --ignore-default-filter (.config/nextest.toml); 0.9.152 is what the spike measured.
+    required: false
+    default: "0.9.152"
+
+runs:
+  using: composite
+  steps:
+    - name: Install cargo-nextest ${{ inputs.version }}
+      shell: bash
+      env:
+        NEXTEST_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        mkdir -p "${HOME}/.cargo/bin"
+        curl --proto '=https' --tlsv1.2 -LsSf --retry 5 --retry-all-errors \
+          "https://get.nexte.st/${NEXTEST_VERSION}/linux" | tar zxf - -C "${HOME}/.cargo/bin"
+        cargo-nextest nextest --version
