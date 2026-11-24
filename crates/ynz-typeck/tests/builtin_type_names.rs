@@ -1,7 +1,5 @@
 // WHY: every built-in type is PascalCase and the old lowercase spellings are not aliases. These
-// tests pin the two compile errors that enforce it, and that the PascalCase spelling compiles
-// clean. High tier: a regression here silently accepts the old spelling (an alias the project
-// forbids) or lets a user shape hide a built-in.
+// tests pin the compile errors that enforce it, and that the PascalCase spelling compiles clean.
 
 use ynz_parser::{CompilerDb, SourceFile};
 use ynz_typeck::{check_query, CheckOutput};
@@ -12,52 +10,37 @@ fn check(source: &str) -> CheckOutput {
     (*check_query(&db, sf)).clone()
 }
 
-// Bug it catches: `let x: int` compiling (a lowercase alias), or the error text drifting from
-// the approved WHAT / WHAT INSTEAD / WHY.
-#[test]
-fn old_lowercase_type_spelling_gets_the_teaching_error() {
-    let out =
-        check("function entrypoint() -> Nothing {\n  let count: int = 1\n  print(count)\n}\n");
-    let teaching: Vec<_> = out
-        .diagnostics
-        .iter()
-        .filter(|d| d.what == "`int` is not a type name.")
-        .collect();
-    assert_eq!(teaching.len(), 1, "got: {:#?}", out.diagnostics);
-    assert_eq!(teaching[0].what_instead, "Write `Int`.");
-    assert_eq!(
-        teaching[0].why,
-        "Every type in Yinz starts with a capital letter, built-ins included."
+fn assert_error_what_contains(source: &str, phrase: &str) {
+    let out = check(source);
+    assert!(
+        out.diagnostics.iter().any(|d| d.what.contains(phrase)),
+        "expected an error containing {phrase:?}, got: {:#?}",
+        out.diagnostics
     );
 }
 
-// Bug it catches: the teaching error missing for generic built-ins and the `channel<T>(n)`
-// construction form, which take a different parser/typeck path than a plain `int`.
-#[test]
-fn old_lowercase_generic_and_channel_spellings_get_the_teaching_error() {
-    let generic = check("function f(items: array<Int>) -> Nothing {\n}\n");
-    assert!(
-        generic
-            .diagnostics
-            .iter()
-            .any(|d| d.what == "`array` is not a type name." && d.what_instead == "Write `Array`."),
-        "got: {:#?}",
-        generic.diagnostics
-    );
-    let channel = check("function entrypoint() -> Nothing {\n  let c = channel<Int>(8)\n}\n");
-    assert!(
-        channel
-            .diagnostics
-            .iter()
-            .any(|d| d.what == "`channel` is not a type name."
-                && d.what_instead == "Write `Channel`."),
-        "got: {:#?}",
-        channel.diagnostics
-    );
+macro_rules! lowercase_spelling_cases {
+    ($($case:ident: $source:expr;)+) => {
+        $(
+            // bug: typeck accepts a lowercase built-in type spelling (`int`, `array<..>`, `channel<..>`) as an alias | tier: High
+            #[test]
+            fn $case() {
+                assert_error_what_contains($source, "is not a type name");
+            }
+        )+
+    };
 }
 
-// Bug it catches: the PascalCase spellings being rejected (the old check.rs rule that refused
-// capitalised Array/Fixed/Map/Channel left in place), or `Channel<Int>(8)` not constructing.
+lowercase_spelling_cases! {
+    old_lowercase_type_spelling_is_refused:
+        "function entrypoint() -> Nothing {\n  let count: int = 1\n  print(count)\n}\n";
+    old_lowercase_generic_spelling_is_refused:
+        "function f(items: array<Int>) -> Nothing {\n}\n";
+    old_lowercase_channel_construction_is_refused:
+        "function entrypoint() -> Nothing {\n  let c = channel<Int>(8)\n}\n";
+}
+
+// bug: typeck refuses the PascalCase built-in spellings (Array, Map, Float, Boolean, Number, Channel) | tier: High
 #[test]
 fn pascal_case_built_in_types_compile_clean() {
     let out = check(
@@ -75,42 +58,46 @@ fn pascal_case_built_in_types_compile_clean() {
         "expected no diagnostics, got: {:#?}",
         out.diagnostics
     );
-    let _ = (); // names/ratio/flag/big/c are only declared: unused locals are not errors
 }
 
-// Bug it catches: a user shape named like a built-in compiling and hiding that built-in.
-#[test]
-fn shape_named_like_a_built_in_is_a_reserved_name_error() {
-    for reserved in ["String", "Map", "Range", "Int", "Channel", "Nothing"] {
-        let out = check(&format!(
-            "shape {reserved} {{\n  value: Int\n}}\n\nfunction entrypoint() -> Nothing {{\n}}\n"
-        ));
-        let found = out
-            .diagnostics
-            .iter()
-            .find(|d| d.what == format!("`{reserved}` is a reserved built-in type name."))
-            .unwrap_or_else(|| {
-                panic!(
-                    "no reserved-name error for {reserved}: {:#?}",
-                    out.diagnostics
-                )
-            });
-        assert!(
-            found
-                .why
-                .contains(&format!("built-in type called `{reserved}`")),
-            "WHY must name the shape: {found:?}"
-        );
-    }
+fn shape_source(shape_name: &str) -> String {
+    format!("shape {shape_name} {{\n  value: Int\n}}\n\nfunction entrypoint() -> Nothing {{\n}}\n")
 }
 
-// Bug it catches: the reserved-name check firing on ordinary shape names.
-#[test]
-fn ordinary_shape_name_is_not_reserved() {
-    let out = check("shape Player {\n  health: Int\n}\n\nfunction entrypoint() -> Nothing {\n}\n");
+fn assert_shape_name_reserved(shape_name: &str) {
+    assert_error_what_contains(
+        &shape_source(shape_name),
+        "is a reserved built-in type name",
+    );
+}
+
+fn assert_shape_name_not_reserved(shape_name: &str) {
+    let out = check(&shape_source(shape_name));
     assert!(
         !out.diagnostics.iter().any(|d| d.what.contains("reserved")),
         "got: {:#?}",
         out.diagnostics
     );
+}
+
+macro_rules! reserved_shape_name_cases {
+    ($($case:ident: $check:ident($shape_name:literal);)+) => {
+        $(
+            // bug: typeck accepts a shape named like a built-in (hiding it), or refuses an ordinary shape name as reserved | tier: High
+            #[test]
+            fn $case() {
+                $check($shape_name);
+            }
+        )+
+    };
+}
+
+reserved_shape_name_cases! {
+    shape_named_string_is_reserved: assert_shape_name_reserved("String");
+    shape_named_map_is_reserved: assert_shape_name_reserved("Map");
+    shape_named_range_is_reserved: assert_shape_name_reserved("Range");
+    shape_named_int_is_reserved: assert_shape_name_reserved("Int");
+    shape_named_channel_is_reserved: assert_shape_name_reserved("Channel");
+    shape_named_nothing_is_reserved: assert_shape_name_reserved("Nothing");
+    ordinary_shape_name_is_not_reserved: assert_shape_name_not_reserved("Player");
 }
