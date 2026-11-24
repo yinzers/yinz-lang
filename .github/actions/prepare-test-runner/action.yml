@@ -31,7 +31,7 @@ runs:
     - name: Install cargo-nextest
       uses: ./.github/actions/install-nextest
 
-    # Every `ynz run` writes the 53 MB runtime library to /tmp and links it there. Trial runs
+    # Every `ynz run` writes the 53 MB runtime library to /tmp and links it there. Measured on runs
     # 45503360748 and 45505322220 (4-vCPU runners, one sweep alone per runner): with /tmp on
     # disk a sweep took 412-756 s at 55% iowait on a slow runner disk, with tmpfs 229-520 s at
     # 2-12% iowait; peak scratch use was 235 MiB. `exec` is required: Docker-style tmpfs
