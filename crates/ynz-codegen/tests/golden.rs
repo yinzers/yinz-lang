@@ -80,28 +80,39 @@ fn run_m2_sm_codegen(file: &str, source: &str) -> String {
     output.artifact.ir_text.clone()
 }
 
-// bug: the SHA-256 helper returns a wrong digest, so the artifact hash that proves two compiles identical is meaningless | tier: High
-#[test]
-fn sha256_of_empty_input_matches_known_value() {
-    // FIPS test vector for the empty message: a block of padding only.
-    let expected = [
+/// One named test per known-answer vector so the runner names the failing one. The empty message is
+/// a block of padding only; `abc` is a message shorter than one block.
+macro_rules! sha256_known_answer_case {
+    ($test_name:ident, message: $message:expr, digest: $digest:expr) => {
+        // bug: the SHA-256 helper returns a wrong digest (padding-only block or a message shorter than one block), so the artifact hash that proves two compiles identical is meaningless | tier: High
+        #[test]
+        fn $test_name() {
+            let expected: [u8; 32] = $digest;
+            assert_eq!(sha256($message), expected);
+        }
+    };
+}
+
+// FIPS 180 test vector for the empty message.
+sha256_known_answer_case!(
+    sha256_of_empty_input_matches_known_value,
+    message: b"",
+    digest: [
         0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f, 0xb9,
         0x24, 0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52,
         0xb8, 0x55,
-    ];
-    assert_eq!(sha256(b""), expected);
-}
-
-// bug: the SHA-256 helper returns a wrong digest for a message shorter than one block, so the artifact hash that proves two compiles identical is meaningless | tier: High
-#[test]
-fn sha256_of_abc_matches_known_value() {
-    let expected = [
+    ]
+);
+// FIPS 180 test vector for `abc`.
+sha256_known_answer_case!(
+    sha256_of_abc_matches_known_value,
+    message: b"abc",
+    digest: [
         0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde, 0x5d, 0xae, 0x22,
         0x23, 0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00,
         0x15, 0xad,
-    ];
-    assert_eq!(sha256(b"abc"), expected);
-}
+    ]
+);
 
 // bug: two compiles of the same source produce different object bytes (a map iterated in hash order, an address in the output), so builds are not reproducible | tier: Medium
 #[test]
@@ -459,55 +470,52 @@ function entrypoint() -> Nothing {
 }
 "#;
 
-// bug: codegen spawns a different number of CPU-group members than the admission authority admitted, so the IDE hint and the binary disagree and a second group can alias the single reserved slot region | tier: High
-#[test]
-fn cross_pin_fire_spawn_count_equals_admitted_member_count() {
-    // WHY: pins the BINARY's emitted spawn count directly to the single admission AUTHORITY
-    //      (`admitted_cpu_group`), not to a hardcoded literal. The hint side is already pinned to
-    //      the authority (ynz-typeck/tests/parallel_group_hint_parity.rs); without this the codegen
-    //      side only asserted hand-written `expected_spawns` numbers, so a unification bug that
-    //      silently changed which members spawn could go green. The invariant: for an admitted
-    //      function, codegen emits exactly one `ynz_rt_spawn_blocking_joinable` per admitted group
-    //      member. If you're tempted to relax `== members.len()` to a tolerance or a literal, the
-    //      bug is a spike-admission/codegen divergence — fix that, not this assertion.
-    let ir = run_m2_sm_codegen("xpin_fire.ynz", XPIN_FIRE_SOURCE);
-    let spawns = joinable_spawn_count(&ir);
-
-    let group =
-        admitted_group_for(XPIN_FIRE_SOURCE, "entrypoint").expect("entrypoint must be admitted");
-    assert_eq!(
-        spawns,
-        group.member_indices.len(),
-        "emitted joinable-spawn count ({spawns}) must equal the authority's admitted member count \
-         ({}); a mismatch is a spike-admission ⇄ codegen divergence (the exact hint↔binary \
-         silent-drift class). IR:\n{ir}",
-        group.member_indices.len()
-    );
-    // Sanity: a clean 2-member group fires 2 spawns. If this changes, the fixture changed, not the
-    // invariant — the assertion above is the real guard.
-    assert_eq!(spawns, 2, "clean 2-member group must spawn exactly 2");
+/// One named test per case so the runner names the failing case. Pins the BINARY's emitted
+/// `ynz_rt_spawn_blocking_joinable` count directly to the single admission AUTHORITY
+/// (`admitted_cpu_group`), not to a hardcoded literal: one spawn per admitted member, and zero when
+/// the authority declines the function. The hint side is pinned to the authority by
+/// `ynz-typeck/tests/parallel_group_hint_parity.rs`; without this the codegen side could drift
+/// (a unification bug that changes which members spawn) and stay green. If you are tempted to relax
+/// the equality to a tolerance, the bug is a spike-admission/codegen divergence: fix that.
+/// `admitted_members` is the member count the fixture is expected to be admitted with (`None` =
+/// declined); it guards the fixture, the authority equality is the real invariant.
+macro_rules! spawn_count_follows_admission_case {
+    ($test_name:ident, file: $file:expr, source: $source:expr, admitted_members: $admitted_members:expr) => {
+        // bug: codegen spawns a different number of CPU-group members than the admission authority admitted (or spawns for a declined function), so the IDE hint and the binary disagree and a second group can alias the single reserved slot region | tier: High
+        #[test]
+        fn $test_name() {
+            let ir = run_m2_sm_codegen($file, $source);
+            let spawns = joinable_spawn_count(&ir);
+            let authority_members = admitted_group_for($source, "entrypoint")
+                .map(|group| group.member_indices.len());
+            let admitted_members: Option<usize> = $admitted_members;
+            assert_eq!(
+                authority_members, admitted_members,
+                "the fixture's admission verdict changed: the fixture, not the invariant, drifted"
+            );
+            assert_eq!(
+                spawns,
+                authority_members.unwrap_or(0),
+                "emitted joinable-spawn count ({spawns}) must equal the authority's admitted member \
+                 count ({authority_members:?}, a declined function spawns none); a mismatch is a \
+                 spike-admission and codegen divergence (the hint and binary silent-drift class). \
+                 IR:\n{ir}"
+            );
+        }
+    };
 }
 
-// bug: a function the admission authority declined (two CPU groups) still spawns, so the hint says sequential while the binary runs a group on another thread | tier: High
-#[test]
-fn cross_pin_decline_means_zero_spawns() {
-    // WHY: the DECLINE half of the cross-pin invariant — `admitted_cpu_group(...) == None` MUST
-    //      coincide with ZERO emitted spawns. Together with the FIRE test this makes the binary's
-    //      spawn behavior a direct function of the admission authority in BOTH directions, closing
-    //      the gap the prior hardcoded-`expected_spawns` golden tests left open. A two-CPU-group
-    //      function is the canonical decline (single-group constraint). If this fails, an admission
-    //      change started spawning for a declined function — fix the divergence, not this test.
-    let ir = run_m2_sm_codegen("xpin_decline.ynz", TWO_CPU_GROUPS_SOURCE);
-    let spawns = joinable_spawn_count(&ir);
-
-    let group = admitted_group_for(TWO_CPU_GROUPS_SOURCE, "entrypoint");
-    assert!(
-        group.is_none(),
-        "two-CPU-group function must be DECLINED by the authority; got {group:?}"
-    );
-    assert_eq!(
-        spawns, 0,
-        "a declined function (admitted_cpu_group == None) must emit ZERO spawns; got {spawns}. \
-         IR:\n{ir}"
-    );
-}
+// Case bug: a clean two-member group spawns a different number of members than the authority admitted.
+spawn_count_follows_admission_case!(
+    a_clean_two_member_group_spawns_one_per_admitted_member,
+    file: "xpin_fire.ynz",
+    source: XPIN_FIRE_SOURCE,
+    admitted_members: Some(2)
+);
+// Case bug: a function the authority declined (two CPU groups, the single-group constraint) still spawns.
+spawn_count_follows_admission_case!(
+    a_declined_two_group_function_spawns_nothing,
+    file: "xpin_decline.ynz",
+    source: TWO_CPU_GROUPS_SOURCE,
+    admitted_members: None
+);
