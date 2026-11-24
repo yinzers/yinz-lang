@@ -74,12 +74,6 @@ fn check_mode_does_not_spawn_child() {
 #[test]
 fn kill_gracefully_sigkill_escalation_reaches_grandchildren() {
     let sh_path = Path::new("/bin/sh");
-    if !sh_path.exists() {
-        eprintln!(
-            "Skipping kill_gracefully_sigkill_escalation_reaches_grandchildren: /bin/sh not found"
-        );
-        return;
-    }
 
     let pidfile = std::env::temp_dir().join(format!(
         "ynz-watch-f6-grandchild-pid-{}",
