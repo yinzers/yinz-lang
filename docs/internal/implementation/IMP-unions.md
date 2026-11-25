@@ -40,8 +40,6 @@ The lowering is chosen per concrete variant set at codegen time. The decision is
 | 2 to 255 variants | Tag is `i8` | One byte covers up to 256 distinct variants |
 | 256+ variants | Tag is `i16`, but **COMPILE ERROR** with teaching hint | 256+ union variants is almost certainly a code smell. Hint suggests refactoring. |
 
-IR-snapshot tests in `crates/ynz-codegen/tests/snapshots.rs` assert each row of this table produces the expected LLVM type.
-
 ### Pointer-niche detail
 
 For the all-heap-shapes case, `data` is an untyped pointer. The tag byte indicates which concrete shape it points to:
