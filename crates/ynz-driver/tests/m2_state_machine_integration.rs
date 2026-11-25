@@ -13,7 +13,11 @@ use support::{build, compile, run_counted, run_counted_with_drain_budget, run_pl
 fn counters_of(fixture: &str) -> Counters {
     let built = build(fixture, false);
     let (run, counters) = run_counted(&built);
-    assert_eq!(run.exit_code, 0, "{fixture} must exit 0; stderr:\n{}", run.stderr);
+    assert_eq!(
+        run.exit_code, 0,
+        "{fixture} must exit 0; stderr:\n{}",
+        run.stderr
+    );
     counters
 }
 

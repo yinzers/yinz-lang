@@ -72,6 +72,33 @@ pub fn compile(fixture_name: &str) -> Compiled {
     }
 }
 
+/// The shared check of the refusal suites: `fixture_name` must NOT compile, the failure must be the
+/// program's (typeck's teaching diagnostic) and not the compiler's own (`compiler bug`,
+/// `internal error`, `codegen:`), and the diagnostic must hold every phrase (one per distinct
+/// rejection the fixture holds).
+pub fn assert_refused_with(fixture_name: &str, phrases: &[&str]) {
+    let compiled = compile(fixture_name);
+    assert!(
+        !compiled.success,
+        "{fixture_name}: must be refused, but compiled:\n{}",
+        compiled.diagnostics
+    );
+    for internal in ["codegen:", "internal error", "compiler bug"] {
+        assert!(
+            !compiled.diagnostics.contains(internal),
+            "{fixture_name}: a user error must come from typeck, not the compiler ({internal:?}):\n{}",
+            compiled.diagnostics
+        );
+    }
+    for phrase in phrases {
+        assert!(
+            compiled.diagnostics.contains(phrase),
+            "{fixture_name}: diagnostic must contain {phrase:?}; got:\n{}",
+            compiled.diagnostics
+        );
+    }
+}
+
 pub fn fixture_path(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
@@ -664,6 +691,39 @@ pub fn assert_fixture_balanced_and_asan_clean(fixture: &str, expected: &str) {
         let built = build(fixture, no_optimize);
         assert_built_balanced_and_asan_clean(fixture, &built, expected, no_optimize);
     });
+}
+
+/// [`assert_fixture_balanced_and_asan_clean`] for a program whose output order the language does
+/// not fix: it passes when the output is any one of `accepted`.
+pub fn assert_fixture_balanced_and_asan_clean_printing_one_of(fixture: &str, accepted: &[&str]) {
+    at_both_optimization_levels(|no_optimize| {
+        let built = build(fixture, no_optimize);
+        assert_built_balanced_and_asan_clean_printing_one_of(
+            fixture,
+            &built,
+            accepted,
+            no_optimize,
+        );
+    });
+}
+
+/// [`assert_fixture_balanced_and_asan_clean_printing_one_of`] for a fixture that ends
+/// `wait sleep(N)` then `print(done)` while a fire-and-forget task it spawned prints
+/// `task_output_then_done` minus the final `done` line. Nothing waits for such a task, so its
+/// output may land before or after `done`; a loaded machine shows both. The bug check is the
+/// balance and ASan, asserted in both orders.
+pub fn assert_fixture_balanced_and_asan_clean_task_then_done(
+    fixture: &str,
+    task_output_then_done: &str,
+) {
+    let task_output = task_output_then_done
+        .strip_suffix("done\n")
+        .expect("expected output ends with the spawner's `done` line");
+    let done_first = format!("done\n{task_output}");
+    assert_fixture_balanced_and_asan_clean_printing_one_of(
+        fixture,
+        &[task_output_then_done, done_first.as_str()],
+    );
 }
 
 /// Build `source` (labelled `label`) at both optimization levels and run
