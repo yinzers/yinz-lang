@@ -5,10 +5,10 @@
 //! out-of-bounds read past the 1-byte `Tiny`, or a SIGSEGV on the raw int).
 //!
 //! RED-first on the base (f790a45): `field`, `let`, `non_shape` and `or` fail there; the
-//! parameter and return slots of a SHAPE variant pass there (#410) and stay as the
-//! `v03_m9_union_wrap` fixtures through the new point.
+//! parameter and return slots of a SHAPE variant (`union_wrap_arg`, `union_wrap_return`, #410, C1c)
+//! pass there and stay as cases through the new point.
 //!
-//! The run table has one fixture per slot kind (field, let, non-shape variant, `.or`, generic
+//! The run table has one fixture per slot kind (argument, return, field, let, non-shape variant, `.or`, generic
 //! parameter, narrowed binding into another union, nested arm on a shadowing binding, and the
 //! `return`-through-a-variable recovery): each kind failed on the base through a different path.
 //! Each case runs the program as shipped (the VALUE) and under AddressSanitizer (the MEMORY
@@ -53,6 +53,10 @@ macro_rules! union_coerce_high_case {
 union_coerce_high_case! {
     // case: a plain shape stored in a union-typed shape FIELD (`holder: { inner: tiny }`) was stored as the bare shape pointer: wrong variant, ASan stack-buffer-overflow past `Tiny`
     a_plain_shape_stored_in_a_union_shape_field_is_wrapped, "v0_3_m9_union_coerce_field.ynz", "tiny\nbig hello\nbig hello\nbig world\nend\n";
+    // case: a plain shape passed to a union parameter (a plain call, a UFCS extra argument, a generic callee, a `wait`ed callee) got the bare shape pointer: output was `none` or the wrong variant and ASan reported a stack-buffer-overflow READ past the 1-byte `Tiny` (the shape-variant argument slot, #410)
+    a_plain_shape_passed_to_a_union_parameter_is_wrapped, "v0_3_m9_union_wrap_arg.ynz", "big hello\ntiny\ntrue / big hello\ntiny\nbig hello\ntiny\nbig hello\nend\n";
+    // case: `-> Thing` returned the bare shape pointer, and a union local the callee built itself came back as a pointer into the callee's dead stack frame (ASan: stack-use-after-return) (the shape-variant return slot, #410)
+    a_plain_shape_returned_from_a_union_function_is_wrapped, "v0_3_m9_union_wrap_return.ynz", "big hello\ntiny\nbig local\ntiny\nbig wrapped\ntiny\nend\n";
     // case: `let n: Mixed = 5` kept the raw int as the envelope pointer (SIGSEGV on the first tag read); shape lets (call result, loop body) must stay right
     a_plain_value_bound_to_a_union_let_is_wrapped, "v0_3_m9_union_coerce_let.ynz", "circle\nother\ncircle\ncircle\nother\ncircle\nother\nend\n";
     // case: a NON-shape variant (`int`) passed, returned or stored in a field of a union with a shape variant was never wrapped (LLVM verifier failure / SIGSEGV)

@@ -11,7 +11,7 @@
 //! `background` guards run under ASan only (ASan asserts the stdout too).
 //!
 //! The heap homes #410 and #421 built (union return, `wait`-staged argument, hidden default)
-//! are guarded by `v03_m9_union_wrap.rs` and `v03_m9_union_hidden_default.rs`.
+//! are guarded by `v03_m9_union_coerce.rs` (the `union_wrap` cases) and `v03_m9_union_hidden_default.rs`.
 
 mod support;
 
