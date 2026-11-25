@@ -525,48 +525,6 @@ function entrypoint() -> Nothing {{
     )
 }
 
-/// Bug caught: pre-existing, a leak found by the C8 round-2 review: `prepare_bg_arg_for_ctx` released
-/// the consumed original of a `background` argument after its copy only for an array, a map and a
-/// shape, so a `maybe` handed to a task left its original unreleased (and a `maybe` of a shape
-/// given to a `give` parameter left the payload cell its copy minted). One program per
-/// element kind and callee kind, for an argument the spawn consumes, one it gives to a `give`
-/// parameter, one the caller reads again (the task takes a copy), and a fresh call result.
-macro_rules! maybe_spawn_cases {
-    ($($name:ident: $element_type:literal, $element_value:literal, $suspending:literal, $given:literal, $spawn:literal, $after_spawn:literal, $expected:literal;)+) => {
-        $(
-            // bug: a maybe handed to a spawned task leaks the consumed original or the payload cell its copy minted, silently at exit 0 | tier: High
-            #[test]
-            fn $name() {
-                let source = maybe_spawn_program(
-                    $element_type, $element_value, $suspending, $given, $spawn, $after_spawn,
-                );
-                assert_source_balanced(stringify!($name), &source, $expected);
-            }
-        )+
-    };
-}
-
-maybe_spawn_cases! {
-    a_consumed_maybe_string_given_to_a_plain_task_is_released_once: "String", "`kept`.toUpperCase()", false, false, "background eat(found)", "", "true\n";
-    a_consumed_maybe_string_given_to_a_suspending_task_is_released_once: "String", "`kept`.toUpperCase()", true, false, "background eat(found)", "", "true\n";
-    a_given_maybe_string_given_to_a_plain_task_is_released_once: "String", "`kept`.toUpperCase()", false, true, "background eat(found)", "", "true\n";
-    a_given_maybe_string_given_to_a_suspending_task_is_released_once: "String", "`kept`.toUpperCase()", true, true, "background eat(found)", "", "true\n";
-    a_copied_maybe_string_given_to_a_plain_task_is_released_once: "String", "`kept`.toUpperCase()", false, false, "background eat(found)", "print(found.exists())", "true\ntrue\n";
-    a_copied_maybe_string_given_to_a_suspending_task_is_released_once: "String", "`kept`.toUpperCase()", true, false, "background eat(found)", "print(found.exists())", "true\ntrue\n";
-    a_fresh_maybe_string_given_to_a_plain_task_is_released_once: "String", "`kept`.toUpperCase()", false, false, "background eat(pick())", "print(found.exists())", "true\ntrue\n";
-    a_consumed_maybe_shape_given_to_a_plain_task_is_released_once: "Big", "{ label: `kept`, count: 3 }", false, false, "background eat(found)", "", "true\n";
-    a_consumed_maybe_shape_given_to_a_suspending_task_is_released_once: "Big", "{ label: `kept`, count: 3 }", true, false, "background eat(found)", "", "true\n";
-    a_copied_maybe_shape_given_to_a_plain_task_is_released_once: "Big", "{ label: `kept`, count: 3 }", false, false, "background eat(found)", "print(found.exists())", "true\ntrue\n";
-    a_copied_maybe_shape_given_to_a_suspending_task_is_released_once: "Big", "{ label: `kept`, count: 3 }", true, false, "background eat(found)", "print(found.exists())", "true\ntrue\n";
-    a_fresh_maybe_shape_given_to_a_plain_task_is_released_once: "Big", "{ label: `kept`, count: 3 }", false, false, "background eat(pick())", "print(found.exists())", "true\ntrue\n";
-    a_given_maybe_shape_given_to_a_plain_task_is_released_once: "Big", "{ label: `kept`, count: 3 }", false, true, "background eat(found)", "", "true\n";
-    a_given_maybe_shape_given_to_a_suspending_task_is_released_once: "Big", "{ label: `kept`, count: 3 }", true, true, "background eat(found)", "", "true\n";
-    a_fresh_maybe_shape_given_to_a_given_parameter_is_released_once: "Big", "{ label: `kept`, count: 3 }", false, true, "background eat(pick())", "print(found.exists())", "true\ntrue\n";
-    a_given_maybe_decimal_given_to_a_plain_task_is_released_once: "Number<20> ", "2.5", false, true, "background eat(found)", "", "true\n";
-    a_given_maybe_decimal_given_to_a_suspending_task_is_released_once: "Number<20> ", "2.5", true, true, "background eat(found)", "", "true\n";
-    a_consumed_maybe_decimal_given_to_a_suspending_task_is_released_once: "Number<20> ", "2.5", true, false, "background eat(found)", "", "true\n";
-}
-
 /// Bug caught: pre-existing, a leak found by the C8 round-2 review: a string passed at a BORROWED
 /// position of a callee that has a `give` parameter elsewhere (`worker(give rows, label)`) was copied
 /// for the task, and the ladder's flat free (kept for every position of such a callee) freed nothing
@@ -574,14 +532,9 @@ maybe_spawn_cases! {
 /// spawner never reads the string again, reads it after the spawn (still its own, copied once), and
 /// the callee suspends. Only the two suspending programs fail without the fix; the plain-callee ones
 /// pin the path that already released the copy.
-macro_rules! borrowed_string_cases {
-    ($($name:ident: $suspending:literal, $after_spawn:literal, $expected:literal;)+) => {
-        $(
-            // bug: a string at a borrowed position of a spawned callee that has a give parameter leaks the task copy, silently at exit 0 | tier: High
-            #[test]
-            fn $name() {
-                let source = format!(
-                    "function worker(give rows: Array<Int>, label: String) -> Nothing {{
+fn borrowed_string_program(suspending: bool, after_spawn: &str) -> String {
+    format!(
+        "function worker(give rows: Array<Int>, label: String) -> Nothing {{
   {pause}
   print(`${{rows.count()}}${{label}}`)
 }}
@@ -598,20 +551,8 @@ function entrypoint() -> Nothing {{
   wait sleep(300)
 }}
 ",
-                    pause = if $suspending { "wait sleep(1)" } else { "" },
-                    after_spawn = $after_spawn,
-                );
-                assert_source_balanced(stringify!($name), &source, $expected);
-            }
-        )+
-    };
-}
-
-borrowed_string_cases! {
-    a_borrowed_string_the_spawner_never_reads_again_is_released_once: false, "", "2ABCDEFGHIJ\n";
-    a_borrowed_string_the_spawner_reads_again_is_copied_and_released_once: false, "print(label)", "ABCDEFGHIJ\n2ABCDEFGHIJ\n";
-    a_borrowed_string_given_to_a_suspending_callee_is_released_once: true, "", "2ABCDEFGHIJ\n";
-    a_borrowed_string_read_again_after_a_suspending_spawn_is_released_once: true, "print(label)", "ABCDEFGHIJ\n2ABCDEFGHIJ\n";
+        pause = if suspending { "wait sleep(1)" } else { "" },
+    )
 }
 
 /// A program whose `entrypoint` is a resume function (it waits) that binds `pick()`, a `maybe` of
@@ -649,26 +590,6 @@ function entrypoint() -> Nothing {{
     )
 }
 
-/// Bug caught: pre-existing (a C7 guard no C8 slice lifted), found by the C8 round-3 review: a
-/// resume function that bound a `maybe` of a string, flat shape or decimal a plain function returned
-/// copied the payload and released nothing of the call result (`store_binding_of_read_into` and
-/// `remember_fresh_payload_maybe` took it only outside a resume function), so each such binding
-/// leaked one payload; a `return` of it from a resume function did the same. One program
-/// per element kind and use of the binding: read, given to a plain function, forwarded to a task by a
-/// plain function and spawned by a suspending one, returned through a wait.
-macro_rules! resume_function_maybe_cases {
-    ($($name:ident: $element_type:literal, $element_value:literal, $body:expr, $expected:literal;)+) => {
-        $(
-            // bug: a resume function binding, giving, spawning or returning a maybe a plain function returned leaks the call result payload, silently at exit 0 | tier: High
-            #[test]
-            fn $name() {
-                let source = resume_function_maybe_program($element_type, $element_value, $body);
-                assert_source_balanced(stringify!($name), &source, $expected);
-            }
-        )+
-    };
-}
-
 const READ_THEN_WAIT: &str = "  let found = pick()
   print(found.exists())
   wait sleep(1)";
@@ -680,18 +601,6 @@ const SPAWN_FROM_SUSPENDING: &str = "  let found = pick()
   wait sleep(300)";
 const RETURN_THROUGH_WAIT: &str = "  let found = viaWait()
   print(found.exists())";
-
-resume_function_maybe_cases! {
-    a_resume_function_binding_a_returned_maybe_string_frees_the_call_result: "String", "`kept`.toUpperCase()", READ_THEN_WAIT, "true\n";
-    a_resume_function_binding_a_returned_maybe_shape_frees_the_call_result: "Big", "{ label: `kept`.toUpperCase(), count: 3 }", READ_THEN_WAIT, "true\n";
-    a_resume_function_binding_a_returned_maybe_decimal_frees_the_call_result: "Number<20> ", "2.5", READ_THEN_WAIT, "true\n";
-    a_resume_function_giving_a_returned_maybe_string_to_a_plain_function_frees_it_once: "String", "`kept`.toUpperCase()", GIVE_TO_PLAIN, "true\n";
-    a_resume_function_giving_a_returned_maybe_shape_to_a_plain_function_frees_it_once: "Big", "{ label: `kept`.toUpperCase(), count: 3 }", GIVE_TO_PLAIN, "true\n";
-    a_suspending_spawner_of_a_returned_maybe_string_frees_the_call_result: "String", "`kept`.toUpperCase()", SPAWN_FROM_SUSPENDING, "true\n";
-    a_suspending_spawner_of_a_returned_maybe_shape_frees_the_call_result: "Big", "{ label: `kept`.toUpperCase(), count: 3 }", SPAWN_FROM_SUSPENDING, "true\n";
-    a_resume_function_returning_a_returned_maybe_string_passes_its_payload_on: "String", "`kept`.toUpperCase()", RETURN_THROUGH_WAIT, "true\n";
-    a_resume_function_returning_a_returned_maybe_shape_passes_its_payload_on: "Big", "{ label: `kept`.toUpperCase(), count: 3 }", RETURN_THROUGH_WAIT, "true\n";
-}
 
 /// A launcher that is itself a resume function (it waits first) spawns `eat` with the `maybe` of
 /// `element_type` a plain function returned: the spawned copy and the consumed call result are each
@@ -734,33 +643,6 @@ function entrypoint() -> Nothing {{
     )
 }
 
-/// Bug caught: found by the C8 round-3 security review; the same producer as the resume-function
-/// cases above: a launcher that waits before it binds and spawns a returned `maybe` leaked the call
-/// result (13 bytes for a string, 141 for a shape). Element kind, `give` or borrowed
-/// parameter, plain or suspending callee.
-macro_rules! suspending_launcher_cases {
-    ($($name:ident: $element_type:literal, $element_value:literal, $given:literal, $suspending:literal;)+) => {
-        $(
-            // bug: a launcher that waits before it binds and spawns a returned maybe leaks the call result, silently at exit 0 | tier: High
-            #[test]
-            fn $name() {
-                let source = suspending_launcher_program(
-                    $element_type, $element_value, $given, $suspending,
-                );
-                assert_source_balanced(stringify!($name), &source, "true\n");
-            }
-        )+
-    };
-}
-
-suspending_launcher_cases! {
-    a_suspending_launcher_spawning_a_returned_maybe_string_to_a_given_plain_task_frees_every_copy: "String", "`kept`.toUpperCase()", true, false;
-    a_suspending_launcher_spawning_a_returned_maybe_string_to_a_borrowed_suspending_task_frees_every_copy: "String", "`kept`.toUpperCase()", false, true;
-    a_suspending_launcher_spawning_a_returned_maybe_shape_to_a_given_suspending_task_frees_every_copy: "Big", "{ label: `kept`.toUpperCase(), count: 3 }", true, true;
-    a_suspending_launcher_spawning_a_returned_maybe_shape_to_a_borrowed_plain_task_frees_every_copy: "Big", "{ label: `kept`.toUpperCase(), count: 3 }", false, false;
-    a_suspending_launcher_spawning_a_returned_maybe_decimal_to_a_given_suspending_task_frees_every_copy: "Number<20> ", "2.5", true, true;
-}
-
 /// A program whose `eat` takes the `maybe<Big>` parameter `held` (declared with `modifier`: `give `,
 /// `share ` or nothing) and runs `body`; `entry` is `entrypoint`'s body.
 fn parameter_maybe_program(modifier: &str, body: &str, entry: &str) -> String {
@@ -801,39 +683,6 @@ const COPY_AND_KEEP: &str = "  let mine = held.copy()
   print(mine.exists())
   print(held.exists())";
 
-/// Bug caught: a C7 defect found after close, on the C8 round-3 review: moving a `maybe<Shape>` into
-/// a local copied the payload's string fields although the source is consumed and nothing releases
-/// it (`maybe_payload_stable_bits`' moved branch cloned them, a C6 shape from before C7's release of
-/// a consumed source), so each such move leaked the strings of the payload. It reached a `give`
-/// parameter (`let mine = held`), a local moved to a local and the same on the state-machine path.
-/// A suspending callee given a call result also leaked the call result's payload cell (the staged
-/// envelope pointed at a cell nothing freed). A `share` or bare parameter keeps copying
-/// (`.copy()`): the caller keeps its value, and each side frees its own.
-macro_rules! parameter_maybe_cases {
-    ($($name:ident: $modifier:literal, $body:expr, $entry:literal, $expected:literal;)+) => {
-        $(
-            // bug: moving a maybe shape parameter into a local leaks the payload strings or the call result cell, or frees a value the caller keeps, silently at exit 0 | tier: High
-            #[test]
-            fn $name() {
-                let source = parameter_maybe_program($modifier, $body, $entry);
-                assert_source_balanced(stringify!($name), &source, $expected);
-            }
-        )+
-    };
-}
-
-parameter_maybe_cases! {
-    a_given_maybe_shape_moved_into_a_local_is_released_once: "give ", MOVE_INTO_LOCAL, "  eat(pick())", "true\n";
-    a_given_maybe_shape_moved_into_a_local_after_a_wait_is_released_once: "give ", WAIT_THEN_MOVE_INTO_LOCAL, "  eat(pick())", "true\n";
-    a_given_maybe_shape_from_a_local_moved_into_a_local_is_released_once: "give ", MOVE_INTO_LOCAL, "  let found = pick()\n  eat(found)", "true\n";
-    a_given_maybe_shape_from_a_local_moved_after_a_wait_is_released_once: "give ", WAIT_THEN_MOVE_INTO_LOCAL, "  let found = pick()\n  eat(found)", "true\n";
-    a_moved_given_maybe_shape_keeps_its_payload_readable: "give ", MOVE_AND_READ_VALUE, "  eat(pick())", "KEPT\n";
-    a_suspending_callee_given_a_call_result_maybe_shape_frees_the_payload_cell: "give ", WAIT_THEN_READ_VALUE, "  eat(pick())", "KEPT\n";
-    a_moved_local_maybe_shape_is_released_once: "give ", "  print(held.exists())", "  let found = pick()\n  let moved = found\n  print(moved.exists())\n  eat(pick())", "true\ntrue\n";
-    a_bare_maybe_shape_parameter_copy_leaves_the_caller_its_own: "", COPY_AND_KEEP, "  let found = pick()\n  eat(found)\n  print(found.exists())", "true\ntrue\ntrue\n";
-    a_share_maybe_shape_parameter_copy_leaves_the_caller_its_own: "share ", COPY_AND_KEEP, "  let found = pick()\n  eat(found)\n  print(found.exists())", "true\ntrue\ntrue\n";
-}
-
 /// A program whose suspending `eat` takes the `maybe` of `element_type` it is given as an explicit
 /// `.copy()` of `pick()`'s result, and reads it after its own `wait`.
 fn copied_maybe_program(element_type: &str, element_value: &str, read: &str) -> String {
@@ -860,34 +709,10 @@ function entrypoint() -> Nothing {{
     )
 }
 
-/// Bug caught: found by the C8 round-3 review's probe of what a suspending callee can be given at a
-/// `give` position that no call built: the only `maybe` that is not a call result is `none` or an
-/// explicit `.copy()`, and the `.copy()`'s two heap cells (the envelope, the shape's or decimal's
-/// payload) were never freed once the staged envelope pointed at them. (No UAF: the
-/// envelope is staged into a frame region, and a `maybe` literal does not exist.)
-macro_rules! copied_maybe_cases {
-    ($($name:ident: $element_type:literal, $element_value:literal, $read:literal, $expected:literal;)+) => {
-        $(
-            // bug: an explicit copy of a maybe given to a suspending callee leaks its envelope and payload cells, silently at exit 0 | tier: High
-            #[test]
-            fn $name() {
-                let source = copied_maybe_program($element_type, $element_value, $read);
-                assert_source_balanced(stringify!($name), &source, $expected);
-            }
-        )+
-    };
-}
-
-copied_maybe_cases! {
-    a_copied_maybe_shape_given_to_a_suspending_callee_frees_both_cells: "Big", "{ label: `kept`.toUpperCase(), count: 3 }", "  let fallback: Big = { label: `x`, count: 0 }\n  print(held.or(fallback).label)", "KEPT\n";
-    a_copied_maybe_decimal_given_to_a_suspending_callee_frees_both_cells: "Number<20> ", "2.5", "  print(held.or(1.5))", "2.5\n";
-    a_copied_maybe_string_given_to_a_suspending_callee_frees_the_envelope_cell: "String", "`kept`.toUpperCase()", "  print(held.or(`x`))", "KEPT\n";
-}
-
 /// One named test per spawn-ladder or release form of the `slice 5 spawn ladder and the leaks it left` run unit; each case is balanced (heap and strings) and ASan clean at both optimization levels.
 macro_rules! s5_spawn_high_case {
     ($($case_name:ident => $case_body:block)+) => { $(
-        // bug: a spawned task's argument, a task result received by a handle or an unbound errors temporary leaks, double frees or is read after free, silently at exit 0 | tier: High
+        // bug: a value handed to a spawned task, received from a handle or held as a maybe or an errors temporary leaks, double frees or is read after free, silently at exit 0 | tier: High
         #[test]
         fn $case_name() $case_body
     )+ };
@@ -1201,6 +1026,616 @@ function entrypoint() -> Nothing {
             "print(entry.value.count().toString())",
             true,
             "key1\n3\n",
+        );
+    }
+    // family: pre-existing, a leak found by the C8 round-2 review: `prepare_bg_arg_for_ctx`
+    //   released the consumed original of a `background` argument after its copy only for an
+    //   array, a map and a shape, so a `maybe` handed to a task left its original unreleased (and
+    //   a `maybe` of a shape given to a `give` parameter left the payload cell its copy minted).
+    //   One program per element kind and callee kind, for an argument the spawn consumes, one it
+    //   gives to a `give` parameter, one the caller reads again (the task takes a copy), and a
+    //   fresh call result.
+    a_consumed_maybe_string_given_to_a_plain_task_is_released_once => {
+        let source = maybe_spawn_program(
+            "String",
+            "`kept`.toUpperCase()",
+            false,
+            false,
+            "background eat(found)",
+            "",
+        );
+        assert_source_balanced(
+            "a_consumed_maybe_string_given_to_a_plain_task_is_released_once",
+            &source,
+            "true\n",
+        );
+    }
+    a_consumed_maybe_string_given_to_a_suspending_task_is_released_once => {
+        let source = maybe_spawn_program(
+            "String",
+            "`kept`.toUpperCase()",
+            true,
+            false,
+            "background eat(found)",
+            "",
+        );
+        assert_source_balanced(
+            "a_consumed_maybe_string_given_to_a_suspending_task_is_released_once",
+            &source,
+            "true\n",
+        );
+    }
+    a_given_maybe_string_given_to_a_plain_task_is_released_once => {
+        let source = maybe_spawn_program(
+            "String",
+            "`kept`.toUpperCase()",
+            false,
+            true,
+            "background eat(found)",
+            "",
+        );
+        assert_source_balanced(
+            "a_given_maybe_string_given_to_a_plain_task_is_released_once",
+            &source,
+            "true\n",
+        );
+    }
+    a_given_maybe_string_given_to_a_suspending_task_is_released_once => {
+        let source = maybe_spawn_program(
+            "String",
+            "`kept`.toUpperCase()",
+            true,
+            true,
+            "background eat(found)",
+            "",
+        );
+        assert_source_balanced(
+            "a_given_maybe_string_given_to_a_suspending_task_is_released_once",
+            &source,
+            "true\n",
+        );
+    }
+    a_copied_maybe_string_given_to_a_plain_task_is_released_once => {
+        let source = maybe_spawn_program(
+            "String",
+            "`kept`.toUpperCase()",
+            false,
+            false,
+            "background eat(found)",
+            "print(found.exists())",
+        );
+        assert_source_balanced(
+            "a_copied_maybe_string_given_to_a_plain_task_is_released_once",
+            &source,
+            "true\ntrue\n",
+        );
+    }
+    a_copied_maybe_string_given_to_a_suspending_task_is_released_once => {
+        let source = maybe_spawn_program(
+            "String",
+            "`kept`.toUpperCase()",
+            true,
+            false,
+            "background eat(found)",
+            "print(found.exists())",
+        );
+        assert_source_balanced(
+            "a_copied_maybe_string_given_to_a_suspending_task_is_released_once",
+            &source,
+            "true\ntrue\n",
+        );
+    }
+    a_fresh_maybe_string_given_to_a_plain_task_is_released_once => {
+        let source = maybe_spawn_program(
+            "String",
+            "`kept`.toUpperCase()",
+            false,
+            false,
+            "background eat(pick())",
+            "print(found.exists())",
+        );
+        assert_source_balanced(
+            "a_fresh_maybe_string_given_to_a_plain_task_is_released_once",
+            &source,
+            "true\ntrue\n",
+        );
+    }
+    a_consumed_maybe_shape_given_to_a_plain_task_is_released_once => {
+        let source = maybe_spawn_program(
+            "Big",
+            "{ label: `kept`, count: 3 }",
+            false,
+            false,
+            "background eat(found)",
+            "",
+        );
+        assert_source_balanced(
+            "a_consumed_maybe_shape_given_to_a_plain_task_is_released_once",
+            &source,
+            "true\n",
+        );
+    }
+    a_consumed_maybe_shape_given_to_a_suspending_task_is_released_once => {
+        let source = maybe_spawn_program(
+            "Big",
+            "{ label: `kept`, count: 3 }",
+            true,
+            false,
+            "background eat(found)",
+            "",
+        );
+        assert_source_balanced(
+            "a_consumed_maybe_shape_given_to_a_suspending_task_is_released_once",
+            &source,
+            "true\n",
+        );
+    }
+    a_copied_maybe_shape_given_to_a_plain_task_is_released_once => {
+        let source = maybe_spawn_program(
+            "Big",
+            "{ label: `kept`, count: 3 }",
+            false,
+            false,
+            "background eat(found)",
+            "print(found.exists())",
+        );
+        assert_source_balanced(
+            "a_copied_maybe_shape_given_to_a_plain_task_is_released_once",
+            &source,
+            "true\ntrue\n",
+        );
+    }
+    a_copied_maybe_shape_given_to_a_suspending_task_is_released_once => {
+        let source = maybe_spawn_program(
+            "Big",
+            "{ label: `kept`, count: 3 }",
+            true,
+            false,
+            "background eat(found)",
+            "print(found.exists())",
+        );
+        assert_source_balanced(
+            "a_copied_maybe_shape_given_to_a_suspending_task_is_released_once",
+            &source,
+            "true\ntrue\n",
+        );
+    }
+    a_fresh_maybe_shape_given_to_a_plain_task_is_released_once => {
+        let source = maybe_spawn_program(
+            "Big",
+            "{ label: `kept`, count: 3 }",
+            false,
+            false,
+            "background eat(pick())",
+            "print(found.exists())",
+        );
+        assert_source_balanced(
+            "a_fresh_maybe_shape_given_to_a_plain_task_is_released_once",
+            &source,
+            "true\ntrue\n",
+        );
+    }
+    a_given_maybe_shape_given_to_a_plain_task_is_released_once => {
+        let source = maybe_spawn_program(
+            "Big",
+            "{ label: `kept`, count: 3 }",
+            false,
+            true,
+            "background eat(found)",
+            "",
+        );
+        assert_source_balanced(
+            "a_given_maybe_shape_given_to_a_plain_task_is_released_once",
+            &source,
+            "true\n",
+        );
+    }
+    a_given_maybe_shape_given_to_a_suspending_task_is_released_once => {
+        let source = maybe_spawn_program(
+            "Big",
+            "{ label: `kept`, count: 3 }",
+            true,
+            true,
+            "background eat(found)",
+            "",
+        );
+        assert_source_balanced(
+            "a_given_maybe_shape_given_to_a_suspending_task_is_released_once",
+            &source,
+            "true\n",
+        );
+    }
+    a_fresh_maybe_shape_given_to_a_given_parameter_is_released_once => {
+        let source = maybe_spawn_program(
+            "Big",
+            "{ label: `kept`, count: 3 }",
+            false,
+            true,
+            "background eat(pick())",
+            "print(found.exists())",
+        );
+        assert_source_balanced(
+            "a_fresh_maybe_shape_given_to_a_given_parameter_is_released_once",
+            &source,
+            "true\ntrue\n",
+        );
+    }
+    a_given_maybe_decimal_given_to_a_plain_task_is_released_once => {
+        let source = maybe_spawn_program(
+            "Number<20> ",
+            "2.5",
+            false,
+            true,
+            "background eat(found)",
+            "",
+        );
+        assert_source_balanced(
+            "a_given_maybe_decimal_given_to_a_plain_task_is_released_once",
+            &source,
+            "true\n",
+        );
+    }
+    a_given_maybe_decimal_given_to_a_suspending_task_is_released_once => {
+        let source = maybe_spawn_program(
+            "Number<20> ",
+            "2.5",
+            true,
+            true,
+            "background eat(found)",
+            "",
+        );
+        assert_source_balanced(
+            "a_given_maybe_decimal_given_to_a_suspending_task_is_released_once",
+            &source,
+            "true\n",
+        );
+    }
+    a_consumed_maybe_decimal_given_to_a_suspending_task_is_released_once => {
+        let source = maybe_spawn_program(
+            "Number<20> ",
+            "2.5",
+            true,
+            false,
+            "background eat(found)",
+            "",
+        );
+        assert_source_balanced(
+            "a_consumed_maybe_decimal_given_to_a_suspending_task_is_released_once",
+            &source,
+            "true\n",
+        );
+    }
+    a_borrowed_string_the_spawner_never_reads_again_is_released_once => {
+        let source = borrowed_string_program(false, "");
+        assert_source_balanced(
+            "a_borrowed_string_the_spawner_never_reads_again_is_released_once",
+            &source,
+            "2ABCDEFGHIJ\n",
+        );
+    }
+    a_borrowed_string_the_spawner_reads_again_is_copied_and_released_once => {
+        let source = borrowed_string_program(false, "print(label)");
+        assert_source_balanced(
+            "a_borrowed_string_the_spawner_reads_again_is_copied_and_released_once",
+            &source,
+            "ABCDEFGHIJ\n2ABCDEFGHIJ\n",
+        );
+    }
+    a_borrowed_string_given_to_a_suspending_callee_is_released_once => {
+        let source = borrowed_string_program(true, "");
+        assert_source_balanced(
+            "a_borrowed_string_given_to_a_suspending_callee_is_released_once",
+            &source,
+            "2ABCDEFGHIJ\n",
+        );
+    }
+    a_borrowed_string_read_again_after_a_suspending_spawn_is_released_once => {
+        let source = borrowed_string_program(true, "print(label)");
+        assert_source_balanced(
+            "a_borrowed_string_read_again_after_a_suspending_spawn_is_released_once",
+            &source,
+            "ABCDEFGHIJ\n2ABCDEFGHIJ\n",
+        );
+    }
+    // family: pre-existing (a C7 guard no C8 slice lifted), found by the C8 round-3 review: a
+    //   resume function that bound a `maybe` of a string, flat shape or decimal a plain function
+    //   returned copied the payload and released nothing of the call result
+    //   (`store_binding_of_read_into` and `remember_fresh_payload_maybe` took it only outside a
+    //   resume function), so each such binding leaked one payload; a `return` of it from a resume
+    //   function did the same. One program per element kind and use of the binding: read, given
+    //   to a plain function, forwarded to a task by a plain function and spawned by a suspending
+    //   one, returned through a wait.
+    a_resume_function_binding_a_returned_maybe_string_frees_the_call_result => {
+        let source = resume_function_maybe_program(
+            "String",
+            "`kept`.toUpperCase()",
+            READ_THEN_WAIT,
+        );
+        assert_source_balanced(
+            "a_resume_function_binding_a_returned_maybe_string_frees_the_call_result",
+            &source,
+            "true\n",
+        );
+    }
+    a_resume_function_binding_a_returned_maybe_shape_frees_the_call_result => {
+        let source = resume_function_maybe_program(
+            "Big",
+            "{ label: `kept`.toUpperCase(), count: 3 }",
+            READ_THEN_WAIT,
+        );
+        assert_source_balanced(
+            "a_resume_function_binding_a_returned_maybe_shape_frees_the_call_result",
+            &source,
+            "true\n",
+        );
+    }
+    a_resume_function_binding_a_returned_maybe_decimal_frees_the_call_result => {
+        let source = resume_function_maybe_program("Number<20> ", "2.5", READ_THEN_WAIT);
+        assert_source_balanced(
+            "a_resume_function_binding_a_returned_maybe_decimal_frees_the_call_result",
+            &source,
+            "true\n",
+        );
+    }
+    a_resume_function_giving_a_returned_maybe_string_to_a_plain_function_frees_it_once => {
+        let source = resume_function_maybe_program("String", "`kept`.toUpperCase()", GIVE_TO_PLAIN);
+        assert_source_balanced(
+            "a_resume_function_giving_a_returned_maybe_string_to_a_plain_function_frees_it_once",
+            &source,
+            "true\n",
+        );
+    }
+    a_resume_function_giving_a_returned_maybe_shape_to_a_plain_function_frees_it_once => {
+        let source = resume_function_maybe_program(
+            "Big",
+            "{ label: `kept`.toUpperCase(), count: 3 }",
+            GIVE_TO_PLAIN,
+        );
+        assert_source_balanced(
+            "a_resume_function_giving_a_returned_maybe_shape_to_a_plain_function_frees_it_once",
+            &source,
+            "true\n",
+        );
+    }
+    a_suspending_spawner_of_a_returned_maybe_string_frees_the_call_result => {
+        let source = resume_function_maybe_program(
+            "String",
+            "`kept`.toUpperCase()",
+            SPAWN_FROM_SUSPENDING,
+        );
+        assert_source_balanced(
+            "a_suspending_spawner_of_a_returned_maybe_string_frees_the_call_result",
+            &source,
+            "true\n",
+        );
+    }
+    a_suspending_spawner_of_a_returned_maybe_shape_frees_the_call_result => {
+        let source = resume_function_maybe_program(
+            "Big",
+            "{ label: `kept`.toUpperCase(), count: 3 }",
+            SPAWN_FROM_SUSPENDING,
+        );
+        assert_source_balanced(
+            "a_suspending_spawner_of_a_returned_maybe_shape_frees_the_call_result",
+            &source,
+            "true\n",
+        );
+    }
+    a_resume_function_returning_a_returned_maybe_string_passes_its_payload_on => {
+        let source = resume_function_maybe_program(
+            "String",
+            "`kept`.toUpperCase()",
+            RETURN_THROUGH_WAIT,
+        );
+        assert_source_balanced(
+            "a_resume_function_returning_a_returned_maybe_string_passes_its_payload_on",
+            &source,
+            "true\n",
+        );
+    }
+    a_resume_function_returning_a_returned_maybe_shape_passes_its_payload_on => {
+        let source = resume_function_maybe_program(
+            "Big",
+            "{ label: `kept`.toUpperCase(), count: 3 }",
+            RETURN_THROUGH_WAIT,
+        );
+        assert_source_balanced(
+            "a_resume_function_returning_a_returned_maybe_shape_passes_its_payload_on",
+            &source,
+            "true\n",
+        );
+    }
+    // family: found by the C8 round-3 security review; the same producer as the resume-function
+    //   cases above: a launcher that waits before it binds and spawns a returned `maybe` leaked
+    //   the call result (13 bytes for a string, 141 for a shape). Element kind, `give` or
+    //   borrowed parameter, plain or suspending callee.
+    a_suspending_launcher_spawning_a_returned_maybe_string_to_a_given_plain_task_frees_every_copy => {
+        let source = suspending_launcher_program("String", "`kept`.toUpperCase()", true, false);
+        assert_source_balanced(
+            "a_suspending_launcher_spawning_a_returned_maybe_string_to_a_given_plain_task_frees_every_copy",
+            &source,
+            "true\n",
+        );
+    }
+    a_suspending_launcher_spawning_a_returned_maybe_string_to_a_borrowed_suspending_task_frees_every_copy => {
+        let source = suspending_launcher_program("String", "`kept`.toUpperCase()", false, true);
+        assert_source_balanced(
+            "a_suspending_launcher_spawning_a_returned_maybe_string_to_a_borrowed_suspending_task_frees_every_copy",
+            &source,
+            "true\n",
+        );
+    }
+    a_suspending_launcher_spawning_a_returned_maybe_shape_to_a_given_suspending_task_frees_every_copy => {
+        let source = suspending_launcher_program(
+            "Big",
+            "{ label: `kept`.toUpperCase(), count: 3 }",
+            true,
+            true,
+        );
+        assert_source_balanced(
+            "a_suspending_launcher_spawning_a_returned_maybe_shape_to_a_given_suspending_task_frees_every_copy",
+            &source,
+            "true\n",
+        );
+    }
+    a_suspending_launcher_spawning_a_returned_maybe_shape_to_a_borrowed_plain_task_frees_every_copy => {
+        let source = suspending_launcher_program(
+            "Big",
+            "{ label: `kept`.toUpperCase(), count: 3 }",
+            false,
+            false,
+        );
+        assert_source_balanced(
+            "a_suspending_launcher_spawning_a_returned_maybe_shape_to_a_borrowed_plain_task_frees_every_copy",
+            &source,
+            "true\n",
+        );
+    }
+    a_suspending_launcher_spawning_a_returned_maybe_decimal_to_a_given_suspending_task_frees_every_copy => {
+        let source = suspending_launcher_program("Number<20> ", "2.5", true, true);
+        assert_source_balanced(
+            "a_suspending_launcher_spawning_a_returned_maybe_decimal_to_a_given_suspending_task_frees_every_copy",
+            &source,
+            "true\n",
+        );
+    }
+    // family: a C7 defect found after close, on the C8 round-3 review: moving a `maybe<Shape>`
+    //   into a local copied the payload's string fields although the source is consumed and
+    //   nothing releases it (`maybe_payload_stable_bits`' moved branch cloned them, a C6 shape
+    //   from before C7's release of a consumed source), so each such move leaked the strings of
+    //   the payload. It reached a `give` parameter (`let mine = held`), a local moved to a local
+    //   and the same on the state-machine path. A suspending callee given a call result also
+    //   leaked the call result's payload cell (the staged envelope pointed at a cell nothing
+    //   freed). A `share` or bare parameter keeps copying (`.copy()`): the caller keeps its
+    //   value, and each side frees its own.
+    a_given_maybe_shape_moved_into_a_local_is_released_once => {
+        let source = parameter_maybe_program("give ", MOVE_INTO_LOCAL, "  eat(pick())");
+        assert_source_balanced(
+            "a_given_maybe_shape_moved_into_a_local_is_released_once",
+            &source,
+            "true\n",
+        );
+    }
+    a_given_maybe_shape_moved_into_a_local_after_a_wait_is_released_once => {
+        let source = parameter_maybe_program("give ", WAIT_THEN_MOVE_INTO_LOCAL, "  eat(pick())");
+        assert_source_balanced(
+            "a_given_maybe_shape_moved_into_a_local_after_a_wait_is_released_once",
+            &source,
+            "true\n",
+        );
+    }
+    a_given_maybe_shape_from_a_local_moved_into_a_local_is_released_once => {
+        let source = parameter_maybe_program(
+            "give ",
+            MOVE_INTO_LOCAL,
+            "  let found = pick()\n  eat(found)",
+        );
+        assert_source_balanced(
+            "a_given_maybe_shape_from_a_local_moved_into_a_local_is_released_once",
+            &source,
+            "true\n",
+        );
+    }
+    a_given_maybe_shape_from_a_local_moved_after_a_wait_is_released_once => {
+        let source = parameter_maybe_program(
+            "give ",
+            WAIT_THEN_MOVE_INTO_LOCAL,
+            "  let found = pick()\n  eat(found)",
+        );
+        assert_source_balanced(
+            "a_given_maybe_shape_from_a_local_moved_after_a_wait_is_released_once",
+            &source,
+            "true\n",
+        );
+    }
+    a_moved_given_maybe_shape_keeps_its_payload_readable => {
+        let source = parameter_maybe_program("give ", MOVE_AND_READ_VALUE, "  eat(pick())");
+        assert_source_balanced(
+            "a_moved_given_maybe_shape_keeps_its_payload_readable",
+            &source,
+            "KEPT\n",
+        );
+    }
+    a_suspending_callee_given_a_call_result_maybe_shape_frees_the_payload_cell => {
+        let source = parameter_maybe_program("give ", WAIT_THEN_READ_VALUE, "  eat(pick())");
+        assert_source_balanced(
+            "a_suspending_callee_given_a_call_result_maybe_shape_frees_the_payload_cell",
+            &source,
+            "KEPT\n",
+        );
+    }
+    a_moved_local_maybe_shape_is_released_once => {
+        let source = parameter_maybe_program(
+            "give ",
+            "  print(held.exists())",
+            "  let found = pick()\n  let moved = found\n  print(moved.exists())\n  eat(pick())",
+        );
+        assert_source_balanced(
+            "a_moved_local_maybe_shape_is_released_once",
+            &source,
+            "true\ntrue\n",
+        );
+    }
+    a_bare_maybe_shape_parameter_copy_leaves_the_caller_its_own => {
+        let source = parameter_maybe_program(
+            "",
+            COPY_AND_KEEP,
+            "  let found = pick()\n  eat(found)\n  print(found.exists())",
+        );
+        assert_source_balanced(
+            "a_bare_maybe_shape_parameter_copy_leaves_the_caller_its_own",
+            &source,
+            "true\ntrue\ntrue\n",
+        );
+    }
+    a_share_maybe_shape_parameter_copy_leaves_the_caller_its_own => {
+        let source = parameter_maybe_program(
+            "share ",
+            COPY_AND_KEEP,
+            "  let found = pick()\n  eat(found)\n  print(found.exists())",
+        );
+        assert_source_balanced(
+            "a_share_maybe_shape_parameter_copy_leaves_the_caller_its_own",
+            &source,
+            "true\ntrue\ntrue\n",
+        );
+    }
+    // family: found by the C8 round-3 review's probe of what a suspending callee can be given at
+    //   a `give` position that no call built: the only `maybe` that is not a call result is
+    //   `none` or an explicit `.copy()`, and the `.copy()`'s two heap cells (the envelope, the
+    //   shape's or decimal's payload) were never freed once the staged envelope pointed at them.
+    //   (No UAF: the envelope is staged into a frame region, and a `maybe` literal does not
+    //   exist.)
+    a_copied_maybe_shape_given_to_a_suspending_callee_frees_both_cells => {
+        let source = copied_maybe_program(
+            "Big",
+            "{ label: `kept`.toUpperCase(), count: 3 }",
+            "  let fallback: Big = { label: `x`, count: 0 }\n  print(held.or(fallback).label)",
+        );
+        assert_source_balanced(
+            "a_copied_maybe_shape_given_to_a_suspending_callee_frees_both_cells",
+            &source,
+            "KEPT\n",
+        );
+    }
+    a_copied_maybe_decimal_given_to_a_suspending_callee_frees_both_cells => {
+        let source = copied_maybe_program("Number<20> ", "2.5", "  print(held.or(1.5))");
+        assert_source_balanced(
+            "a_copied_maybe_decimal_given_to_a_suspending_callee_frees_both_cells",
+            &source,
+            "2.5\n",
+        );
+    }
+    a_copied_maybe_string_given_to_a_suspending_callee_frees_the_envelope_cell => {
+        let source = copied_maybe_program(
+            "String",
+            "`kept`.toUpperCase()",
+            "  print(held.or(`x`))",
+        );
+        assert_source_balanced(
+            "a_copied_maybe_string_given_to_a_suspending_callee_frees_the_envelope_cell",
+            &source,
+            "KEPT\n",
         );
     }
 }
