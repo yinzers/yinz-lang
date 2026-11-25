@@ -33986,6 +33986,43 @@ mod errors_field_parity_tests {
         the_source_field_has_a_codegen_arm_if_lowered,
         EcField::Source
     );
+
+    /// One named test per `EcField`: the typeck name table (`EcField::name`) and the lookup the
+    /// field-access check and codegen both use (`EcField::from_field_name`) are two hand-written
+    /// tables over the same four variants; the compiler binds neither to the other.
+    macro_rules! ec_field_round_trip_case {
+        ($test_name:ident, $field:expr) => {
+            // Protected parity: `EcField::name` against `EcField::from_field_name`.
+            // bug: `EcField::name` and `EcField::from_field_name` disagree for a field, so the spelling typeck prints is refused by the lookup (or another field is returned), and a valid `.suggestions` / `.trace` / `.source` access is rejected or lowered as the wrong field | tier: High
+            #[test]
+            fn $test_name() {
+                let field: EcField = $field;
+                assert_eq!(EcField::from_field_name(field.name()), Some(field));
+            }
+        };
+    }
+
+    ec_field_round_trip_case!(the_message_field_name_round_trips, EcField::Message);
+    ec_field_round_trip_case!(the_suggestions_field_name_round_trips, EcField::Suggestions);
+    ec_field_round_trip_case!(the_trace_field_name_round_trips, EcField::Trace);
+    ec_field_round_trip_case!(the_source_field_name_round_trips, EcField::Source);
+
+    /// One named test per refused spelling: `failed` and `or` are the neighbouring syntax a user
+    /// writes after an errors-capable value, `notAField` any ordinary field name; each must fall
+    /// through to the normal field lookup instead of being gated as an errors-capable field.
+    macro_rules! unknown_ec_field_case {
+        ($test_name:ident, $name:literal) => {
+            // bug: `EcField::from_field_name` admits a name that is not one of the four gated fields, so typeck demands a `.failed` check before reading `.failed` / `.or` / an ordinary shape field and rejects a valid program | tier: High
+            #[test]
+            fn $test_name() {
+                assert_eq!(EcField::from_field_name($name), None);
+            }
+        };
+    }
+
+    unknown_ec_field_case!(the_failed_name_is_not_an_errors_field, "failed");
+    unknown_ec_field_case!(the_or_name_is_not_an_errors_field, "or");
+    unknown_ec_field_case!(an_unknown_name_is_not_an_errors_field, "notAField");
 }
 
 /// Emit a type-attached constant such as `int.max` or `number.epsilon`.
