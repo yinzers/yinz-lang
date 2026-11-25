@@ -654,4 +654,29 @@ mod tests {
         div_negative_zero_at_min_exponent_by_one_at_max_exponent_is_negative_zero:
             numerator_negative true, numerator_exponent MIN_EXPONENT, denominator_exponent MAX_EXPONENT;
     }
+
+    /// A nonzero value against a zero of the same sign, whatever the zero's exponent: the zero is
+    /// the smaller magnitude, so the exponent alignment must never be reached.
+    macro_rules! compare_against_same_sign_zero_cases {
+        ($($case:ident: left ($left_negative:literal, $left_exponent:expr, $left_coefficient:expr), right ($right_negative:literal, $right_exponent:expr), expected $expected:literal;)+) => {
+            $(
+                // bug: decimal128 compare of a nonzero value against a zero of the same sign returns the wrong ordering (or aligns the zero's exponent), so `x > 0` and `x < 0` answer wrongly | tier: High
+                #[test]
+                fn $case() {
+                    let nonzero = encode_finite($left_negative, $left_exponent, $left_coefficient);
+                    let zero = encode_finite($right_negative, $right_exponent, 0);
+                    assert_eq!(compare(nonzero, zero), $expected);
+                }
+            )+
+        };
+    }
+
+    compare_against_same_sign_zero_cases! {
+        compare_positive_one_against_positive_zero_is_greater:
+            left (false, 0, 1), right (false, 0), expected 1;
+        compare_negative_one_against_negative_zero_is_less:
+            left (true, 0, 1), right (true, 0), expected -1;
+        compare_small_positive_against_positive_zero_with_a_large_exponent_is_greater:
+            left (false, -3, 7), right (false, 5), expected 1;
+    }
 }
