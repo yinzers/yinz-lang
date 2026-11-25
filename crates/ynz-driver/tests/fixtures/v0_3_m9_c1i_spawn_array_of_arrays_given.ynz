@@ -1,16 +1,19 @@
 // v0.3-M9 C1i: the recovery the refusal of a `fixed<array<string>>` spawn argument teaches: the
 // same items in an `array<array<string>>` can be handed to a task, which reads and releases them.
-// Expected output: the count, then `done`.
+// Expected output: the count the task sent, then `done`. The spawner waits for the task's message
+// before it prints, so the order never depends on how fast the task runs.
 
-function crunch(xs: Array<Array<String>>) -> Nothing {
-  print(xs.count())
+function crunch(xs: Array<Array<String>>, counted: Channel<Int>) -> Nothing {
+  counted.send(xs.count())
 }
 
 function entrypoint() -> Nothing {
   let first: Array<String> = [`a`.toUpperCase()]
   let second: Array<String> = [`b`.toUpperCase()]
   let xs: Array<Array<String>> = [first, second]
-  background crunch(xs)
-  wait sleep(50)
+  let counted: Channel<Int> = Channel<Int>(1)
+  background crunch(xs, counted)
+  let received = counted.receive()
+  print(received.or(-1).toString())
   print(`done`)
 }

@@ -1,101 +1,49 @@
-//! v0.3-M9 C10: a `for` loop whose body reassigns the binding it is walking keeps walking the
-//! collection it started with. Plan #17 made an assignment release the value it replaces; the
-//! loop kept reading the released list through the pointer it took before the first pass (heap
-//! use-after-free: a segfault or abort in the shipped binary, `heap-use-after-free` under ASan).
-//! `main` never released on reassignment, so it ran these programs correctly and leaked.
+//! A `for` loop whose body reassigns the binding it is walking keeps walking the collection it
+//! started with. An assignment releases the value it replaces; the loop used to keep reading the
+//! released list through the pointer it took before the first pass (heap use-after-free).
 //!
-//! Tier: High (memory safety). One case per iterated kind the loop lowers (array, string, map),
-//! per row kind that is not a plain `int` list (shape rows) and per place the loop walks (a
-//! binding, a shape field), plus the exits the held collection must be released on (a `return`
-//! inside the body, a reassignment that never runs).
-//!
-//! Per case, at -O2 and -O0, the bug each test catches:
-//! * `asan`: the loop reads the released collection (a plain run may print the right values from
-//!   freed memory, so the sanitizer verdict is asserted on its own).
-//! * `counts`: the collection the loop held is never freed (allocations above frees), or is freed
-//!   twice (frees above allocations).
+//! One case per iterated kind the loop lowers (array, string, map), per row kind that is not a
+//! plain `int` list (shape rows), per place the loop walks (a binding, a shape field), and per
+//! exit the held collection must be released on (a `return` inside the body, a reassignment that
+//! never runs). Each case runs at -O2 and -O0, under AddressSanitizer (a plain run may print the
+//! right values from freed memory) and with the alloc counters (the held collection is never
+//! freed, or freed twice).
 
 mod support;
 
-use support::{assert_asan_clean_and_prints, build, run_counted};
+use support::assert_fixture_balanced_and_asan_clean;
 
-fn assert_balanced(fixture: &str, no_optimize: bool, expected_stdout: &str) {
-    let built = build(fixture, no_optimize);
-    let (output, counters) = run_counted(&built);
-    assert_eq!(
-        output.exit_code, 0,
-        "{fixture} (no_optimize={no_optimize}): stderr:\n{}",
-        output.stderr
-    );
-    assert_eq!(output.stdout, expected_stdout, "{fixture}: wrong output");
-    assert_eq!(
-        (counters.alloc, counters.string_alloc),
-        (counters.free, counters.string_free),
-        "{fixture} (no_optimize={no_optimize}): a list or string was leaked or freed twice: {counters:?}"
-    );
-}
-
-macro_rules! reassign_case {
-    ($case:ident, $fixture:literal, $stdout:literal) => {
-        mod $case {
-            use super::*;
-
-            #[test]
-            fn asan_o2() {
-                assert_asan_clean_and_prints($fixture, false, $stdout);
-            }
-
-            #[test]
-            fn asan_o0() {
-                assert_asan_clean_and_prints($fixture, true, $stdout);
-            }
-
-            #[test]
-            fn counts_o2() {
-                assert_balanced($fixture, false, $stdout);
-            }
-
-            #[test]
-            fn counts_o0() {
-                assert_balanced($fixture, true, $stdout);
-            }
+/// One named test per walked-place class of the `for loop over a reassigned binding` unit; each
+/// case is a test the runner names.
+macro_rules! loop_reassign_high_case {
+    ($($case_name:ident, $fixture:literal, $expected_stdout:literal;)+) => { $(
+        // bug: a `for` loop reads the collection its body just released (heap use-after-free), or the held collection is leaked or freed twice | tier: High
+        #[test]
+        fn $case_name() {
+            assert_fixture_balanced_and_asan_clean($fixture, $expected_stdout);
         }
-    };
+    )+ };
 }
 
-reassign_case!(array, "v0_3_m9_c10_reassign_array.ynz", "3\n9\n1\n");
-reassign_case!(string, "v0_3_m9_c10_reassign_string.ynz", "3\nXYZ\n");
-reassign_case!(map, "v0_3_m9_c10_reassign_map.ynz", "6\n1\n");
-reassign_case!(
-    shape_rows,
-    "v0_3_m9_c10_reassign_shape_rows.ynz",
-    "3\nA\nB\nC\n1\n"
-);
-reassign_case!(
-    early_return,
-    "v0_3_m9_c10_reassign_early_return.ynz",
-    "4\n3\n"
-);
-reassign_case!(never_runs, "v0_3_m9_c10_reassign_never_runs.ynz", "3\n3\n");
-// The iterated place is a shape field: `holder.rows = ...` inside `for (row in holder.rows)`.
-reassign_case!(
-    field_array,
-    "v0_3_m9_c10_reassign_field_array.ynz",
-    "6\n1\n"
-);
-reassign_case!(
-    field_string,
-    "v0_3_m9_c10_reassign_field_string.ynz",
-    "3\nX\n"
-);
-reassign_case!(
-    field_some_passes_and_return,
-    "v0_3_m9_c10_reassign_field_some_passes.ynz",
-    "6\n3\n"
-);
-// Guard, green on every sha: a `while` re-reads the binding each pass.
-reassign_case!(
-    while_over_index,
-    "v0_3_m9_c10_while_reassign.ynz",
-    "3\n16\n3\n"
-);
+loop_reassign_high_case! {
+    // case: the walked binding is an array
+    reassign_array, "v0_3_m9_c10_reassign_array.ynz", "3\n9\n1\n";
+    // case: the walked binding is a string
+    reassign_string, "v0_3_m9_c10_reassign_string.ynz", "3\nXYZ\n";
+    // case: the walked binding is a map
+    reassign_map, "v0_3_m9_c10_reassign_map.ynz", "6\n1\n";
+    // case: the rows are shapes, not plain ints
+    reassign_shape_rows, "v0_3_m9_c10_reassign_shape_rows.ynz", "3\nA\nB\nC\n1\n";
+    // case: a `return` inside the body must release the held collection
+    reassign_early_return, "v0_3_m9_c10_reassign_early_return.ynz", "4\n3\n";
+    // case: the reassignment sits on a path that never runs
+    reassign_never_runs, "v0_3_m9_c10_reassign_never_runs.ynz", "3\n3\n";
+    // case: the walked place is a shape field array (`holder.rows = ...` inside `for (row in holder.rows)`)
+    reassign_field_array, "v0_3_m9_c10_reassign_field_array.ynz", "6\n1\n";
+    // case: the walked place is a shape field string
+    reassign_field_string, "v0_3_m9_c10_reassign_field_string.ynz", "3\nX\n";
+    // case: the walked field is reassigned on some passes and the body returns
+    reassign_field_some_passes_and_return, "v0_3_m9_c10_reassign_field_some_passes.ynz", "6\n3\n";
+    // case: a `while` re-reads the binding each pass (guard)
+    reassign_while_over_index, "v0_3_m9_c10_while_reassign.ynz", "3\n16\n3\n";
+}
