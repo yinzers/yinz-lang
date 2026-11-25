@@ -193,9 +193,11 @@ fn assert_blank_cell_is_skipped(case: &Case) {
     assert!(counters.alloc > 0, "{}: allocated nothing", case.label);
 }
 
+/// One named test per list item kind of the `blanked cell release` unit; each case is a test the
+/// runner names. `$outer` is how the patched program reads the row out of cell 0.
 macro_rules! blank_case {
-    ($name:ident, $outer:expr, $body:literal, $bug:literal) => {
-        #[doc = $bug]
+    ($($name:ident, $outer:expr, $body:literal;)+) => { $(
+        // bug: a list release frees a blanked (all-zero) cell or a handed-over row, or skips a live cell, so a loop-row hand-over double frees or leaks | tier: High
         #[test]
         fn $name() {
             assert_blank_cell_is_skipped(&Case {
@@ -204,48 +206,29 @@ macro_rules! blank_case {
                 outer: $outer,
             });
         }
-    };
+    )+ };
 }
 
-blank_case!(
-    a_blanked_string_cell_is_skipped,
-    Outer::Array,
-    "  let f: Array<String> = [`a`.toUpperCase(), `b`.toUpperCase()]\n  print(f.count())",
-    "a string list release that frees a null string cell (High)"
-);
-blank_case!(
-    a_blanked_array_cell_is_skipped,
-    Outer::Array,
-    "  let f: Array<Array<Int>> = [[1, 2], [3, 4]]\n  print(f.count())",
-    "an array-of-arrays release that frees a null row (High)"
-);
-blank_case!(
-    a_blanked_map_cell_is_skipped,
-    Outer::Array,
-    "  let f: Array<Map<String, Int>> = [{ `a`: 1 }, { `b`: 2 }]\n  print(f.count())",
-    "an array-of-maps release that frees a null map (High)"
-);
-blank_case!(
-    a_blanked_shape_inline_cell_is_skipped,
-    Outer::Array,
-    "  let f: Array<Tag> = [{ label: `a`.toUpperCase(), nums: [1] }, { label: `b`.toUpperCase(), nums: [2] }]\n  print(f.count())",
-    "an array-of-shapes release that frees the heap fields of an all-zero inline shape cell (High)"
-);
-blank_case!(
-    a_blanked_union_inline_cell_is_skipped,
-    Outer::Array,
-    "  let f: Array<Thing> = []\n  let first: Big = { name: `n`.toUpperCase(), weight: 1 }\n  f.add(first)\n  let second: Big = { name: `m`.toUpperCase(), weight: 2 }\n  f.add(second)\n  print(f.count())",
-    "an array-of-unions release that frees the payload of an all-zero slot (tag 0 is the heap variant `Big`) (High)"
-);
-blank_case!(
-    a_blanked_fixed_array_cell_is_skipped,
-    Outer::Fixed,
-    "  let f: Fixed<Array<Int>> = [[1, 2], [3, 4]]\n  print(f.count())",
-    "a fixed-list release that frees a zeroed array cell (High)"
-);
-blank_case!(
-    a_blanked_fixed_shape_cell_is_skipped,
-    Outer::Fixed,
-    "  let f: Fixed<Tag> = [{ label: `a`.toUpperCase(), nums: [1] }, { label: `b`.toUpperCase(), nums: [2] }]\n  print(f.count())",
-    "a fixed-list release that frees a zeroed shape-box cell (High)"
-);
+blank_case! {
+    // case: a string list release that frees a null string cell
+    a_blanked_string_cell_is_skipped, Outer::Array,
+    "  let f: Array<String> = [`a`.toUpperCase(), `b`.toUpperCase()]\n  print(f.count())";
+    // case: an array-of-arrays release that frees a null row
+    a_blanked_array_cell_is_skipped, Outer::Array,
+    "  let f: Array<Array<Int>> = [[1, 2], [3, 4]]\n  print(f.count())";
+    // case: an array-of-maps release that frees a null map
+    a_blanked_map_cell_is_skipped, Outer::Array,
+    "  let f: Array<Map<String, Int>> = [{ `a`: 1 }, { `b`: 2 }]\n  print(f.count())";
+    // case: an array-of-shapes release that frees the heap fields of an all-zero inline shape cell
+    a_blanked_shape_inline_cell_is_skipped, Outer::Array,
+    "  let f: Array<Tag> = [{ label: `a`.toUpperCase(), nums: [1] }, { label: `b`.toUpperCase(), nums: [2] }]\n  print(f.count())";
+    // case: an array-of-unions release that frees the payload of an all-zero slot (tag 0 is the heap variant `Big`)
+    a_blanked_union_inline_cell_is_skipped, Outer::Array,
+    "  let f: Array<Thing> = []\n  let first: Big = { name: `n`.toUpperCase(), weight: 1 }\n  f.add(first)\n  let second: Big = { name: `m`.toUpperCase(), weight: 2 }\n  f.add(second)\n  print(f.count())";
+    // case: a fixed-list release that frees a zeroed array cell
+    a_blanked_fixed_array_cell_is_skipped, Outer::Fixed,
+    "  let f: Fixed<Array<Int>> = [[1, 2], [3, 4]]\n  print(f.count())";
+    // case: a fixed-list release that frees a zeroed shape-box cell
+    a_blanked_fixed_shape_cell_is_skipped, Outer::Fixed,
+    "  let f: Fixed<Tag> = [{ label: `a`.toUpperCase(), nums: [1] }, { label: `b`.toUpperCase(), nums: [2] }]\n  print(f.count())";
+}

@@ -12,6 +12,7 @@ use ynz_runtime::ynz_bignum_compare;
 /// One test per answer code: `compare_case!(case, left, right, answer, "bug it catches (High)")`.
 macro_rules! compare_case {
     ($case:ident, $left:literal, $right:literal, $answer:literal, $bug:literal) => {
+        // bug: ynz_bignum_compare returns the wrong answer code (less -1, equal 0, greater 1, unordered 2) to the generated branch | tier: High
         #[doc = $bug]
         #[test]
         fn $case() {

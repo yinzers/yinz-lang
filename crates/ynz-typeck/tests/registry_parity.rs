@@ -159,60 +159,36 @@ fn carve_outs() -> HashMap<&'static str, HashSet<&'static str>> {
     m
 }
 
-#[test]
-// WHY: Every method accepted by the type checker must also appear in the registry
-// so the IDE can surface it in autocomplete and hover. A method missing from the
-// registry compiles fine but is invisible to the developer — they discover it only
-// by reading Rust source, which defeats the entire teaching mission.
-//
-// This test reads builtins.rs source at test time so it self-updates when new match
-// arms are added. No hardcoded lists.
-fn all_builtin_methods_are_registered() {
+/// Every method `builtins.rs` accepts on `receiver` (the match arms of `fn_name`) must be in the
+/// registry, so the IDE can surface it in autocomplete and hover. A method missing from the
+/// registry compiles fine but is invisible to the developer.
+///
+/// Reads builtins.rs source at test time so it self-updates when new match arms are added.
+fn assert_receiver_methods_registered(fn_name: &str, receiver: &str) {
     let builtins_src = include_str!("../src/builtins.rs");
     let registry = registry_methods_by_receiver();
     let carve_out_map = carve_outs();
 
-    // (builtins.rs fn name, registry receiver_type base)
-    let cases: &[(&str, &str)] = &[
-        ("array_method_return", "Array"),
-        ("fixed_method_return", "Fixed"),
-        ("maybe_method_return", "Maybe"),
-        ("map_method_return", "Map"),
-        ("string_method_return", "String"),
-        ("sensitive_method_return", "sensitive"),
-    ];
+    let builtin_methods = extract_match_arm_strings(builtins_src, fn_name);
+    assert!(
+        !builtin_methods.is_empty(),
+        "Could not extract any methods from `{fn_name}`: check that the function name matches exactly"
+    );
 
-    let mut failures: Vec<String> = Vec::new();
+    let registered = registry.get(receiver).cloned().unwrap_or_default();
+    let carved = carve_out_map.get(fn_name).cloned().unwrap_or_default();
 
-    for &(fn_name, receiver) in cases {
-        let builtin_methods = extract_match_arm_strings(builtins_src, fn_name);
-        if builtin_methods.is_empty() {
-            failures.push(format!(
-                "  Could not extract any methods from `{fn_name}` — \
-                 check that the function name matches exactly"
-            ));
-            continue;
-        }
-
-        let registered = registry.get(receiver).cloned().unwrap_or_default();
-        let carved = carve_out_map.get(fn_name).cloned().unwrap_or_default();
-
-        for method in &builtin_methods {
-            if carved.contains(method.as_str()) {
-                continue;
-            }
-            if !registered.contains(method) {
-                failures.push(format!(
-                    "  [{fn_name}] `{method}` — add to registry: \
-                     receiver_type = \"{receiver}\", name = \"{method}\""
-                ));
-            }
-        }
-    }
+    let failures: Vec<String> = builtin_methods
+        .iter()
+        .filter(|method| !carved.contains(method.as_str()) && !registered.contains(*method))
+        .map(|method| {
+            format!("  [{fn_name}] `{method}`: add to registry: receiver_type = \"{receiver}\", name = \"{method}\"")
+        })
+        .collect();
 
     assert!(
         failures.is_empty(),
-        "Registry parity failure — builtins.rs methods missing from registry/features.toml:\n\
+        "Registry parity failure: builtins.rs methods missing from registry/features.toml:\n\
          {}\n\n\
          Fix: add [[primitive_intrinsic]] entries. \
          Only add to carve_outs() for methods that are genuinely intentional omissions.",
@@ -220,10 +196,29 @@ fn all_builtin_methods_are_registered() {
     );
 }
 
+macro_rules! registry_parity_cases {
+    ($($case:ident: $fn_name:literal, $receiver:literal;)+) => {
+        $(
+            // bug: a built-in method the type checker accepts is missing from registry/features.toml, so the IDE never offers it | tier: Medium
+            #[test]
+            fn $case() {
+                assert_receiver_methods_registered($fn_name, $receiver);
+            }
+        )+
+    };
+}
+
+registry_parity_cases! {
+    array_methods_are_registered: "array_method_return", "Array";
+    fixed_methods_are_registered: "fixed_method_return", "Fixed";
+    maybe_methods_are_registered: "maybe_method_return", "Maybe";
+    map_methods_are_registered: "map_method_return", "Map";
+    string_methods_are_registered: "string_method_return", "String";
+    sensitive_methods_are_registered: "sensitive_method_return", "sensitive";
+}
+
+// bug: the intrinsic table's skip guard stops excluding generic collection receivers, so the registry entry panics the compiler at startup | tier: Medium
 #[test]
-// WHY: Confirms the skip guard in intrinsics.rs correctly excludes generic collection
-// receiver types from the scalar intrinsic dispatch table. Without the guard, adding
-// a generic receiver entry to the registry panics at startup.
 fn generic_collection_receivers_dont_panic_intrinsic_table() {
     // Panics at construction if the guard is absent.
     let _table = ynz_typeck::PrimitiveIntrinsicTable::m6();

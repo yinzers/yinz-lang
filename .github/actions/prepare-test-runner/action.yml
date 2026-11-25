@@ -1,0 +1,51 @@
+name: Prepare a runner to run the archived tests
+description: >-
+  Everything a job needs to run `cargo nextest run --archive-file`: the LLVM 18 tools the
+  tests spawn, Rust, nextest, and the archive built by the `archive` job, extracted over the
+  checkout. The caller checks the repository out first.
+
+runs:
+  using: composite
+  steps:
+    # The archived tests spawn `ynz`, which links with clang-18, and call opt-18/llc-18 and load
+    # libLLVM at run time, so the runtime packages are needed; the -dev packages (headers,
+    # libclang) are only needed to BUILD, which the archive job already did.
+    # libclang-rt-18-dev is named explicitly: the ASan fixtures link against its libclang_rt.asan,
+    # and the install must not depend on apt's Recommends.
+    - name: Install LLVM 18 runtime tools
+      uses: ./.github/actions/install-apt
+      with:
+        packages: llvm-18 clang-18 libclang-rt-18-dev
+        recommends: "false"
+
+    - name: Point the build at LLVM 18
+      shell: bash
+      run: echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> "$GITHUB_ENV"
+
+    - name: Install Rust
+      uses: ./.github/actions/setup-rust
+      with:
+        cache-name: none
+        cache: "false"
+
+    - name: Install cargo-nextest
+      uses: ./.github/actions/install-nextest
+
+    # Every `ynz run` writes the 53 MB runtime library to /tmp and links it there. Measured on runs
+    # 45503360748 and 45505322220 (4-vCPU runners, one sweep alone per runner): with /tmp on
+    # disk a sweep took 412-756 s at 55% iowait on a slow runner disk, with tmpfs 229-520 s at
+    # 2-12% iowait; peak scratch use was 235 MiB. `exec` is required: Docker-style tmpfs
+    # mounts are noexec and the tests run the programs they link. The size is a cap, not a
+    # reservation (pages are used on demand), and a full tmpfs returns ENOSPC, so keep it well
+    # above the peak. Nothing here reads /tmp back after the job; the archive stays on disk.
+    - name: Put /tmp on tmpfs
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo mount -t tmpfs -o size=8g,mode=1777,exec,nosuid,nodev tmpfs /tmp
+        mount | grep ' /tmp '
+
+    - name: Download the test archive
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      with:
+        name: nextest-archive

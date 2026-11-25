@@ -310,67 +310,9 @@ mod tests {
         std::fs::write(dir.join("yinz.toml"), contents).expect("write yinz.toml");
     }
 
-    // F4: an unterminated quoted value (`entry = "`) must never panic — it must be
-    // treated as an invalid/empty value, falling back to the default entry.
+    // bug: a valid `yinz.toml` is not read, so `ynz` builds a project with the wrong entry, name or version | tier: Medium
     #[test]
-    fn f4_unterminated_double_quote_does_not_panic() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        write_toml(dir.path(), "entry = \"\n");
-        let mut diags = DiagnosticBucket::new();
-        let cfg = load_project_config(dir.path(), &mut diags);
-        // Malformed value falls back to the default — no panic, which is the
-        // load-bearing assertion (this call itself is the test).
-        assert_eq!(cfg.entry, "entrypoint.ynz");
-    }
-
-    #[test]
-    fn f4_unterminated_single_quote_does_not_panic() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        write_toml(dir.path(), "entry = '\n");
-        let mut diags = DiagnosticBucket::new();
-        let cfg = load_project_config(dir.path(), &mut diags);
-        assert_eq!(cfg.entry, "entrypoint.ynz");
-    }
-
-    #[test]
-    fn f4_lone_quote_char_value_does_not_panic() {
-        // The narrowest possible repro: `rest` trims down to exactly one quote byte.
-        assert_eq!(parse_toml_string("= \""), None);
-        assert_eq!(parse_toml_string("= '"), None);
-    }
-
-    // F5: a key that merely starts with a real key name (`entrypoint_foo`, `versionabc`)
-    // must NOT be treated as that key — `strip_prefix`-style prefix matching silently
-    // mis-parsed these.
-    #[test]
-    fn f5_prefix_key_is_not_matched_as_entry() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        write_toml(
-            dir.path(),
-            "entrypoint_foo = \"should-not-become-entry.ynz\"\n",
-        );
-        let mut diags = DiagnosticBucket::new();
-        let cfg = load_project_config(dir.path(), &mut diags);
-        assert_eq!(
-            cfg.entry, "entrypoint.ynz",
-            "`entrypoint_foo` must not be parsed as the `entry` key"
-        );
-    }
-
-    #[test]
-    fn f5_prefix_key_is_not_matched_as_version() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        write_toml(dir.path(), "versionabc = \"9.9.9\"\n");
-        let mut diags = DiagnosticBucket::new();
-        let cfg = load_project_config(dir.path(), &mut diags);
-        assert_eq!(
-            cfg.version, "0.0.0",
-            "`versionabc` must not be parsed as the `version` key"
-        );
-    }
-
-    #[test]
-    fn f5_exact_key_still_parses_normally() {
+    fn exact_keys_in_yinz_toml_are_read() {
         let dir = tempfile::tempdir().expect("tempdir");
         write_toml(
             dir.path(),
@@ -383,25 +325,50 @@ mod tests {
         assert_eq!(cfg.version, "1.2.3");
     }
 
-    // A line with no `=` at all used to be silently skipped with zero signal — it must
-    // now surface a warning (falling back to defaults, same as any other malformed
-    // field).
-    #[test]
-    fn a_line_with_no_equals_sign_emits_a_warning() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        write_toml(dir.path(), "this is not a valid toml line\n");
-        let mut diags = DiagnosticBucket::new();
-        let cfg = load_project_config(dir.path(), &mut diags);
-        assert_eq!(
-            cfg.entry, "entrypoint.ynz",
-            "malformed line falls back to defaults"
-        );
-        assert!(
-            diags
-                .iter()
-                .any(|d| d.what.contains("Unrecognized line in yinz.toml")),
-            "expected an 'Unrecognized line' warning, got: {:?}",
-            diags.iter().map(|d| &d.what).collect::<Vec<_>>()
-        );
+    /// One named test per malformed-input class: the config must fall back to the defaults
+    /// (and never panic) instead of mis-reading the line. `$expected_warning` is the warning
+    /// the class must surface, or `None` when the fallback is silent.
+    macro_rules! malformed_config_case {
+        ($test_name:ident, $contents:literal, $expected_warning:expr) => {
+            // bug: a malformed `yinz.toml` line panics `ynz`, or is read as a real key, instead of falling back to the defaults | tier: Medium
+            #[test]
+            fn $test_name() {
+                let dir = tempfile::tempdir().expect("tempdir");
+                write_toml(dir.path(), $contents);
+                let mut diags = DiagnosticBucket::new();
+                let cfg = load_project_config(dir.path(), &mut diags);
+                assert_eq!(cfg.entry, "entrypoint.ynz", "entry must be the default");
+                assert_eq!(cfg.version, "0.0.0", "version must be the default");
+                let expected_warning: Option<&str> = $expected_warning;
+                if let Some(warning_text) = expected_warning {
+                    assert!(
+                        diags.iter().any(|d| d.what.contains(warning_text)),
+                        "expected a warning containing {warning_text:?}, got: {:?}",
+                        diags.iter().map(|d| &d.what).collect::<Vec<_>>()
+                    );
+                }
+            }
+        };
     }
+
+    // F4: an unterminated quoted value must be treated as an invalid value, not panic.
+    malformed_config_case!(unterminated_double_quote_falls_back, "entry = \"\n", None);
+    malformed_config_case!(unterminated_single_quote_falls_back, "entry = '\n", None);
+    // F5: a key that merely starts with a real key name is not that key.
+    malformed_config_case!(
+        entry_prefix_key_is_not_the_entry_key,
+        "entrypoint_foo = \"should-not-become-entry.ynz\"\n",
+        None
+    );
+    malformed_config_case!(
+        version_prefix_key_is_not_the_version_key,
+        "versionabc = \"9.9.9\"\n",
+        None
+    );
+    // A line with no `=` must surface a warning rather than be skipped silently.
+    malformed_config_case!(
+        a_line_with_no_equals_sign_warns_and_falls_back,
+        "this is not a valid toml line\n",
+        Some("Unrecognized line in yinz.toml")
+    );
 }

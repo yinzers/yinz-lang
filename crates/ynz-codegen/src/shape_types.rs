@@ -451,6 +451,7 @@ pub fn union_envelope_type<'ctx>(ctx: &'ctx Context) -> StructType<'ctx> {
 #[cfg(test)]
 mod union_layout_tests {
     use super::*;
+    use crate::state_machine::{default_target_machine, PipelineConfig};
     use ynz_diagnostics::SourceSpan;
     use ynz_typeck::shapes::{FieldDef, ShapeDef};
 
@@ -486,132 +487,145 @@ mod union_layout_tests {
         }
     }
 
-    fn abi(entries: &[(&str, u64, u64)]) -> HashMap<String, (u64, u64)> {
-        entries
-            .iter()
-            .map(|(name, size, align)| (name.to_string(), (*size, *align)))
-            .collect()
-    }
-
-    // Tier: High (layout is data integrity: every slot size, offset and alignment derives here).
-    // Bug caught: a slot smaller than its largest variant overwrites the next array element;
-    // a payload offset below the shape's alignment is a misaligned load.
-    #[test]
-    fn slot_is_the_tag_plus_the_largest_variant_rounded_to_the_alignment() {
-        let variants = [shape("Tiny"), shape("Big")];
-        let cases = [
-            // (Tiny size/align, Big size/align) -> (offset, payload, slot, align)
-            ((1, 1), (16, 8), (8, 16, 24, 8)),
-            // a shape variant smaller than the 8 bytes a scalar variant needs
-            ((1, 1), (1, 1), (8, 8, 16, 8)),
-            // a decimal128 field makes a variant 16-aligned: the payload moves to offset 16
-            ((1, 1), (32, 16), (16, 32, 48, 16)),
-            // a size that is no multiple of the alignment rounds up
-            ((12, 4), (20, 4), (8, 24, 32, 8)),
-        ];
-        for ((tiny_size, tiny_align), (big_size, big_align), expected) in cases {
-            let sizes = abi(&[
-                ("Tiny", tiny_size, tiny_align),
-                ("Big", big_size, big_align),
-            ]);
-            let layout = compute_union_layout(&variants, false, &sizes).expect("layout");
-            let (offset, payload, slot, align) = expected;
-            assert_eq!(
-                (
-                    layout.payload_offset,
-                    layout.payload_size,
-                    layout.slot_size,
-                    layout.slot_align
-                ),
-                (offset, payload, slot, align),
-                "{tiny_size}/{big_size}"
-            );
-            assert_eq!(
-                layout.slot_size % layout.slot_align,
-                0,
-                "array stride aligned"
-            );
-            assert!(!layout.boxed);
-        }
-    }
-
-    #[test]
-    fn a_non_shape_variant_needs_eight_payload_bytes_and_a_boxed_slot_is_sixteen() {
-        let sizes = abi(&[("Tiny", 1, 1)]);
-        let with_int = [shape("Tiny"), Type::Int];
-        let inline = compute_union_layout(&with_int, false, &sizes).expect("layout");
-        assert_eq!((inline.payload_size, inline.slot_size), (8, 16));
-        let boxed = compute_union_layout(&with_int, true, &HashMap::new()).expect("layout");
-        assert_eq!(
-            (
-                boxed.boxed,
-                boxed.payload_offset,
-                boxed.slot_size,
-                boxed.slot_align
-            ),
-            (true, 8, 16, 8)
-        );
-        // a union of heap variants with no shape variant (`string | array<int>`) is the tag word
-        // and one 8-byte payload word: the cost of the tag is one word, as a Rust `enum`
-        // discriminant, and the layout comes from this one function
-        let heap_only = [
-            Type::String,
-            Type::BuiltinArray {
-                elem: Box::new(Type::Int),
-            },
-        ];
-        let tagged = compute_union_layout(&heap_only, false, &HashMap::new()).expect("layout");
-        assert_eq!(
-            (
-                tagged.boxed,
-                tagged.payload_offset,
-                tagged.payload_size,
-                tagged.slot_size,
-                tagged.slot_align
-            ),
-            (false, 8, 8, 16, 8)
-        );
-        assert!(tagged.shape_variants.is_empty());
-    }
-
-    // Bug caught: an unboxed recursive union has no finite size, and a traversal-order
-    // dependent choice would box different unions in two modules that import each other.
-    #[test]
-    fn recursive_unions_are_exactly_those_that_reach_themselves() {
-        let node = Type::Union {
-            variants: vec![shape("Node"), Type::Nothing],
-        };
-        let left = Type::Union {
-            variants: vec![shape("Right"), Type::Nothing],
-        };
-        let right = Type::Union {
-            variants: vec![shape("Left"), Type::Nothing],
-        };
-        let plain = Type::Union {
-            variants: vec![shape("Leaf"), Type::Int],
-        };
+    /// The slot layout the public `emit_shape_types` + `ShapeLlvmTypes::union_layout` give the
+    /// union `variants`, over shapes measured on the real target's data layout.
+    fn layout_of(shapes: Vec<(&str, Vec<(&str, Type)>)>, variants: &[Type]) -> UnionLayout {
+        let machine = default_target_machine(None, PipelineConfig::o0()).expect("target machine");
+        let ctx = Context::create();
+        let module = ctx.create_module("union_layout_test");
+        module.set_triple(&machine.get_triple());
+        module.set_data_layout(&machine.get_target_data().get_data_layout());
+        let data_layout = module.get_data_layout();
+        let target_data = TargetData::create(data_layout.as_str().to_str().unwrap_or(""));
         let mut table = ShapeTable::default();
-        for definition in [
-            shape_def("Node", vec![("next", node.clone())]),
-            shape_def("Left", vec![("other", left.clone())]),
-            shape_def("Right", vec![("other", right.clone())]),
-            shape_def("Leaf", vec![("count", Type::Int)]),
-            shape_def("Holder", vec![("slot", plain.clone())]),
-        ] {
-            table.shapes.insert(definition.name.clone(), definition);
+        for (name, fields) in shapes {
+            table
+                .shapes
+                .insert(name.to_string(), shape_def(name, fields));
         }
-        let recursive = recursive_unions(&table);
-        let key_of = |ty: &Type| match ty {
-            Type::Union { variants } => union_key(variants),
-            _ => unreachable!(),
-        };
-        assert!(recursive.contains(&key_of(&node)), "self-recursive");
-        assert!(recursive.contains(&key_of(&left)), "mutual: left");
-        assert!(recursive.contains(&key_of(&right)), "mutual: right");
-        assert!(
-            !recursive.contains(&key_of(&plain)),
-            "a plain union stays inline"
-        );
-        assert_eq!(recursive.len(), 3);
+        let shape_types = emit_shape_types(&ctx, &table, &HashSet::new(), &target_data)
+            .expect("shape types emit");
+        shape_types.union_layout(variants).expect("layout")
     }
+
+    /// One named test per input class so the runner names the failing case. Each case states the
+    /// layout `(boxed, payload_offset, payload_size, slot_size, slot_align)` the slot must have.
+    macro_rules! union_layout_case {
+        ($test_name:ident, shapes: $shapes:expr, variants: $variants:expr, layout: $layout:expr) => {
+            // bug: a union slot is smaller than its largest variant (overwrites the next array element), puts the payload below the shape's alignment (a misaligned load), or is not boxed when recursive (no finite size) | tier: High
+            #[test]
+            fn $test_name() {
+                let layout = layout_of($shapes, &$variants);
+                assert_eq!(
+                    (
+                        layout.boxed,
+                        layout.payload_offset,
+                        layout.payload_size,
+                        layout.slot_size,
+                        layout.slot_align
+                    ),
+                    $layout
+                );
+            }
+        };
+    }
+
+    // The 1-byte shape `Tiny` and the 16-byte shape `Big`: the slot is the tag plus the larger.
+    union_layout_case!(
+        a_small_and_a_big_shape_slot_the_big_one,
+        shapes: vec![
+            ("Tiny", vec![("flag", Type::Bool)]),
+            ("Big", vec![("first", Type::Int), ("second", Type::Int)]),
+        ],
+        variants: [shape("Tiny"), shape("Big")],
+        layout: (false, 8, 16, 24, 8)
+    );
+    // A shape variant smaller than the 8 bytes a scalar variant needs still gets one payload word.
+    union_layout_case!(
+        shapes_smaller_than_a_word_get_one_payload_word,
+        shapes: vec![
+            ("Tiny", vec![("flag", Type::Bool)]),
+            ("Small", vec![("flag", Type::Bool)]),
+        ],
+        variants: [shape("Tiny"), shape("Small")],
+        layout: (false, 8, 8, 16, 8)
+    );
+    // A decimal128 field makes a variant 16-aligned: the payload moves to offset 16.
+    union_layout_case!(
+        a_decimal_field_moves_the_payload_to_a_sixteen_byte_boundary,
+        shapes: vec![
+            ("Tiny", vec![("flag", Type::Bool)]),
+            ("Wide", vec![("amount", Type::Number { precision: 34 }), ("count", Type::Int)]),
+        ],
+        variants: [shape("Tiny"), shape("Wide")],
+        layout: (false, 16, 32, 48, 16)
+    );
+    // A shape whose size is no multiple of the slot alignment (nine one-byte fields, size 9) rounds
+    // its payload up to the next multiple, 16, so a slot is a whole number of array strides.
+    union_layout_case!(
+        a_shape_size_that_is_no_multiple_of_the_alignment_rounds_up,
+        shapes: vec![
+            ("Tiny", vec![("flag", Type::Bool)]),
+            (
+                "Nine",
+                vec![
+                    ("a", Type::Bool),
+                    ("b", Type::Bool),
+                    ("c", Type::Bool),
+                    ("d", Type::Bool),
+                    ("e", Type::Bool),
+                    ("f", Type::Bool),
+                    ("g", Type::Bool),
+                    ("h", Type::Bool),
+                    ("i", Type::Bool),
+                ]
+            ),
+        ],
+        variants: [shape("Tiny"), shape("Nine")],
+        layout: (false, 8, 16, 24, 8)
+    );
+    // A non-shape variant needs eight payload bytes beside a shape variant.
+    union_layout_case!(
+        a_non_shape_variant_needs_eight_payload_bytes,
+        shapes: vec![("Tiny", vec![("flag", Type::Bool)])],
+        variants: [shape("Tiny"), Type::Int],
+        layout: (false, 8, 8, 16, 8)
+    );
+    // Heap variants with no shape variant: the tag word and one payload word.
+    union_layout_case!(
+        heap_variants_are_the_tag_word_and_one_payload_word,
+        shapes: vec![],
+        variants: [Type::String, Type::BuiltinArray { elem: Box::new(Type::Int) }],
+        layout: (false, 8, 8, 16, 8)
+    );
+    // A union its own shape variant reaches through a field has no finite inline size: boxed.
+    union_layout_case!(
+        a_self_recursive_union_is_boxed,
+        shapes: vec![(
+            "Node",
+            vec![("next", Type::Union { variants: vec![shape("Node"), Type::Nothing] })]
+        )],
+        variants: [shape("Node"), Type::Nothing],
+        layout: (true, 8, 8, 16, 8)
+    );
+    // Two shapes whose union fields reach each other: each union is on a cycle, both boxed.
+    union_layout_case!(
+        a_mutually_recursive_union_is_boxed,
+        shapes: vec![
+            ("Left", vec![("other", Type::Union { variants: vec![shape("Right"), Type::Nothing] })]),
+            ("Right", vec![("other", Type::Union { variants: vec![shape("Left"), Type::Nothing] })]),
+        ],
+        variants: [shape("Right"), Type::Nothing],
+        layout: (true, 8, 8, 16, 8)
+    );
+    // A union field no shape reaches back through stays inline.
+    union_layout_case!(
+        a_plain_union_field_stays_inline,
+        shapes: vec![
+            ("Leaf", vec![("count", Type::Int)]),
+            ("Holder", vec![("slot", Type::Union { variants: vec![shape("Leaf"), Type::Int] })]),
+        ],
+        variants: [shape("Leaf"), Type::Int],
+        layout: (false, 8, 8, 16, 8)
+    );
 }

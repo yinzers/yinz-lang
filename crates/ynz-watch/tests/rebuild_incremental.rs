@@ -1,7 +1,7 @@
 /// Integration tests for incremental rebuild via salsa: shadow-state propagation + DB rebuild + counter reset.
 ///
-/// Verifies that the salsa cache is hot on the second rebuild (edit with no AST change)
-/// and that `WatchDb::rebuild_db()` preserves source state across the DB drop+recreate.
+/// Verifies that `WatchDb::rebuild_db()` preserves source state across the DB drop+recreate
+/// and resets the periodic-rebuild counter.
 use std::path::{Path, PathBuf};
 
 use ynz_watch::{
@@ -21,9 +21,7 @@ fn make_db(sources: &[(&str, &str)]) -> WatchDb {
     init_db(&entries)
 }
 
-// WHY: shadow source state must survive a salsa DB drop+recreate (Layer 2 periodic rebuild).
-//      If this breaks, rebuild_db() silently empties the DB and watch reports 0 errors on
-//      broken code — silent-wrong-output. Do NOT loosen: fix the shadow/repopulate logic.
+// bug: rebuild_db() drops or reverts source text (a registered file, or an update_source edit made before the rebuild), so watch reports 0 errors on broken code | tier: Medium
 #[test]
 fn rebuild_db_round_trips_source_text() {
     let mut db = make_db(&[
@@ -32,7 +30,9 @@ fn rebuild_db_round_trips_source_text() {
             "function entrypoint() -> Nothing { print(42) }\n",
         ),
         ("/tmp/b.ynz", "// module b\n"),
+        ("/tmp/x.ynz", "// v0\n"),
     ]);
+    db.update_source(Path::new("/tmp/x.ynz"), "// v1\n".to_string());
 
     db.rebuild_db();
 
@@ -47,28 +47,14 @@ fn rebuild_db_round_trips_source_text() {
         Some("// module b\n"),
         "all registered sources must survive rebuild_db()"
     );
-}
-
-// WHY: update_source must propagate the new text to the snapshot (shadow map) so that
-//      (a) the next rebuild uses the updated text, and (b) rebuild_db() sees the new content.
-//      Catches bugs where salsa gets the update but the shadow doesn't, causing incorrect
-//      content after a periodic DB rebuild.
-#[test]
-fn update_source_reflects_in_snapshot() {
-    let mut db = make_db(&[("/tmp/x.ynz", "// v0\n")]);
-
-    db.update_source(Path::new("/tmp/x.ynz"), "// v1\n".to_string());
-
-    let snap = db.source_snapshot();
     assert_eq!(
         snap.get("/tmp/x.ynz").map(String::as_str),
         Some("// v1\n"),
-        "update_source must propagate to the snapshot"
+        "an update_source edit must survive rebuild_db()"
     );
 }
 
-// WHY: rebuild_count must reset to 0 after rebuild_db() so the Layer 2 periodic-rebuild
-//      trigger fires again after N rebuilds, not N×2 or never again.
+// bug: the periodic-rebuild trigger fires below its threshold, or rebuild_count stays non-zero after rebuild_db() so the trigger never fires again at N rebuilds | tier: Medium
 #[test]
 fn rebuild_count_resets_after_periodic_rebuild() {
     use std::time::Duration;
@@ -79,10 +65,14 @@ fn rebuild_count_resets_after_periodic_rebuild() {
     db.update_source(entry, "function entrypoint() -> Nothing { }\n".to_string());
     let _outcome = db.run_codegen(entry);
 
-    // Counter should now be 1; threshold of 1 triggers rebuild.
+    // Counter should now be 1; threshold of 1 triggers rebuild, a threshold of 2 does not.
     assert!(
         db.should_periodic_rebuild(1, Duration::from_secs(9999)),
         "should_periodic_rebuild must return true when rebuild_count >= threshold"
+    );
+    assert!(
+        !db.should_periodic_rebuild(2, Duration::from_secs(9999)),
+        "should_periodic_rebuild must return false below the threshold"
     );
 
     db.rebuild_db();

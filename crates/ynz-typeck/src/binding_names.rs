@@ -515,53 +515,94 @@ mod tests {
         (name.clone(), span.clone())
     }
 
-    // WHY: two live bindings named `x` must get two codegen names, and a name the user wrote
+    /// One named test per case so the runner names the failing case. `$body` runs with the
+    /// type-checked `$module` and its recorded `$names`.
+    macro_rules! apply_case {
+        ($test_name:ident, $source:expr, |$module:ident, $names:ident| $body:block) => {
+            // bug: BindingNames::apply gives two live bindings one codegen name, follows a use to the wrong declaration, or keeps a raw name for an unrecorded binding, so they share a frame slot | tier: High
+            #[test]
+            fn $test_name() {
+                #[allow(unused_mut)]
+                let ($module, mut $names) = recorded($source);
+                $body
+            }
+        };
+    }
+
+    // Case bug: two live bindings named `x` must get two codegen names, and a name the user wrote
     // (`x__1`) must never be handed out for a different binding — a clash would put two
     // bindings back in one slot, the exact bug class this map exists to close.
-    #[test]
-    fn shadowing_declarations_get_unique_names_that_avoid_user_names() {
-        let source = "function entrypoint() -> Nothing {\n  let flag = true\n  let x = 1\n  \
-                      let x__1 = 2\n  if (flag) {\n    let x = 3\n    print(x.toString())\n  }\n  \
-                      print(x__1.toString())\n}\n";
-        let (module, names) = recorded(source);
-        let renamed = names.apply(&module).expect("a complete record applies");
-        let renamed_lets = let_names(&renamed);
-        assert_eq!(
-            renamed_lets,
-            vec!["flag", "x", "x__1", "x__2"],
-            "first `x` keeps its name, the user's `x__1` is untouched, the nested `x` skips it"
-        );
-        assert_eq!(
-            let_names(&module),
-            vec!["flag", "x", "x__1", "x"],
-            "the checker's own module keeps the user's names"
-        );
-    }
+    apply_case!(
+        shadowing_declarations_get_unique_names_that_avoid_user_names,
+        "function entrypoint() -> Nothing {\n  let flag = true\n  let x = 1\n  \
+         let x__1 = 2\n  if (flag) {\n    let x = 3\n    print(x.toString())\n  }\n  \
+         print(x__1.toString())\n}\n",
+        |module, names| {
+            let renamed = names.apply(&module).expect("a complete record applies");
+            let renamed_lets = let_names(&renamed);
+            assert_eq!(
+                renamed_lets,
+                vec!["flag", "x", "x__1", "x__2"],
+                "first `x` keeps its name, the user's `x__1` is untouched, the nested `x` skips it"
+            );
+            assert_eq!(
+                let_names(&module),
+                vec!["flag", "x", "x__1", "x"],
+                "the checker's own module keeps the user's names"
+            );
+        }
+    );
 
-    // WHY: a use must follow its own declaration, not the name — the nested `print(x)` reads
-    // the inner `x`, the outer one reads the outer `x`.
-    #[test]
-    fn uses_follow_their_declaration_not_the_name() {
-        let (module, names) = recorded(SHADOWED_X_SOURCE);
-        let renamed = names.apply(&module).expect("a complete record applies");
-        let Item::Function(function) = &renamed.items[0] else {
-            panic!("expected the entrypoint function");
-        };
-        let Stmt::If { body, .. } = &function.body.stmts[2] else {
-            panic!("expected the if");
-        };
-        assert_eq!(printed_receiver(&body.stmts[1]).0, "x__1", "inner read");
-        assert_eq!(
-            printed_receiver(&function.body.stmts[3]).0,
-            "x",
-            "outer read"
-        );
-    }
+    // Case bug: a use follows the name, not its declaration — the nested `print(x)` must read
+    // the inner `x`, the outer one the outer `x`.
+    apply_case!(
+        uses_follow_their_declaration_not_the_name,
+        SHADOWED_X_SOURCE,
+        |module, names| {
+            let renamed = names.apply(&module).expect("a complete record applies");
+            let Item::Function(function) = &renamed.items[0] else {
+                panic!("expected the entrypoint function");
+            };
+            let Stmt::If { body, .. } = &function.body.stmts[2] else {
+                panic!("expected the if");
+            };
+            assert_eq!(printed_receiver(&body.stmts[1]).0, "x__1", "inner read");
+            assert_eq!(
+                printed_receiver(&function.body.stmts[3]).0,
+                "x",
+                "outer read"
+            );
+        }
+    );
 
-    // WHY: the scope-exit release pass (card C5) asks "which binding does this use name?" through
-    // `declaration_of_use` and `codegen_name`. Two live bindings share the name `x` here; a
-    // lookup that went by the name would answer the same for both and release (or keep) the
-    // wrong one. Tier: High (data integrity — the same class as the slot sharing this map closes).
+    // Case bug (Fail Fast): a declaration typeck never recorded falls back to the raw name, which
+    // would silently share a slot with another binding; it must be a hard error.
+    apply_case!(
+        declaration_without_a_codegen_name_is_a_hard_error,
+        "function entrypoint() -> Nothing {\n  let x = 1\n  print(x.toString())\n}\n",
+        |module, _names| {
+            let error = BindingNames::default()
+                .apply(&module)
+                .expect_err("an empty record must not apply");
+            assert!(error.contains("no codegen name"), "{error}");
+        }
+    );
+
+    // Case bug (parity): an identifier that names a local binding but has no resolution entry is
+    // a hole in the record; codegen must refuse it, not keep the raw name.
+    apply_case!(
+        local_identifier_without_a_resolution_entry_is_a_hard_error,
+        "function entrypoint() -> Nothing {\n  let x = 1\n  print(x.toString())\n}\n",
+        |module, names| {
+            names.uses.clear();
+            let error = names
+                .apply(&module)
+                .expect_err("a use with no entry must not apply");
+            assert!(error.contains("no resolution entry"), "{error}");
+        }
+    );
+
+    // bug: the scope-exit release pass looks a use up by name, so two live bindings named `x` answer the same and the wrong one is released or kept | tier: High
     #[test]
     fn declaration_lookup_by_use_distinguishes_same_name_bindings() {
         let (module, names) = recorded(SHADOWED_X_SOURCE);
@@ -585,30 +626,5 @@ mod tests {
         );
         assert_eq!(names.codegen_name(inner_declaration), Some("x__1"));
         assert_eq!(names.codegen_name(outer_declaration), Some("x"));
-    }
-
-    // WHY: Fail Fast — a declaration typeck never recorded must be a hard error, never the raw
-    // name (which would silently share a slot with another binding).
-    #[test]
-    fn declaration_without_a_codegen_name_is_a_hard_error() {
-        let (module, _) =
-            recorded("function entrypoint() -> Nothing {\n  let x = 1\n  print(x.toString())\n}\n");
-        let error = BindingNames::default()
-            .apply(&module)
-            .expect_err("an empty record must not apply");
-        assert!(error.contains("no codegen name"), "{error}");
-    }
-
-    // WHY: the parity assertion — an identifier that names a local binding but has no
-    // resolution entry is a hole in the record; codegen must refuse it, not keep the raw name.
-    #[test]
-    fn local_identifier_without_a_resolution_entry_is_a_hard_error() {
-        let (module, mut names) =
-            recorded("function entrypoint() -> Nothing {\n  let x = 1\n  print(x.toString())\n}\n");
-        names.uses.clear();
-        let error = names
-            .apply(&module)
-            .expect_err("a use with no entry must not apply");
-        assert!(error.contains("no resolution entry"), "{error}");
     }
 }

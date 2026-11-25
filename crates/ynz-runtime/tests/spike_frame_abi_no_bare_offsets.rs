@@ -94,6 +94,7 @@ const SCAN_TARGETS: &[ScanTarget] = &[
 //      `SPIKE_HANDLE_BASE_OFFSET + SPIKE_HANDLE_SLOT_BYTES` / `FRAME_OFFSET_SLEEP_HANDLE` /
 //      `FRAME_OFFSET_RETURN_SLOT` as appropriate — do NOT relax this list.
 /// Time: O(n * p)  Space: O(v)  where n = total bytes of all scanned source files, p = patterns per target class (constant = 5), v = violation count found.
+// bug: a bare spike-frame offset literal in codegen drifts from the ynz-abi frame layout, so generated code and the runtime read different bytes | tier: High
 #[test]
 #[cfg_attr(
     miri,
@@ -232,16 +233,23 @@ fn find_bare_frame_header_offset_geps(source: &str) -> Vec<String> {
     violations
 }
 
-// WHY: proves `find_bare_frame_header_offset_geps` has REAL detection power on the `i8_ty,`
-//      bound-local element-type shape — not just a broadened-but-still-blind regex. Before this
-//      v0.3-M3g Phase 1 should-fix, the gate matched ONLY the inline `ctx.i8_type(),` form and
-//      was structurally unable to see a bare-offset GEP written with a bound local (the exact
-//      shape 5 real sites in `emit.rs` use — `emit.rs:7082`, `:7457`, `:12533`, `:12553`,
-//      `:12568`). This synthetic fixture reproduces that shape directly (mirroring
-//      `emit.rs:7082`'s real GEP off `frame_ptr`) so the detection claim is pinned by a
-//      permanent regression test, independent of whatever real code looks like tomorrow.
+// WHY: the general SM frame-header offsets (resume_point@0, sleep_handle@8, return_slot@16)
+//      moved into `ynz-abi` in v0.3-M3g Phase 1 alongside the spike-frame constants — the SAME
+//      drift class `no_bare_spike_frame_offset_literals` guards, just with offset values (8, 16)
+//      that are NOT unique to the frame header on the codegen side, so a context-aware scan is
+//      required instead of a plain substring ban (see module doc + the two known legitimate
+//      non-header uses of the literal `8`/`16` text this test must NOT flag).
+/// Time: O(n) where n = total bytes of the two scanned source files. Space: O(v) where v = violation count.
+// bug: a bare 8 or 16 frame-header offset in a codegen GEP drifts from the ynz-abi frame layout, so generated code and the runtime read different bytes | tier: High
 #[test]
-fn find_bare_frame_header_offset_geps_catches_bound_local_i8_ty_shape() {
+#[cfg_attr(
+    miri,
+    ignore = "same fs::read_to_string isolation limitation as no_bare_spike_frame_offset_literals \
+              above — pure source-text scan, no unsafe/concurrency surface for Miri to exercise."
+)]
+fn no_bare_general_frame_header_offset_in_codegen_gep() {
+    // The scanner must see the bound-local `i8_ty,` element-type shape, not only the inline
+    // `ctx.i8_type(),` form (5 real emit.rs sites use it); otherwise the scan below passes blind.
     let synthetic_source = r#"
 fn emit_something(frame_ptr: PointerValue) {
     let i8_ty = ctx.i8_type();
@@ -271,22 +279,7 @@ fn emit_something(frame_ptr: PointerValue) {
         "violation message must name the offending literal and the raw base pointer; got: {}",
         violations[0]
     );
-}
 
-// WHY: the general SM frame-header offsets (resume_point@0, sleep_handle@8, return_slot@16)
-//      moved into `ynz-abi` in v0.3-M3g Phase 1 alongside the spike-frame constants — the SAME
-//      drift class `no_bare_spike_frame_offset_literals` guards, just with offset values (8, 16)
-//      that are NOT unique to the frame header on the codegen side, so a context-aware scan is
-//      required instead of a plain substring ban (see module doc + the two known legitimate
-//      non-header uses of the literal `8`/`16` text this test must NOT flag).
-/// Time: O(n) where n = total bytes of the two scanned source files. Space: O(v) where v = violation count.
-#[test]
-#[cfg_attr(
-    miri,
-    ignore = "same fs::read_to_string isolation limitation as no_bare_spike_frame_offset_literals \
-              above — pure source-text scan, no unsafe/concurrency surface for Miri to exercise."
-)]
-fn no_bare_general_frame_header_offset_in_codegen_gep() {
     let codegen_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../ynz-codegen/src");
     let mut violations: Vec<String> = Vec::new();
 

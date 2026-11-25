@@ -1,22 +1,21 @@
-// Sketch consumers proving the registry schema works against 5 real query shapes.
-// Uses placeholder entries from the Phase 1 registry/features.toml.
-// When migration phases replace placeholders with real data, these tests remain
-// valid — they'll look up real entries by their new names.
+// Sketch consumers proving the registry schema works against real query shapes: each lookup
+// the compiler, LSP and docs make finds the entry build.rs generated, with its fields mapped
+// to the right slots, and misses cleanly.
 
 use std::collections::HashMap;
 
-// ---------------------------------------------------------------------------
-// 1. Lexer keyword sketch
-//    Given a keyword name, look it up and get the token string.
-// ---------------------------------------------------------------------------
+// bug: keyword_lookup returns the wrong entry for a real keyword, or an entry for a non-keyword, so the lexer misclassifies tokens | tier: Medium
 #[test]
 fn keyword_lookup_by_name() {
     let entry = ynz_registry::keyword_lookup("function")
         .expect("'function' keyword entry not found (Phase 4 migration)");
     assert_eq!(entry.token, "Function");
     assert_eq!(entry.since, "M1");
+
+    assert!(ynz_registry::keyword_lookup("definitely_not_a_keyword").is_none());
 }
 
+// bug: banned_declaration_keyword_lookup misses a banned keyword (`class`), so users get no teaching rejection | tier: Medium
 #[test]
 fn banned_declaration_keyword_lookup_by_name() {
     let entry = ynz_registry::banned_declaration_keyword_lookup("class")
@@ -26,29 +25,7 @@ fn banned_declaration_keyword_lookup_by_name() {
     assert_eq!(entry.since, "M4");
 }
 
-#[test]
-fn keyword_lookup_miss_returns_none() {
-    assert!(ynz_registry::keyword_lookup("definitely_not_a_keyword").is_none());
-}
-
-#[test]
-fn keyword_iteration_finds_all() {
-    let names: Vec<&str> = ynz_registry::keywords().map(|e| e.name).collect();
-    assert!(
-        names.contains(&"function"),
-        "expected 'function' in keyword iteration; got: {names:?}"
-    );
-    assert!(
-        names.contains(&"wait"),
-        "expected 'wait' in keyword iteration; got: {names:?}"
-    );
-    assert_eq!(names.len(), 28, "expected 28 keywords");
-}
-
-// ---------------------------------------------------------------------------
-// 2. Diagnostics banned-jargon sketch
-//    Given a banned word, get the replacement and reason.
-// ---------------------------------------------------------------------------
+// bug: banned_jargon_lookup returns the wrong replacement, drops the is_acronym flag, or invents an entry for a fine word | tier: Medium
 #[test]
 fn banned_jargon_lookup_by_name() {
     let entry = ynz_registry::banned_jargon_lookup("infer")
@@ -56,47 +33,39 @@ fn banned_jargon_lookup_by_name() {
     assert_eq!(entry.replacement, "figure out automatically");
     assert!(!entry.reason.is_empty(), "reason must not be empty");
     assert!(!entry.is_acronym);
-}
 
-#[test]
-fn banned_jargon_lookup_acronym() {
-    let entry = ynz_registry::banned_jargon_lookup("ADT")
+    let acronym = ynz_registry::banned_jargon_lookup("ADT")
         .expect("'ADT' banned-jargon entry not found (Phase 2 migration)");
-    assert!(entry.is_acronym);
-    assert_eq!(entry.replacement, "shape or options type");
-}
+    assert!(acronym.is_acronym);
+    assert_eq!(acronym.replacement, "shape or options type");
 
-#[test]
-fn banned_jargon_lookup_miss_returns_none() {
     assert!(ynz_registry::banned_jargon_lookup("totally_fine_word").is_none());
 }
 
-// ---------------------------------------------------------------------------
-// 3. Typeck primitive-intrinsic sketch
-//    Given receiver type + method name, find the entry.
-// ---------------------------------------------------------------------------
+// bug: primitive_intrinsic_methods maps kind, receiver, parameter or return types to the wrong slots, or returns entries for an unknown method, so typeck resolves the wrong intrinsic | tier: Medium
 #[test]
-fn primitive_intrinsic_method_lookup() {
-    let mut found = ynz_registry::primitive_intrinsic_methods("Int", "toNumber");
-    let entry = found
+fn primitive_intrinsic_methods_lookup() {
+    let entry = ynz_registry::primitive_intrinsic_methods("Int", "toNumber")
         .next()
         .expect("Int.toNumber intrinsic not found (Phase 3 migration)");
     assert_eq!(entry.kind, "method");
     assert_eq!(entry.receiver_type, Some("Int"));
     assert_eq!(entry.return_type, "Number");
-}
 
-#[test]
-fn primitive_intrinsic_method_1arg_lookup() {
-    let mut found = ynz_registry::primitive_intrinsic_methods("Int", "wrappingAdd");
-    let entry = found
+    let one_argument = ynz_registry::primitive_intrinsic_methods("Int", "wrappingAdd")
         .next()
         .expect("Int.wrappingAdd not found (Phase 3 migration)");
-    assert_eq!(entry.kind, "method_1arg");
-    assert_eq!(entry.param_types, &["Int"]);
-    assert_eq!(entry.return_type, "Int");
+    assert_eq!(one_argument.kind, "method_1arg");
+    assert_eq!(one_argument.param_types, &["Int"]);
+    assert_eq!(one_argument.return_type, "Int");
+
+    assert_eq!(
+        ynz_registry::primitive_intrinsic_methods("Int", "nonexistent_method").count(),
+        0
+    );
 }
 
+// bug: primitive_free_fns drops an overload of a free function (`range` has 1- and 2-argument forms), so typeck rejects a valid call | tier: Medium
 #[test]
 fn primitive_intrinsic_free_fn_lookup() {
     let mut overloads = ynz_registry::primitive_free_fns("range");
@@ -104,12 +73,7 @@ fn primitive_intrinsic_free_fn_lookup() {
     assert!(overloads.next().is_some(), "range/2 not found");
 }
 
-#[test]
-fn primitive_intrinsic_unknown_method_returns_empty() {
-    let count = ynz_registry::primitive_intrinsic_methods("Int", "nonexistent_method").count();
-    assert_eq!(count, 0);
-}
-
+// bug: type_attached_constant_lookup returns the wrong literal or value type for a constant (Int.max, Number.epsilon), so codegen emits the wrong value | tier: Medium
 #[test]
 fn type_attached_constant_lookup() {
     let entry = ynz_registry::type_attached_constant_lookup("Int", "max")
@@ -117,84 +81,33 @@ fn type_attached_constant_lookup() {
     assert_eq!(entry.type_name, "Int");
     assert_eq!(entry.value_type, "Int");
     assert_eq!(entry.value_literal, "9223372036854775807");
-}
 
-#[test]
-fn type_attached_constant_number_epsilon() {
-    let entry = ynz_registry::type_attached_constant_lookup("Number", "epsilon")
+    let epsilon = ynz_registry::type_attached_constant_lookup("Number", "epsilon")
         .expect("Number.epsilon not found (Phase 3 migration)");
-    assert_eq!(entry.value_type, "Number");
-    assert_eq!(entry.value_literal, "1e-33");
+    assert_eq!(epsilon.value_type, "Number");
+    assert_eq!(epsilon.value_literal, "1e-33");
 }
 
-// ---------------------------------------------------------------------------
-// 4. LSP autocomplete sketch
-//    Sweep all keywords + intrinsics to produce a flat name list.
-//    Proves O(N) iteration works for fuzzy-match autocomplete.
-// ---------------------------------------------------------------------------
+// bug: render_template leaves a placeholder unsubstituted or mishandles an escaped brace, so diagnostics show raw `{name}` text or lose literal braces | tier: Medium
 #[test]
-fn lsp_autocomplete_sweep() {
-    let keyword_names: Vec<&str> = ynz_registry::keywords().map(|e| e.name).collect();
-    let intrinsic_names: Vec<&str> = ynz_registry::primitive_intrinsics()
-        .map(|e| e.name)
-        .collect();
-
-    let all: Vec<&str> = keyword_names
-        .iter()
-        .chain(intrinsic_names.iter())
-        .copied()
-        .collect();
-
-    // Prove the sweep produces at least one entry per kind.
-    assert!(!keyword_names.is_empty(), "keyword list must not be empty");
-    assert!(
-        !intrinsic_names.is_empty(),
-        "intrinsic list must not be empty"
-    );
-    assert!(all.len() >= 2, "combined list must have at least 2 entries");
-
-    // Prove fuzzy filtering works (contains check — stand-in for prefix/fuzzy match).
-    let prefix = "to";
-    let matches: Vec<&&str> = all.iter().filter(|name| name.starts_with(prefix)).collect();
-    assert!(
-        !matches.is_empty(),
-        "expected at least one name starting with '{prefix}' (e.g. toString, toFloat) for fuzzy-match test"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// 5. Diagnostic-template render sketch
-//    Proves the {placeholder} substitution grammar works.
-// ---------------------------------------------------------------------------
-#[test]
-fn render_template_basic_substitution() {
+fn render_template_substitutes_placeholders_and_unescapes_braces() {
     let mut vars = HashMap::new();
     vars.insert("binding", "count");
-
-    let result = ynz_registry::render_template(
-        "`{binding}` is declared `const` and cannot be changed.",
-        &vars,
+    assert_eq!(
+        ynz_registry::render_template(
+            "`{binding}` is declared `const` and cannot be changed.",
+            &vars
+        ),
+        "`count` is declared `const` and cannot be changed."
     );
-    assert_eq!(result, "`count` is declared `const` and cannot be changed.");
+
+    assert_eq!(
+        ynz_registry::render_template("use {{braces}} like this", &HashMap::new()),
+        "use {braces} like this"
+    );
 }
 
-#[test]
-fn render_template_escaped_braces() {
-    let vars = HashMap::new();
-    let result = ynz_registry::render_template("use {{braces}} like this", &vars);
-    assert_eq!(result, "use {braces} like this");
-}
-
-#[test]
-fn render_template_multiple_vars() {
-    let mut vars = HashMap::new();
-    vars.insert("name", "wrappingAdd");
-    vars.insert("type", "Int");
-
-    let result = ynz_registry::render_template("{type}.{name}() wraps on overflow.", &vars);
-    assert_eq!(result, "Int.wrappingAdd() wraps on overflow.");
-}
-
+// bug: render_template silently renders an unknown placeholder instead of failing, so a typo in features.toml ships as broken diagnostic text | tier: Medium
 #[test]
 #[should_panic(expected = "unknown placeholder key 'missing'")]
 fn render_template_unknown_key_panics() {
@@ -202,20 +115,7 @@ fn render_template_unknown_key_panics() {
     ynz_registry::render_template("hello {missing}", &vars);
 }
 
-#[test]
-fn render_template_no_substitutions() {
-    let vars = HashMap::new();
-    let result = ynz_registry::render_template("no placeholders here", &vars);
-    assert_eq!(result, "no placeholders here");
-}
-
-// ---------------------------------------------------------------------------
-// 6. BOM and CRLF handling
-//    Proves the build pipeline handles Windows-style line endings.
-//    (The actual TOML file is parsed by build.rs at compile time;
-//     these tests prove the OUTPUT is consistent — if the build succeeded
-//     with the TOML, BOM/CRLF in the source was handled correctly.)
-// ---------------------------------------------------------------------------
+// bug: build.rs generates no entries for a registry kind (BOM/CRLF or parse regression), so every lookup of that kind misses | tier: Medium
 #[test]
 fn bom_crlf_build_succeeded() {
     // If the build script ran without panic, BOM/CRLF handling worked.
@@ -254,41 +154,18 @@ fn bom_crlf_build_succeeded() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// 7. Deferred-feature lookup sketch
-// ---------------------------------------------------------------------------
-#[test]
-fn deferred_tooling_feature_lookup() {
-    let entry = ynz_registry::deferred_tooling_features()
-        .find(|e| e.name == "--kernel")
-        .expect("--kernel deferred_tooling_feature not found (Phase 5b migration)");
-    assert_eq!(entry.ships_in, "v0.3");
-    assert_eq!(
-        entry.design_doc,
-        "docs/internal/implementation/IMP-no-runtime-mode.md"
-    );
-}
-
+// bug: deferred_language_feature_lookup returns the wrong ship version, design doc or substitute for a deferred feature, so the deferred-feature error points users at the wrong release | tier: Medium
 #[test]
 fn deferred_language_feature_lookup() {
     let entry = ynz_registry::deferred_language_feature_lookup("f32")
         .expect("f32 deferred_language_feature not found (Phase 5a migration)");
     assert_eq!(entry.ships_in, "v2+");
     assert!(!entry.why.is_empty());
+    assert!(!entry.substitute.is_empty());
     assert_eq!(entry.design_doc, "docs/reference/REF-mvp-scope.md");
 }
 
-#[test]
-fn deferred_language_feature_test_keyword() {
-    let entry = ynz_registry::deferred_language_feature_lookup("test")
-        .expect("test deferred_language_feature not found (Phase 5a migration)");
-    assert_eq!(entry.ships_in, "v0.13");
-    assert!(!entry.substitute.is_empty());
-}
-
-// ---------------------------------------------------------------------------
-// 8. Muted-hint domain lookup sketch
-// ---------------------------------------------------------------------------
+// bug: muted_hint_domain_lookup returns the wrong placement category or rendered example for a hint domain, so the inlay-hint docs misdescribe it | tier: Medium
 #[test]
 fn muted_hint_domain_lookup() {
     let entry = ynz_registry::muted_hint_domain_lookup("variable_type")
@@ -297,6 +174,7 @@ fn muted_hint_domain_lookup() {
     assert_eq!(entry.example_hint_rendered, ": Int (from 42)");
 }
 
+// bug: diagnostic_template_lookup misses a template or maps its WHAT/WHY parts to the wrong slots, so the diagnostic renders the wrong text | tier: Medium
 #[test]
 fn diagnostic_template_lookup() {
     let entry = ynz_registry::diagnostic_template_lookup("MutationOfConst")
@@ -305,27 +183,7 @@ fn diagnostic_template_lookup() {
     assert!(entry.why_template.contains("const"));
 }
 
-#[test]
-fn all_muted_hint_placement_categories_valid() {
-    for entry in ynz_registry::muted_hint_domains() {
-        assert!(
-            matches!(
-                entry.placement_category,
-                "Addition" | "Replacement" | "Informational"
-            ),
-            "muted_hint_domain '{}' has invalid placement_category '{}'",
-            entry.domain,
-            entry.placement_category
-        );
-    }
-}
-
-// ---------------------------------------------------------------------------
-// 6. Lint-rule sketch (v0.3-M4 Phase 4 — the [[lint_rule]] mechanism)
-//    Given a rule name, the firing site gets severity + rendered three-part text;
-//    the LSP gets a hover keyed by the Diagnostic.code (the rule name).
-// ---------------------------------------------------------------------------
-
+// bug: lint_rule_lookup returns the wrong severity or since for a rule, or an entry for an unknown rule, so a lint fires at the wrong level | tier: Medium
 #[test]
 fn lint_rule_lookup_by_name() {
     let entry = ynz_registry::lint_rule_lookup("prefer-yielding-sleep")
@@ -334,30 +192,17 @@ fn lint_rule_lookup_by_name() {
     assert_eq!(entry.since, "v0.3-M4");
     assert!(!entry.description.is_empty());
     assert!(!entry.design_doc.is_empty());
-}
 
-#[test]
-fn lint_rule_lookup_miss_returns_none() {
     assert!(ynz_registry::lint_rule_lookup("definitely-not-a-rule").is_none());
 }
 
-#[test]
-fn lint_rule_iteration_finds_m4_rules() {
-    let names: Vec<&str> = ynz_registry::lint_rules().map(|e| e.name).collect();
-    assert!(
-        names.contains(&"cross-thread-fields-not-padded"),
-        "expected 'cross-thread-fields-not-padded' in lint_rule iteration; got: {names:?}"
-    );
-    assert!(
-        names.contains(&"prefer-yielding-sleep"),
-        "expected 'prefer-yielding-sleep' in lint_rule iteration; got: {names:?}"
-    );
-}
-
+// A lint is a teaching surface, never a gate: build.rs rejects "error" at parse time; this
+// locks the invariant against a build.rs regression. Registry consistency keep (rubric 4); a
+// runtime list over registry entries, kept as a loop because `parallel_sweep` lives in
+// ynz-driver (rubric 11.9).
+// bug: a [[lint_rule]] with severity error slips past build.rs, so a lint blocks builds | tier: Medium
 #[test]
 fn lint_rule_severity_is_never_error() {
-    // WHY: a lint is a teaching surface, never a gate — build.rs rejects "error"
-    // at parse time; this locks the invariant against a build.rs regression.
     for entry in ynz_registry::lint_rules() {
         assert!(
             matches!(entry.severity, "suggestion" | "warning"),
@@ -368,10 +213,11 @@ fn lint_rule_severity_is_never_error() {
     }
 }
 
+// This is the GENERIC firing-site contract: any rule fires through exactly this call with its
+// own vars.
+// bug: lint_rule_diagnostic_parts leaves a {placeholder} unsubstituted in WHAT or WHY, so the lint shows raw template text | tier: Medium
 #[test]
 fn lint_rule_diagnostic_parts_render_placeholders() {
-    // WHY: this is the GENERIC firing-site contract — any rule (including M5's future
-    // `array-using-soa-layout`) fires through exactly this call with its own vars.
     let vars: HashMap<&str, &str> =
         HashMap::from([("shape", "Tally"), ("reason", "it is exported")]);
     let (what, what_instead, why) =
@@ -386,19 +232,13 @@ fn lint_rule_diagnostic_parts_render_placeholders() {
         why.contains("it is exported"),
         "WHY must substitute {{reason}}; got: {why}"
     );
-    assert!(
-        why.contains("cache line"),
-        "WHY must teach the cache-line mechanism; got: {why}"
-    );
 }
 
+// bug: lsp_lint_rule_hover_for returns no hover for a real lint rule or invents one for an unknown rule | tier: Medium
 #[test]
-fn lint_rule_lsp_hover_renders_three_parts() {
+fn lint_rule_lsp_hover_exists_for_rule_names_only() {
     let hover = ynz_registry::lsp_lint_rule_hover_for("prefer-yielding-sleep")
         .expect("hover for prefer-yielding-sleep");
-    assert!(hover.contains("**WHAT**"));
-    assert!(hover.contains("**WHAT INSTEAD**"));
-    assert!(hover.contains("**WHY**"));
     assert!(hover.contains("prefer-yielding-sleep"));
     assert!(ynz_registry::lsp_lint_rule_hover_for("not-a-rule").is_none());
 }

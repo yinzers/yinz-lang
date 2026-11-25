@@ -5,6 +5,7 @@
 
 use std::path::Path;
 
+// bug: registry/features.toml changes without regenerating ynz.tmLanguage.json, so the committed editor grammar highlights from a stale keyword list | tier: Low
 #[test]
 fn committed_grammar_matches_generator_output() {
     let committed_path = Path::new(env!("CARGO_MANIFEST_DIR"))

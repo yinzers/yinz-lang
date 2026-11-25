@@ -279,6 +279,7 @@ mod bounded_run_kills_the_whole_tree {
     // The bug this test exists to catch is a descendant that is still SCHEDULED and burning a
     // core after the budget fired. `kill(pid, 0)` cannot tell those apart (a zombie still answers
     // "I exist"); reading `/proc/<pid>/stat`'s state field can.
+    // bug: a timed-out generated program's grandchild outlives the sweep's budget, still scheduled and burning a core, because only the direct `ynz run` child is killed | tier: High
     #[test]
     fn timed_out_program_leaves_no_descendant_process_running() {
         let dir = tempfile::Builder::new()
@@ -432,6 +433,7 @@ mod outputs_match_contract {
     // and it would fail silently (green forever). These lock the exact boundary: order is
     // forgiven, nothing else is.
 
+    // bug: the order relaxation of the corpus sweep applies to every fixture (or to none), so scheduler noise fails the sweep or a real reorder passes it | tier: High
     #[test]
     fn reordering_is_forgiven_only_when_order_insensitive() {
         assert!(outputs_match("q3\n42\ndone\n", "42\ndone\nq3\n", false));
@@ -440,6 +442,7 @@ mod outputs_match_contract {
         assert!(!outputs_match("q3\n42\ndone\n", "42\ndone\nq3\n", true));
     }
 
+    // bug: the order relaxation of the corpus sweep forgives a silently different value, so a miscompile passes the sweep green | tier: High
     #[test]
     fn a_wrong_value_still_fails_even_when_order_insensitive() {
         // The miscompile shape this sweep exists to catch: same line count, same ordering,
@@ -447,12 +450,14 @@ mod outputs_match_contract {
         assert!(!outputs_match("42\ndone\n", "43\ndone\n", false));
     }
 
+    // bug: the order relaxation of the corpus sweep forgives a missing or extra output line, so a dropped or duplicated print passes the sweep green | tier: High
     #[test]
     fn a_missing_or_extra_line_still_fails_even_when_order_insensitive() {
         assert!(!outputs_match("a\nb\n", "a\n", false));
         assert!(!outputs_match("a\n", "a\nb\n", false));
     }
 
+    // bug: the order relaxation collapses duplicate lines, so a loop running an extra iteration or a double flush passes the sweep green | tier: High
     #[test]
     fn duplicate_lines_are_multiset_compared_not_set_compared() {
         // Sorted-Vec, not HashSet: a line emitted twice where it should appear once is a real
@@ -461,6 +466,7 @@ mod outputs_match_contract {
         assert!(outputs_match("a\na\nb\n", "b\na\na\n", false));
     }
 
+    // bug: the comparison rejects identical outputs under one of its two modes, so the sweep fails every program | tier: High
     #[test]
     fn identical_output_matches_under_both_modes() {
         assert!(outputs_match("a\nb\n", "a\nb\n", true));
@@ -555,6 +561,7 @@ fn collect_corpus() -> Vec<PathBuf> {
 // non-determinism for the programs in this corpus (timing fixtures are excluded).
 // Quality gate: at least 30 files in the corpus (validates coverage, not a stub).
 // If count drops below 30, either files were deleted (update corpus) or discovery broke.
+// bug: background scheduling makes a corpus program's stdout, stderr or exit code differ between two runs of the same build | tier: High
 #[test]
 fn corpus_produces_deterministic_output_across_runs() {
     let corpus = collect_corpus();
@@ -707,6 +714,7 @@ fn corpus_produces_deterministic_output_across_runs() {
 // byte comparison across modes would flag a non-bug.
 //
 // Quality gate: at least 30 non-excluded files (validates coverage, not a stub).
+// bug: parallelizing independent statements or the LLVM pass pipeline changes what a corpus program observes (a silent miscompile revealed by one mode of the matrix) | tier: High
 #[test]
 fn corpus_byte_identical_across_mode_matrix() {
     let corpus = collect_corpus();
@@ -892,6 +900,7 @@ fn fuzz_env<T: std::str::FromStr>(key: &str, default: T) -> T {
 //
 // Vacuity guard: a corpus of zero programs FAILS. A "passing" fuzz lane that generated nothing
 // is the exact shape of green rot this milestone's loom lane also guards against.
+// bug: a generated program observes a different stdout multiset, stderr or exit code in some mode of the 2x2 matrix (a silent miscompile in a shape nobody wrote a fixture for), or the fuzz lane generates nothing and passes | tier: High
 #[test]
 fn generated_corpus_byte_identical_across_mode_matrix() {
     let programs: usize = fuzz_env("YNZ_FUZZ_PROGRAMS", FUZZ_DEFAULT_PROGRAMS);

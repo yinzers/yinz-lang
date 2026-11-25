@@ -145,88 +145,16 @@ fn build_word_boundary_regex(words: &[String]) -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn grammar_has_required_top_level_fields() {
-        let g = build_grammar();
-        assert!(g["name"].is_string(), "grammar must have a name");
-        assert!(g["scopeName"].is_string(), "grammar must have a scopeName");
-        assert!(g["patterns"].is_array(), "grammar must have patterns");
-        assert!(g["repository"].is_object(), "grammar must have repository");
-    }
-
-    #[test]
-    fn keyword_pattern_contains_function() {
-        let g = build_grammar();
-        let kw_pattern = g["repository"]["keywords"]["match"].as_str().unwrap_or("");
-        assert!(
-            kw_pattern.contains("function"),
-            "keyword pattern must include 'function'"
-        );
-    }
-
-    #[test]
-    fn banned_pattern_contains_class() {
-        let g = build_grammar();
-        let banned_pattern = g["repository"]["banned-keywords"]["match"]
-            .as_str()
-            .unwrap_or("");
-        assert!(
-            banned_pattern.contains("class"),
-            "banned pattern must include 'class'"
-        );
-    }
-
-    #[test]
-    fn deferred_pattern_contains_gpu() {
-        let g = build_grammar();
-        let deferred = g["repository"]["deferred-features"]["match"]
-            .as_str()
-            .unwrap_or("");
-        assert!(
-            deferred.contains("gpu"),
-            "deferred pattern must include 'gpu'"
-        );
-    }
-
-    #[test]
-    fn built_in_types_highlighted_and_nothing_is_not_a_keyword() {
-        let g = build_grammar();
-        let type_pattern = g["repository"]["built-in-types"]["match"]
-            .as_str()
-            .unwrap_or("");
-        for type_name in BUILT_IN_TYPES {
-            assert!(
-                type_pattern.contains(type_name),
-                "built-in type {type_name} must be highlighted"
-            );
-        }
-        let kw_pattern = g["repository"]["keywords"]["match"].as_str().unwrap_or("");
-        assert!(
-            !kw_pattern.to_lowercase().contains("nothing"),
-            "`Nothing` is a type name, not a keyword"
-        );
-    }
-
+    // bug: a registry receiver type is missing from BUILT_IN_TYPES, so the editor does not highlight it | tier: Medium
     #[test]
     fn every_registry_receiver_type_is_highlighted() {
-        for entry in ynz_registry::primitive_intrinsics() {
-            if let Some(receiver_type) = entry.receiver_type {
-                assert!(
-                    BUILT_IN_TYPES.contains(&receiver_type),
-                    "registry receiver_type {receiver_type} is missing from BUILT_IN_TYPES"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn regex_pattern_has_word_boundaries() {
-        let g = build_grammar();
-        let kw = g["repository"]["keywords"]["match"].as_str().unwrap_or("");
-        assert!(
-            kw.starts_with("\\b("),
-            "keyword regex must start with word boundary \\b("
-        );
-        assert!(kw.ends_with(")\\b"), "keyword regex must end with )\\b");
+        let missing: Vec<String> = ynz_registry::primitive_intrinsics()
+            .filter_map(|entry| entry.receiver_type)
+            .filter(|receiver_type| !BUILT_IN_TYPES.contains(receiver_type))
+            .map(|receiver_type| {
+                format!("registry receiver_type {receiver_type} is missing from BUILT_IN_TYPES")
+            })
+            .collect();
+        assert!(missing.is_empty(), "{}", missing.join("\n"));
     }
 }

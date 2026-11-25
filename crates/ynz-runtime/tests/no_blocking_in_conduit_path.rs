@@ -55,6 +55,7 @@ fn production_lines(contents: &str) -> impl Iterator<Item = (usize, &str)> {
         .map(|(i, l)| (i + 1, l))
 }
 
+// bug: a synchronous blocking call (block_on, blocking_recv, park, thread::sleep) in the channel or handle runtime path wedges the cooperative pool | tier: High
 #[test]
 #[cfg_attr(
     miri,
@@ -73,6 +74,14 @@ fn conduit_runtime_path_has_zero_synchronous_blocking_calls() {
         let path = Path::new(manifest_dir).join(module);
         let contents = fs::read_to_string(&path)
             .unwrap_or_else(|_| panic!("conduit module {} must exist", path.display()));
+        // A file move or an accidental leading `#[cfg(test)]` must not let the audit pass over
+        // nothing.
+        let scannable_lines = production_lines(&contents).count();
+        assert!(
+            scannable_lines > 50,
+            "{module}: expected substantial production code before the test module; \
+             got only {scannable_lines} scannable lines — did the module move or get test-gated?"
+        );
         for (line_no, line) in production_lines(&contents) {
             for token in BANNED_TOKENS {
                 if line.contains(token) {
@@ -94,29 +103,4 @@ fn conduit_runtime_path_has_zero_synchronous_blocking_calls() {
          poll protocol instead. Offending site(s):\n{}",
         offenders.join("\n")
     );
-}
-
-/// Guard the guard: the scan actually sees non-trivial production code in BOTH modules — a
-/// file move or an accidental leading `#[cfg(test)]` must not let the audit silently pass
-/// over nothing.
-#[test]
-#[cfg_attr(
-    miri,
-    ignore = "same fs::read_to_string isolation limitation as \
-              conduit_runtime_path_has_zero_synchronous_blocking_calls above — this is the guard-\
-              the-guard test for that same pure-text audit, not a runtime/concurrency check."
-)]
-fn conduit_audit_scans_real_production_code() {
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    for module in CONDUIT_MODULES {
-        let path = Path::new(manifest_dir).join(module);
-        let contents = fs::read_to_string(&path)
-            .unwrap_or_else(|_| panic!("conduit module {} must exist", path.display()));
-        let count = production_lines(&contents).count();
-        assert!(
-            count > 50,
-            "{module}: expected substantial production code before the test module; \
-             got only {count} scannable lines — did the module move or get test-gated?"
-        );
-    }
 }

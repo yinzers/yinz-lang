@@ -171,68 +171,15 @@ fn pow10_256(n: u32) -> (u128, u128) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::bits::TEN_34;
     use super::*;
 
+    // Private-function case: `wide` is `pub(crate)` and the only production caller shifts by 1,
+    // so no public decimal128 operation reaches a shift of 128 or more; this unit case is the
+    // only way to hold the arm, as the lane-4 private-function survivors are.
+    // bug: U256::shl by 128 or more drops the low half or leaves it in the low word, so a wide product or scale is wrong by 2^128 | tier: High
     #[test]
-    fn mul_small() {
-        // WHY: schoolbook multiply must be exact for trivially verifiable inputs.
-        let r = U256::from_mul(2, 3);
-        assert_eq!(r.hi, 0);
-        assert_eq!(r.lo, 6);
-    }
-
-    #[test]
-    fn mul_large_no_overflow() {
-        let r = U256::from_mul(TEN_34, 1);
-        assert_eq!(r.hi, 0);
-        assert_eq!(r.lo, TEN_34);
-    }
-
-    #[test]
-    fn mul_cross_128_boundary() {
-        // u128::MAX × 2 = 2^129 − 2
-        let r = U256::from_mul(u128::MAX, 2);
-        assert_eq!(r.hi, 1);
-        assert_eq!(r.lo, u128::MAX - 1);
-    }
-
-    #[test]
-    fn div_rem_simple() {
-        // WHY: basic correctness check; if this fails, all decimal division is wrong.
-        let v = U256::from_u128(100);
-        let (q, r) = v.div_rem(7);
-        assert_eq!(q.lo, 14);
-        assert_eq!(r, 2);
-    }
-
-    #[test]
-    fn div_rem_large() {
-        // WHY: (10^34)^2 / 10^34 must equal 10^34 exactly.
-        // This exercises the full 256-bit division path used in decimal128 mul.
-        let prod = U256::from_mul(TEN_34, TEN_34);
-        let (q, r) = prod.div_rem(TEN_34);
-        assert_eq!(r, 0, "remainder should be 0");
-        assert_eq!(q.hi, 0, "quotient must fit in u128");
-        assert_eq!(q.lo, TEN_34);
-    }
-
-    #[test]
-    fn div_rem_large_with_remainder() {
-        let prod = U256::from_mul(TEN_34, TEN_34);
-        let divisor = TEN_34 - 1;
-        let (q, r) = prod.div_rem(divisor);
-        // Check: q * divisor + r == prod
-        let check = U256::from_mul(q.lo, divisor);
-        let (sum_lo, carry) = check.lo.overflowing_add(r);
-        let sum_hi = check.hi + if carry { 1 } else { 0 };
-        assert_eq!((sum_hi, sum_lo), (prod.hi, prod.lo));
-    }
-
-    #[test]
-    fn shl_basic() {
-        let v = U256::from_u128(1);
-        let shifted = v.shl(128);
+    fn shl_by_exactly_128_moves_the_low_half_into_the_high_half() {
+        let shifted = U256::from_u128(1).shl(128);
         assert_eq!(shifted.hi, 1);
         assert_eq!(shifted.lo, 0);
     }

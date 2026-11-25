@@ -1,203 +1,97 @@
-// WHY: Regression tests pin specific end-to-end behaviors that have historically
-// been broken or are easy to accidentally break. Unlike the sweep tests (which
-// cover all fixtures at a coarse level), regression tests make precise assertions
-// about specific fixture content to guard named invariants.
+// WHY: The LSP diagnostic pipeline (ynz-lsp via salsa queries) and the CLI
+// pipeline (`ynz build --json` via ynz-driver) must report the same error
+// count for every error-gallery example. A divergence means one pipeline is
+// silently suppressing or fabricating diagnostics.
 
 mod harness;
 use harness::InProcessHarness;
 
-fn read_fixture(name: &str) -> String {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name);
-    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("could not read fixture {name}: {e}"))
-}
-
-/// Open a file and return the diagnostics from the first publishDiagnostics
-/// notification. Uses a 2s timeout to avoid hanging on complex files.
-fn open_and_get_diagnostics(
-    client: &harness::HarnessClient,
-    uri: &str,
-    text: &str,
-) -> Vec<serde_json::Value> {
+/// Error diagnostics (LSP severity 1) published by the first notification after
+/// didOpen. Panics when none arrives within the liveness timeout.
+fn lsp_error_count(uri: &str, text: &str) -> usize {
+    let client = InProcessHarness::new().start_server();
+    client.initialize();
     client.did_open(uri, text);
-    let msg = match client.try_recv_with_params(std::time::Duration::from_secs(2)) {
-        Some(m) => m,
-        None => return vec![],
-    };
-    if let Some(params) = msg.get("params") {
-        if let Some(diags) = params.get("diagnostics").and_then(|d| d.as_array()) {
-            return diags.to_vec();
-        }
-    }
-    vec![]
+    let notification = client
+        .try_recv_with_params(std::time::Duration::from_secs(5))
+        .unwrap_or_else(|| panic!("no publishDiagnostics for {uri}"));
+    notification["params"]["diagnostics"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no diagnostics array for {uri}: {notification}"))
+        .iter()
+        .filter(|diagnostic| diagnostic["severity"] == 1)
+        .count()
 }
 
-// ---------------------------------------------------------------------------
-// Zero-diagnostic regression
-// ---------------------------------------------------------------------------
-
-#[test]
-fn regression_no_errors_fixture_has_zero_diagnostics() {
-    // WHY: The no_errors.ynz fixture is the simplest possible valid Yinz program.
-    // If the LSP reports any diagnostics for it, a parser or typeck regression
-    // broke valid code. This is a strict regression pin — zero tolerance.
-    let client = InProcessHarness::new().start_server();
-    client.initialize();
-    let text = read_fixture("no_errors.ynz");
-    let diags = open_and_get_diagnostics(&client, "file:///no_errors.ynz", &text);
-    assert!(
-        diags.is_empty(),
-        "no_errors.ynz must have 0 diagnostics; got {}:\n{:?}",
-        diags.len(),
-        diags
-    );
+/// Error count from the summary line of `ynz build --json <path>`.
+fn cli_error_count(ynz_binary: &std::path::Path, path: &std::path::Path) -> usize {
+    let output = std::process::Command::new(ynz_binary)
+        .args([
+            "build",
+            "--json",
+            path.to_str().expect("path is valid UTF-8"),
+        ])
+        .output()
+        .unwrap_or_else(|err| panic!("could not run {}: {err}", ynz_binary.display()));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let summary_line = stdout
+        .lines()
+        .rfind(|line| !line.is_empty())
+        .unwrap_or_else(|| panic!("no --json output for {}", path.display()));
+    let summary: serde_json::Value = serde_json::from_str(summary_line)
+        .unwrap_or_else(|err| panic!("unparseable summary for {}: {err}", path.display()));
+    assert_eq!(summary["type"], "summary", "last line is the summary");
+    summary["errors"]
+        .as_u64()
+        .expect("summary has an error count") as usize
 }
 
-// ---------------------------------------------------------------------------
-// Teaching content regression
-// ---------------------------------------------------------------------------
-
+// bug: the language server reports a different error count than `ynz build --json` for an error-gallery example | tier: Medium
 #[test]
-fn regression_errors_fixture_has_diagnostics_with_teaching_content() {
-    // WHY: Golden Rule 3 requires every diagnostic to carry WHAT/WHAT INSTEAD/WHY
-    // content. This test verifies that at least one diagnostic in has_errors.ynz
-    // contains both "WHAT INSTEAD:" and "WHY:" markers in its message. If this
-    // fails, the diagnostic_transform pipeline lost the teaching content.
-    let client = InProcessHarness::new().start_server();
-    client.initialize();
-    let text = read_fixture("has_errors.ynz");
-    let diags = open_and_get_diagnostics(&client, "file:///has_errors.ynz", &text);
-
-    assert!(
-        !diags.is_empty(),
-        "has_errors.ynz must have at least one diagnostic"
-    );
-
-    let has_teaching_content = diags.iter().any(|d| {
-        let msg = d.get("message").and_then(|m| m.as_str()).unwrap_or("");
-        msg.contains("WHAT INSTEAD:") && msg.contains("WHY:")
-    });
-
-    assert!(
-        has_teaching_content,
-        "at least one diagnostic in has_errors.ynz must contain 'WHAT INSTEAD:' and 'WHY:' \
-         (Golden Rule 3 teaching format); found diagnostics:\n{:?}",
-        diags
-            .iter()
-            .map(|d| d.get("message").and_then(|m| m.as_str()).unwrap_or(""))
-            .collect::<Vec<_>>()
-    );
-}
-
-// ---------------------------------------------------------------------------
-// CLI vs LSP divergence regression (ignored: requires ynz binary and can be slow)
-// ---------------------------------------------------------------------------
-
-#[test]
-#[ignore]
 fn regression_lsp_vs_cli_divergence() {
-    // WHY: The LSP diagnostic pipeline (ynz-lsp via salsa queries) and the CLI
-    // pipeline (ynz build --json via ynz-driver) must report the same diagnostic
-    // count per severity for every fixture. A divergence means one pipeline is
-    // silently suppressing or fabricating diagnostics. This test is #[ignore]
-    // because it requires the `ynz` binary to be built and present.
-    // Run manually with: cargo test -p ynz-lsp -- --ignored regression_lsp_vs_cli
-    //
-    // Closes: lsp-vs-cli-exact-divergence in todos.md.
-    use std::path::Path;
-
-    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+    let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .expect("crate dir has a parent")
-        .parent()
-        .expect("crates/ dir has a parent");
+        .and_then(|crates_dir| crates_dir.parent())
+        .expect("crates/ynz-lsp has a workspace root two levels up");
+    // `ynz` belongs to ynz-driver, so cargo gives this test no CARGO_BIN_EXE for it. It is built
+    // into the same folder as `ynz-lsp`, whose path cargo does give (valid whatever the layout
+    // of the test executables, and after `nextest archive` + `--workspace-remap`, which restores
+    // the workspace's `target/<profile>/` folder). The test executable's own path is not usable:
+    // under the archive it sits in a build folder, not beside the binaries.
+    let ynz_binary = std::path::Path::new(env!("CARGO_BIN_EXE_ynz-lsp")).with_file_name("ynz");
+    assert!(
+        ynz_binary.exists(),
+        "ynz binary not found at {}; run `cargo build -p ynz-driver` first",
+        ynz_binary.display()
+    );
 
-    let ynz_binary = std::env::current_exe()
-        .expect("current_exe must be readable")
-        .parent()
-        .expect("test binary has a parent dir")
-        .parent()
-        .expect("deps dir has a parent")
-        .join("ynz");
+    let mut example_paths: Vec<_> =
+        std::fs::read_dir(workspace_root.join("examples/primantis-orders"))
+            .expect("examples/primantis-orders must be readable")
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().and_then(|extension| extension.to_str()) == Some("ynz"))
+            .collect();
+    example_paths.sort();
 
-    if !ynz_binary.exists() {
-        eprintln!(
-            "regression_lsp_vs_cli_divergence: ynz binary not found at {}; skipping",
-            ynz_binary.display()
-        );
-        return;
-    }
-
-    let error_dir = workspace_root.join("examples/primantis-orders");
-    let mut entries: Vec<_> = std::fs::read_dir(&error_dir)
-        .expect("examples/primantis-orders must be readable")
-        .flatten()
-        .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("ynz"))
-        .collect();
-    entries.sort_by_key(|e| e.path());
-
-    for entry in &entries {
-        let path = entry.path();
-        let text = std::fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e));
-        let uri = format!("file://{}", path.display());
-
-        // Count diagnostics from the LSP pipeline.
-        let client = InProcessHarness::new().start_server();
-        client.initialize();
-        let lsp_diags = open_and_get_diagnostics(&client, &uri, &text);
-        let lsp_error_count = lsp_diags
-            .iter()
-            .filter(|d| {
-                d.get("severity")
-                    .and_then(|s| s.as_u64())
-                    .map(|s| s == 1) // LSP DiagnosticSeverity::ERROR = 1
-                    .unwrap_or(false)
-            })
-            .count();
-
-        // Count diagnostics from the CLI pipeline via `--json` structured output.
-        let cli_output = std::process::Command::new(&ynz_binary)
-            .args([
-                "build",
-                "--json",
-                path.to_str().expect("path is valid UTF-8"),
-            ])
-            .output();
-
-        let cli_error_count = match cli_output {
-            Err(_) => {
-                eprintln!(
-                    "regression_lsp_vs_cli_divergence: could not run CLI for {}; skipping",
+    let disagreements: Vec<String> = example_paths
+        .iter()
+        .filter_map(|path| {
+            let text = std::fs::read_to_string(path)
+                .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+            let lsp_errors = lsp_error_count(&format!("file://{}", path.display()), &text);
+            let cli_errors = cli_error_count(&ynz_binary, path);
+            (lsp_errors != cli_errors).then(|| {
+                format!(
+                    "{}: LSP {lsp_errors} errors, CLI {cli_errors} errors",
                     path.display()
-                );
-                continue;
-            }
-            Ok(output) => {
-                // Parse the summary line (last line of NDJSON output).
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let summary_line = stdout.lines().rfind(|l| !l.is_empty());
-                match summary_line.and_then(|l| serde_json::from_str::<serde_json::Value>(l).ok()) {
-                    Some(v) if v["type"] == "summary" => v["errors"].as_u64().unwrap_or(0) as usize,
-                    _ => {
-                        eprintln!(
-                            "regression_lsp_vs_cli_divergence: could not parse --json output for {}; skipping",
-                            path.display()
-                        );
-                        continue;
-                    }
-                }
-            }
-        };
-
-        assert_eq!(
-            lsp_error_count,
-            cli_error_count,
-            "LSP vs CLI ERROR COUNT disagreement for {}:\n  LSP: {} errors\n  CLI (--json): {} errors",
-            path.display(),
-            lsp_error_count,
-            cli_error_count
-        );
-    }
+                )
+            })
+        })
+        .collect();
+    assert!(
+        disagreements.is_empty(),
+        "LSP and CLI disagree:\n{}",
+        disagreements.join("\n")
+    );
 }

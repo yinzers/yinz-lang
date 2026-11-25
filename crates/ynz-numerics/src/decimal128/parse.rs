@@ -131,58 +131,60 @@ mod tests {
     use super::super::bits::decode;
     use super::*;
 
+    /// Parse then format: a literal must survive as the same number.
     fn roundtrip(s: &str) -> String {
         let bits = parse(s).unwrap();
         super::super::format::format(bits)
     }
 
-    #[test]
-    fn parse_zero() {
-        // WHY: zero is the identity element; if it doesn't parse, every zero
-        // literal in a Yinz program produces an error.
-        assert_eq!(roundtrip("0"), "0");
+    macro_rules! parse_round_trip_cases {
+        ($($case:ident: $text:literal => $formatted:literal;)+) => {
+            $(
+                // bug: decimal128 parse reads a number literal as a different value, so every such literal in a Yinz program is wrong | tier: High
+                #[test]
+                fn $case() {
+                    assert_eq!(roundtrip($text), $formatted);
+                }
+            )+
+        };
     }
 
-    #[test]
-    fn parse_one() {
-        assert_eq!(roundtrip("1"), "1");
+    parse_round_trip_cases! {
+        zero_parses: "0" => "0";
+        positive_integer_parses: "1" => "1";
+        negative_integer_parses: "-1" => "-1";
+        fraction_parses: "0.1" => "0.1";
+        positive_exponent_parses: "1e5" => "100000";
+        negative_exponent_parses: "2.5e-3" => "0.0025";
     }
 
+    // bug: decimal128 parse rejects the text "Infinity" or reads it as a finite number | tier: High
     #[test]
-    fn parse_negative() {
-        assert_eq!(roundtrip("-1"), "-1");
+    fn infinity_parses_as_infinity() {
+        assert!(decode(parse("Infinity").unwrap()).is_infinity());
     }
 
+    // bug: decimal128 parse rejects the text "NaN" or reads it as a finite number | tier: High
     #[test]
-    fn parse_decimal() {
-        assert_eq!(roundtrip("0.1"), "0.1");
-        assert_eq!(roundtrip("3.14"), "3.14");
+    fn nan_parses_as_nan() {
+        assert!(decode(parse("NaN").unwrap()).is_nan());
     }
 
-    #[test]
-    fn parse_scientific() {
-        assert_eq!(roundtrip("1e5"), "100000");
-        assert_eq!(roundtrip("2.5e-3"), "0.0025");
+    macro_rules! parse_invalid_cases {
+        ($($case:ident: $text:literal;)+) => {
+            $(
+                // bug: decimal128 parse accepts malformed text and returns a number instead of None | tier: High
+                #[test]
+                fn $case() {
+                    assert!(parse($text).is_none());
+                }
+            )+
+        };
     }
 
-    #[test]
-    fn parse_infinity() {
-        let bits = parse("Infinity").unwrap();
-        let v = decode(bits);
-        assert!(v.is_infinity());
-    }
-
-    #[test]
-    fn parse_nan() {
-        let bits = parse("NaN").unwrap();
-        let v = decode(bits);
-        assert!(v.is_nan());
-    }
-
-    #[test]
-    fn parse_invalid_returns_none() {
-        assert!(parse("abc").is_none());
-        assert!(parse("").is_none());
-        assert!(parse("1.2.3").is_none()); // Two dots
+    parse_invalid_cases! {
+        letters_are_rejected: "abc";
+        empty_text_is_rejected: "";
+        two_decimal_points_are_rejected: "1.2.3";
     }
 }

@@ -104,50 +104,6 @@ fn assert_task_reads_its_own_union(callee: Callee, argument: Argument, no_optimi
     );
 }
 
-macro_rules! union_spawn_cases {
-    ($name:ident, $bug:literal, $callee:expr, $argument:expr) => {
-        #[doc = $bug]
-        mod $name {
-            use super::*;
-
-            #[test]
-            fn optimized() {
-                assert_task_reads_its_own_union($callee, $argument, false);
-            }
-
-            #[test]
-            fn no_optimize() {
-                assert_task_reads_its_own_union($callee, $argument, true);
-            }
-        }
-    };
-}
-
-union_spawn_cases!(
-    cpu_callee_field_read,
-    "parked 71: a CPU task is handed a pointer to the spawner's dead union envelope (High)",
-    Callee::Cpu,
-    Argument::FieldRead
-);
-union_spawn_cases!(
-    cpu_callee_consumed_binding,
-    "parked 71: a CPU task is handed a pointer to the spawner's dead union envelope (High)",
-    Callee::Cpu,
-    Argument::ConsumedBinding
-);
-union_spawn_cases!(
-    state_machine_callee_field_read,
-    "parked 71: a state-machine task reads the string the spawner overwrote and freed (High)",
-    Callee::StateMachine,
-    Argument::FieldRead
-);
-union_spawn_cases!(
-    state_machine_callee_consumed_binding,
-    "parked 71: a state-machine task reads a union binding the spawn consumed (High)",
-    Callee::StateMachine,
-    Argument::ConsumedBinding
-);
-
 /// `(cell alloc, cell free, string alloc, string free)` of one run that spawns `tasks` tasks from
 /// a `for` loop, each handed `box.choice` (a `Tag` holding a string).
 fn counted_union_loop_run(suspending_callee: bool, tasks: usize) -> (u64, u64, u64, u64) {
@@ -179,42 +135,6 @@ fn counted_union_loop_run(suspending_callee: bool, tasks: usize) -> (u64, u64, u
         counters.string_free,
     )
 }
-
-/// Three more loop iterations add exactly as many frees as allocations for a CPU callee: the
-/// task's slot and the string it owns are released through the one release helper.
-#[test]
-fn cpu_callee_releases_its_union_slot_in_a_spawn_loop() {
-    // Bug caught: the task's union slot (a cell, and a string the slot owns) freed by nobody, so
-    // a spawn in a loop grows the heap. Tier: High.
-    let (
-        (alloc_one, free_one, string_alloc_one, string_free_one),
-        (alloc_four, free_four, string_alloc_four, string_free_four),
-    ) = concurrently(
-        || counted_union_loop_run(false, 1),
-        || counted_union_loop_run(false, 4),
-    );
-    assert!(
-        string_alloc_four > string_alloc_one,
-        "three more spawns copied no string: the slot was not persisted by value"
-    );
-    assert_eq!(
-        (alloc_four - alloc_one, string_alloc_four - string_alloc_one),
-        (free_four - free_one, string_free_four - string_free_one),
-        "three more spawns must free what they allocate (cells, strings)"
-    );
-}
-union_spawn_cases!(
-    cpu_callee_shape_into_union,
-    "parked 71: a CPU task handed a plain shape for its union parameter reads a dead envelope (High)",
-    Callee::Cpu,
-    Argument::ShapeIntoUnion
-);
-union_spawn_cases!(
-    state_machine_callee_shape_into_union,
-    "parked 71: a state-machine task handed a plain shape for its union parameter (High)",
-    Callee::StateMachine,
-    Argument::ShapeIntoUnion
-);
 
 /// Parked entry 69: a deep copy (`union_deepen_fn`) and a release (`release_fn`) that walk a
 /// self-referential union run over the data. A chain of `CHAIN_LENGTH` nodes is handed to a task
@@ -273,15 +193,77 @@ fn assert_chain_spawns_balance(suspending_callee: bool, no_optimize: bool) {
     );
 }
 
-#[test]
-fn recursive_chain_spawn_in_a_loop_balances_cpu_callee() {
-    // Bug caught: the recursive copy or release of a self-referential union misses a box per node,
-    // or frees one twice. Tier: High (data integrity).
-    at_both_optimization_levels(|no_optimize| assert_chain_spawns_balance(false, no_optimize));
+/// One named test per spawn path of the `spawn a union argument` run unit; each case runs at both optimization levels (the spawn-argument cases also under AddressSanitizer).
+macro_rules! union_spawn_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a spawned task reads a union argument the spawner's frame, envelope or release helper already freed, or the spawn leaks or double-frees the copy it made | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
 }
 
-#[test]
-fn recursive_chain_spawn_in_a_loop_balances_state_machine_callee() {
-    // Bug caught: as above, through the state-machine retire ladder. Tier: High.
-    at_both_optimization_levels(|no_optimize| assert_chain_spawns_balance(true, no_optimize));
+union_spawn_high_case! {
+    // case: a CPU task is handed a pointer to the spawner's dead union envelope
+    cpu_callee_field_read => {
+        at_both_optimization_levels(|no_optimize| {
+            assert_task_reads_its_own_union(Callee::Cpu, Argument::FieldRead, no_optimize);
+        });
+    }
+    // case: a CPU task is handed a pointer to the spawner's dead union envelope
+    cpu_callee_consumed_binding => {
+        at_both_optimization_levels(|no_optimize| {
+            assert_task_reads_its_own_union(Callee::Cpu, Argument::ConsumedBinding, no_optimize);
+        });
+    }
+    // case: a state-machine task reads the string the spawner overwrote and freed
+    state_machine_callee_field_read => {
+        at_both_optimization_levels(|no_optimize| {
+            assert_task_reads_its_own_union(Callee::StateMachine, Argument::FieldRead, no_optimize);
+        });
+    }
+    // case: a state-machine task reads a union binding the spawn consumed
+    state_machine_callee_consumed_binding => {
+        at_both_optimization_levels(|no_optimize| {
+            assert_task_reads_its_own_union(Callee::StateMachine, Argument::ConsumedBinding, no_optimize);
+        });
+    }
+    // case: a CPU task handed a plain shape for its union parameter reads a dead envelope
+    cpu_callee_shape_into_union => {
+        at_both_optimization_levels(|no_optimize| {
+            assert_task_reads_its_own_union(Callee::Cpu, Argument::ShapeIntoUnion, no_optimize);
+        });
+    }
+    // case: a state-machine task handed a plain shape for its union parameter
+    state_machine_callee_shape_into_union => {
+        at_both_optimization_levels(|no_optimize| {
+            assert_task_reads_its_own_union(Callee::StateMachine, Argument::ShapeIntoUnion, no_optimize);
+        });
+    }
+    // case: three more loop iterations add exactly as many frees as allocations for a CPU callee: the task's slot and the string it owns are released through the one release helper; bug: the task's union slot (a cell, and a string the slot owns) freed by nobody, so a spawn in a loop grows the heap.
+    cpu_callee_releases_its_union_slot_in_a_spawn_loop => {
+        let (
+            (alloc_one, free_one, string_alloc_one, string_free_one),
+            (alloc_four, free_four, string_alloc_four, string_free_four),
+        ) = concurrently(
+            || counted_union_loop_run(false, 1),
+            || counted_union_loop_run(false, 4),
+        );
+        assert!(
+            string_alloc_four > string_alloc_one,
+            "three more spawns copied no string: the slot was not persisted by value"
+        );
+        assert_eq!(
+            (alloc_four - alloc_one, string_alloc_four - string_alloc_one),
+            (free_four - free_one, string_free_four - string_free_one),
+            "three more spawns must free what they allocate (cells, strings)"
+        );
+    }
+    // case: the recursive copy or release of a self-referential union misses a box per node, or frees one twice..
+    recursive_chain_spawn_in_a_loop_balances_cpu_callee => {
+        at_both_optimization_levels(|no_optimize| assert_chain_spawns_balance(false, no_optimize));
+    }
+    // case: as above, through the state-machine retire ladder.
+    recursive_chain_spawn_in_a_loop_balances_state_machine_callee => {
+        at_both_optimization_levels(|no_optimize| assert_chain_spawns_balance(true, no_optimize));
+    }
 }

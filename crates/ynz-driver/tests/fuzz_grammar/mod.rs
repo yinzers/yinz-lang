@@ -1045,6 +1045,7 @@ mod generator_contract {
     ///
     ///   YNZ_FUZZ_SEED=1003 cargo test -p ynz-driver --test cross_impl_consistency \
     ///     print_generated_program -- --ignored --nocapture
+    // bug: a program the fuzz sweep reported cannot be reproduced and read from its seed alone (developer replay tool, asserts nothing; keeps its ignore) | tier: Low
     #[test]
     #[ignore = "developer replay tool — prints one generated program, asserts nothing"]
     fn print_generated_program() {
@@ -1059,6 +1060,7 @@ mod generator_contract {
         );
     }
 
+    // bug: one seed generates two different programs, so the replay key of a reported fuzz failure is worthless | tier: Medium
     #[test]
     fn generation_is_deterministic_from_the_seed() {
         for seed in [1u64, 7, 4242, u64::MAX] {
@@ -1070,6 +1072,7 @@ mod generator_contract {
         }
     }
 
+    // bug: the grammar collapses onto a narrow shape, so the sweep proves nothing while reporting a 100% compile rate | tier: Medium
     #[test]
     fn a_seed_range_produces_many_distinct_programs() {
         // The STOP-condition's anti-triviality half: a generator that emits one program with a
@@ -1081,6 +1084,7 @@ mod generator_contract {
         );
     }
 
+    // bug: the generator emits a program with no entrypoint or a statement count outside the guaranteed range, so the sweep compares trivial programs | tier: Medium
     #[test]
     fn every_program_declares_an_entrypoint_and_a_non_trivial_body() {
         for seed in 0..64u64 {
@@ -1100,6 +1104,7 @@ mod generator_contract {
         }
     }
 
+    // bug: the reported background flag disagrees with the source text the oracle classifies by, so a second drifting derivation misclassifies scheduler-dependent output | tier: Medium
     #[test]
     fn uses_background_agrees_with_the_source_text() {
         // The oracle classifies scheduler-dependence from the SOURCE
@@ -1116,6 +1121,7 @@ mod generator_contract {
         }
     }
 
+    // bug: fewer than half of the generated programs spawn background work, so the concurrent surface the harness exists for goes unexercised | tier: Medium
     #[test]
     fn a_meaningful_share_of_programs_exercise_concurrency() {
         let concurrent = (0..256u64).filter(|s| generate(*s).uses_background).count();
@@ -1126,6 +1132,7 @@ mod generator_contract {
         );
     }
 
+    // bug: a bare suspending call forms an auto-parallel I/O group whose legitimate reorder the oracle flags as a divergence | tier: Medium
     #[test]
     fn suspending_calls_in_the_body_are_always_wait_prefixed() {
         // An un-prefixed adjacent pair would form an auto-parallel I/O group whose member
@@ -1169,6 +1176,7 @@ mod generator_contract {
     /// starved or deleted arm collapses its share toward 0%, which trips the floor long before
     /// ordinary RNG variance would. Pool-reuse floor verified stable across bases 0, 10000,
     /// 1000000 with 1024-seed corpus (fix round 4, m8-p8-fix4-20260904).
+    // bug: a menu arm of the generator is deleted or starved and every other assertion stays green, so a construct the milestone exists for is never generated | tier: Medium
     #[test]
     fn per_construct_floors_hold_over_a_fixed_corpus() {
         let n = 1024usize;

@@ -1,46 +1,73 @@
-// WHY: Tests for `collect_ownership_hints_expr`'s generic-fn and UFCS (dot-call) coverage.
+// WHY: tests for `ownership_call_site_hints` (the muted ownership hints at call sites and at
+// stores). One unit; each case is one call syntax or store form that must reach the hint:
 //
-// Bug 2.11: ownership muted hints must be consistent across both call syntaxes.
-// `player.heal(20)` (UFCS / MethodCall) and `heal(player, 20)` (free-fn / Call) are
-// the same call — the hint on the receiver/argument must appear in both forms.
-// Generic functions must also get ownership hints; the previous sig lookup stopped at
-// `sig_table` + `imported` and never queried `generic_fn_table`.
+// - Bug 2.11: `player.heal(20)` (UFCS / MethodCall) and `heal(player, 20)` (free function / Call)
+//   are the same call and must hint the same ownership kind; generic functions must hint too (the
+//   signature lookup used to stop before `generic_fn_table`).
+// - v0.3-M3b Phase 2: `background f(x)` hints the inferred `give` (x unused after) or `copy`.
+// - v0.3-M9 C5a: storing a named heap value hands it over, and the muted hint at the store says
+//   where it went (`handed to ..`); it reads the one store record
+//   (`TypedModule::stores_handed_over`), and storing bits (a copy) records nothing.
 //
-// AC1: UFCS form gets the same ownership hint as the free-fn form (same modifier, same position
-//      relative to the argument).  Both are asserted: `modifier` confirms the correct ownership
-//      kind; `position` (the byte offset of the end of the argument/receiver token, derived
-//      from the source string) confirms the hint anchors at the same logical location in both
-//      call syntaxes.  Hardcoded magic byte offsets are not used — positions are derived via
-//      `src.find(…).unwrap() + prefix.len()` so they remain accurate if surrounding source
-//      changes.
-// AC2: A generic-fn call gets an ownership hint.
+// Hint wording beyond the ownership modifier and hint position are not asserted (Low tier); a
+// position is used only to say at which store site a hint sits.
 
 use ynz_parser::{CompilerDb, SourceFile};
 use ynz_typeck::ownership_call_site_hints;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helper — registers a single file with the salsa db.
-// Path is unique per test (includes a discriminator) to avoid cross-test cache collisions.
-// ─────────────────────────────────────────────────────────────────────────────
-
 fn single_file(discriminator: &str, src: &str) -> (CompilerDb, SourceFile) {
-    let path = format!("/tmp/ynz_ownership_ufcs_{}.ynz", discriminator);
+    let path = format!("/tmp/ynz_ownership_ufcs_{discriminator}.ynz");
     let mut db = CompilerDb::default();
     let sf = SourceFile::new(&db, path, src.to_string());
     db.register_source(sf);
     (db, sf)
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Bug 2.11 — UFCS call must get the same ownership hint as the free-fn call
-// ─────────────────────────────────────────────────────────────────────────────
+/// How many hints with this ownership modifier (`lend`, `share`, `give`, `copy`) the program gets.
+fn hint_count_with_modifier(discriminator: &str, src: &str, modifier: &str) -> usize {
+    let (db, sf) = single_file(discriminator, src);
+    ownership_call_site_hints(&db, sf)
+        .iter()
+        .filter(|h| h.modifier == modifier)
+        .count()
+}
 
-#[test]
-fn free_fn_call_emits_lend_hint() {
-    // WHY: Baseline — `heal(player, 20)` (free-fn / `Expr::Call`) already worked before
-    // this fix.  Confirms the test helper and data format are correct before checking the
-    // UFCS form in the next test.  If this breaks, the underlying sig resolution broke.
-    let src = r#"
+/// The store hints `source` gets, as (text before the hint's position, hint text) pairs.
+fn store_hints(discriminator: &str, source: &str) -> Vec<(String, String)> {
+    let (db, file) = single_file(discriminator, source);
+    ownership_call_site_hints(&db, file)
+        .into_iter()
+        .filter(|hint| hint.modifier.starts_with("handed to"))
+        .map(|hint| {
+            let before = source[..hint.position].lines().last().unwrap_or("").trim();
+            (before.to_string(), hint.modifier)
+        })
+        .collect()
+}
+
+fn assert_one_store_hint(discriminator: &str, source: &str, line_up_to_value: &str, hint: &str) {
+    let found = store_hints(discriminator, source);
+    assert_eq!(
+        found,
+        vec![(line_up_to_value.to_string(), hint.to_string())],
+        "{source}"
+    );
+}
+
+macro_rules! ownership_hint_cases {
+    ($($case:ident: $body:block)+) => {
+        $(
+            // bug: the call-site ownership hints omit or mislabel the effective ownership of an argument (UFCS receiver, generic callee, background spawn, store handover) | tier: Medium
+            #[test]
+            fn $case() $body
+        )+
+    };
+}
+
+ownership_hint_cases! {
+    // Baseline: the free-function form already worked before the UFCS fix.
+    free_fn_call_emits_lend_hint: {
+        let src = r#"
 shape Player { health: Int }
 function heal(lend self: Player, amount: Int) -> Nothing { }
 
@@ -49,38 +76,12 @@ function entrypoint() -> Nothing {
     heal(player, 20)
 }
 "#;
-    let (db, sf) = single_file("free_fn_lend", src);
-    let hints = ownership_call_site_hints(&db, sf);
+        assert_eq!(hint_count_with_modifier("free_fn_lend", src, "lend"), 1);
+    }
 
-    // The `player` argument at position of `heal(player,...)` gets a `lend` hint.
-    let lend_hints: Vec<_> = hints.iter().filter(|h| h.modifier == "lend").collect();
-    assert!(
-        !lend_hints.is_empty(),
-        "Expected a `lend` hint for `player` in `heal(player, 20)`, got hints: {:?}",
-        hints
-    );
-
-    // The hint must anchor at the end of the `player` token in the call `heal(player, 20)`.
-    // Derived from the source string — not a hardcoded magic byte — so the assertion stays
-    // valid if unrelated whitespace before the call changes.
-    //
-    // "heal(player" is unique in the source: `heal(` is 5 bytes, `player` is 6 bytes.
-    let expected_pos = src.find("heal(player").unwrap() + "heal(".len() + "player".len();
-    assert!(
-        lend_hints.iter().any(|h| h.position == expected_pos),
-        "Expected lend hint at position {} (end of `player` in `heal(player, 20)`), got hints: {:?}",
-        expected_pos,
-        hints
-    );
-}
-
-#[test]
-fn ufcs_method_call_emits_lend_hint_on_receiver() {
-    // WHY: AC1 — `player.heal(20)` (UFCS / `Expr::MethodCall`) must emit the same
-    // `lend` hint as `heal(player, 20)`.  The receiver in a MethodCall is param 0,
-    // which is the `lend` parameter.  Before the fix, MethodCall fell through the `if
-    // let Expr::Call` guard entirely — no hint ever fired for UFCS form.
-    let src = r#"
+    // Before the fix a MethodCall fell through the `if let Expr::Call` guard: no hint for UFCS.
+    ufcs_method_call_emits_lend_hint_on_receiver: {
+        let src = r#"
 shape Player { health: Int }
 function heal(lend self: Player, amount: Int) -> Nothing { }
 
@@ -89,61 +90,13 @@ function entrypoint() -> Nothing {
     player.heal(20)
 }
 "#;
-    let (db, sf) = single_file("ufcs_lend", src);
-    let hints = ownership_call_site_hints(&db, sf);
+        assert_eq!(hint_count_with_modifier("ufcs_lend", src, "lend"), 1);
+    }
 
-    let lend_hints: Vec<_> = hints.iter().filter(|h| h.modifier == "lend").collect();
-    assert!(
-        !lend_hints.is_empty(),
-        "Expected a `lend` hint for receiver `player` in `player.heal(20)`, got hints: {:?}",
-        hints
-    );
-
-    // AC1 position parity: the hint must anchor at the end of the `player` receiver token
-    // in `player.heal(20)`, matching the free-fn form's `heal(player, 20)` anchor position
-    // derivation.  "player.heal" is unique in this source; `player` is 6 bytes.
-    // Uses `span().end` — the exclusive byte offset after the last byte of the token —
-    // consistent with how `Expr::MethodCall` sets OwnershipHint.position in the production arm.
-    let expected_pos = src.find("player.heal").unwrap() + "player".len();
-    assert!(
-        lend_hints.iter().any(|h| h.position == expected_pos),
-        "Expected lend hint at position {} (end of receiver `player` in `player.heal(20)`), got hints: {:?}",
-        expected_pos,
-        hints
-    );
-}
-
-#[test]
-fn ufcs_share_receiver_emits_share_hint() {
-    // WHY: UFCS with a `share` (read-only) receiver must emit a `share` hint, not `lend`.
-    // Tests that the modifier is correctly read from the param_ownerships vector for UFCS
-    // and is not hardcoded to a particular modifier.
-    let src = r#"
-shape Player { health: Int }
-function greet(share self: Player) -> Nothing { }
-
-function entrypoint() -> Nothing {
-    let player: Player = { health: 100 }
-    player.greet()
-}
-"#;
-    let (db, sf) = single_file("ufcs_share", src);
-    let hints = ownership_call_site_hints(&db, sf);
-
-    let share_hints: Vec<_> = hints.iter().filter(|h| h.modifier == "share").collect();
-    assert!(
-        !share_hints.is_empty(),
-        "Expected a `share` hint for receiver `player` in `player.greet()`, got hints: {:?}",
-        hints
-    );
-}
-
-#[test]
-fn ufcs_arg_hint_emitted_for_non_receiver_arg() {
-    // WHY: In a MethodCall with additional args beyond the receiver, those args correspond
-    // to params 1.. in the sig.  A `lend` arg should get its own hint.  Ensures the arg
-    // loop in the MethodCall arm works, not just the receiver check.
-    let src = r#"
+    // The receiver is parameter 0 and the other arguments are parameters 1..; both get their own
+    // modifier, read from the signature and not hardcoded.
+    ufcs_receiver_and_extra_arg_each_get_their_own_hint: {
+        let src = r#"
 shape Player { health: Int }
 shape Weapon { damage: Int }
 function equip(share self: Player, lend w: Weapon) -> Nothing { }
@@ -154,58 +107,14 @@ function entrypoint() -> Nothing {
     player.equip(sword)
 }
 "#;
-    let (db, sf) = single_file("ufcs_arg_lend", src);
-    let hints = ownership_call_site_hints(&db, sf);
+        assert_eq!(hint_count_with_modifier("ufcs_arg", src, "share"), 1);
+        assert_eq!(hint_count_with_modifier("ufcs_arg", src, "lend"), 1);
+    }
 
-    // `player` → share hint; `sword` → lend hint.
-    let share_hints: Vec<_> = hints.iter().filter(|h| h.modifier == "share").collect();
-    let lend_hints: Vec<_> = hints.iter().filter(|h| h.modifier == "lend").collect();
-    assert!(
-        !share_hints.is_empty(),
-        "Expected a `share` hint for receiver `player` in `player.equip(sword)`, got: {:?}",
-        hints
-    );
-    assert!(
-        !lend_hints.is_empty(),
-        "Expected a `lend` hint for arg `sword` in `player.equip(sword)`, got: {:?}",
-        hints
-    );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Bug 2.11 — generic-fn call must get an ownership hint
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn generic_fn_call_emits_ownership_hint() {
-    // WHY: AC2 — generic functions (`function foo<T>(share x: T)`) must get an ownership
-    // hint just like concrete functions.  The previous sig lookup stopped at `sig_table` +
-    // `imported` and never queried `generic_fn_table`, so all generic calls silently
-    // dropped through to the "fallback: recurse into args without hints" branch.
-    let src = r#"
-function identity<T>(share x: T) -> T { return x }
-
-function entrypoint() -> Nothing {
-    let n: Int = 42
-    identity(n)
-}
-"#;
-    let (db, sf) = single_file("generic_share", src);
-    let hints = ownership_call_site_hints(&db, sf);
-
-    let share_hints: Vec<_> = hints.iter().filter(|h| h.modifier == "share").collect();
-    assert!(
-        !share_hints.is_empty(),
-        "Expected a `share` hint for `n` passed to generic `identity(n)`, got hints: {:?}",
-        hints
-    );
-}
-
-#[test]
-fn generic_fn_lend_param_emits_lend_hint() {
-    // WHY: Generic functions with `lend` params must emit a `lend` hint, not `share`.
-    // Tests the full modifier resolution path through `generic_fn_table`.
-    let src = r#"
+    // The signature lookup stopped at `sig_table` + `imported` and never queried
+    // `generic_fn_table`, so generic calls silently dropped to the no-hint fallback.
+    generic_fn_lend_params_emit_lend_hints: {
+        let src = r#"
 function swap<T>(lend a: T, lend b: T) -> Nothing { }
 
 function entrypoint() -> Nothing {
@@ -214,28 +123,11 @@ function entrypoint() -> Nothing {
     swap(x, y)
 }
 "#;
-    let (db, sf) = single_file("generic_lend", src);
-    let hints = ownership_call_site_hints(&db, sf);
+        assert_eq!(hint_count_with_modifier("generic_lend", src, "lend"), 2);
+    }
 
-    let lend_hints: Vec<_> = hints.iter().filter(|h| h.modifier == "lend").collect();
-    assert_eq!(
-        lend_hints.len(),
-        2,
-        "Expected two `lend` hints for `x` and `y` in `swap(x, y)`, got hints: {:?}",
-        hints
-    );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// v0.3-M3b Phase 2: `background` inferred give/copy hints
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn background_unused_after_spawn_emits_give_hint() {
-    // WHY: AC — `background fn(x)` with `x` unused after the spawn must emit a
-    // `give` hint (inferred `.give` — zero-copy ownership transfer). The hint
-    // teaches the user what the compiler decided without requiring explicit syntax.
-    let src = r#"
+    background_unused_after_spawn_emits_give_hint: {
+        let src = r#"
 function worker(id: Int) -> Nothing { }
 
 function entrypoint() -> Nothing {
@@ -243,35 +135,12 @@ function entrypoint() -> Nothing {
     background worker(taskId)
 }
 "#;
-    let (db, sf) = single_file("bg_give_hint", src);
-    let hints = ownership_call_site_hints(&db, sf);
+        assert_eq!(hint_count_with_modifier("bg_give", src, "give"), 1);
+    }
 
-    let give_hints: Vec<_> = hints.iter().filter(|h| h.modifier == "give").collect();
-    assert!(
-        !give_hints.is_empty(),
-        "Expected a `give` hint for `taskId` in `background worker(taskId)` (unused after spawn), got hints: {:?}",
-        hints
-    );
-
-    // Position: the hint anchors at the end of the `taskId` ident token in the background arg.
-    let expected_pos = src.find("background worker(taskId)").unwrap()
-        + "background worker(".len()
-        + "taskId".len();
-    assert!(
-        give_hints.iter().any(|h| h.position == expected_pos),
-        "Expected give hint at position {} (end of `taskId` in background call), got hints: {:?}",
-        expected_pos,
-        hints
-    );
-}
-
-#[test]
-fn background_used_after_spawn_emits_copy_hint() {
-    // WHY: AC — `background fn(x)` with `x` read after the spawn must emit a `copy`
-    // hint (inferred `.copy` — the caller retains the original, task gets a copy).
-    // Incorrect inference to `.give` would be a use-after-move bug — this hint proves
-    // the safe direction was chosen.
-    let src = r#"
+    // Inferring `give` here would be a use-after-move; the hint proves the safe direction.
+    background_used_after_spawn_emits_copy_hint: {
+        let src = r#"
 function worker(id: Int) -> Nothing { }
 
 function entrypoint() -> Nothing {
@@ -280,38 +149,12 @@ function entrypoint() -> Nothing {
     print(taskId.toString())
 }
 "#;
-    let (db, sf) = single_file("bg_copy_hint", src);
-    let hints = ownership_call_site_hints(&db, sf);
+        assert_eq!(hint_count_with_modifier("bg_copy", src, "copy"), 1);
+    }
 
-    let copy_hints: Vec<_> = hints.iter().filter(|h| h.modifier == "copy").collect();
-    assert!(
-        !copy_hints.is_empty(),
-        "Expected a `copy` hint for `taskId` in `background worker(taskId)` (used after spawn), got hints: {:?}",
-        hints
-    );
-
-    // Position: the hint anchors at the end of the `taskId` ident token in the background arg.
-    let expected_pos = src.find("background worker(taskId)").unwrap()
-        + "background worker(".len()
-        + "taskId".len();
-    assert!(
-        copy_hints.iter().any(|h| h.position == expected_pos),
-        "Expected copy hint at position {} (end of `taskId` in background call), got hints: {:?}",
-        expected_pos,
-        hints
-    );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Graceful: unresolved MethodCall callee yields no hint (no panic)
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn unresolved_method_call_yields_no_hint_and_no_panic() {
-    // WHY: An unresolvable MethodCall callee (not in sig_table, imported, generic_fn_table,
-    // or intrinsic set) must gracefully produce no hint — not panic.  Verifies the quality
-    // gate "no panic on unresolved generic/UFCS callee."
-    let src = r#"
+    // An unresolvable MethodCall callee must produce no hint, not a panic.
+    unresolved_method_call_does_not_panic: {
+        let src = r#"
 shape Gadget { charge: Int }
 
 function entrypoint() -> Nothing {
@@ -319,7 +162,74 @@ function entrypoint() -> Nothing {
     g.unknownMethod()
 }
 "#;
-    let (db, sf) = single_file("unresolved_method", src);
-    // Must not panic; result can be empty or non-empty — we only check no crash.
-    let _ = ownership_call_site_hints(&db, sf);
+        let (db, sf) = single_file("unresolved_method", src);
+        let _ = ownership_call_site_hints(&db, sf);
+    }
+
+    container_add_hints_where_the_value_went: {
+        assert_one_store_hint(
+            "add",
+            "function entrypoint() -> Nothing {
+  let numbers: Array<Int> = [1]
+  let list: Array<Array<Int>> = []
+  list.add(numbers)
+}",
+            "list.add(numbers",
+            "handed to `list`",
+        );
+    }
+
+    field_store_hints_where_the_value_went: {
+        assert_one_store_hint(
+            "field",
+            "shape Bag { items: Array<Int> }
+function entrypoint() -> Nothing {
+  let numbers: Array<Int> = [1]
+  let bag: Bag = { items: [0] }
+  bag.items = numbers
+}",
+            "bag.items = numbers",
+            "handed to `bag.items`",
+        );
+    }
+
+    let_hints_where_the_value_went: {
+        assert_one_store_hint(
+            "let",
+            "function entrypoint() -> Nothing {
+  let numbers: Array<Int> = [1]
+  let owner: Array<Int> = numbers
+  print(owner.count().toString())
+}",
+            "let owner: Array<Int> = numbers",
+            "handed to `owner`",
+        );
+    }
+
+    literal_part_hints_where_the_value_went: {
+        assert_one_store_hint(
+            "literal",
+            "function entrypoint() -> Nothing {
+  let numbers: Array<Int> = [1]
+  let rows: Array<Array<Int>> = [numbers]
+  print(rows.count().toString())
+}",
+            "let rows: Array<Array<Int>> = [numbers",
+            "handed to the literal `[numbers]`",
+        );
+    }
+
+    storing_bits_hints_nothing: {
+        let found = store_hints(
+            "bits",
+            "function entrypoint() -> Nothing {
+  let original: Int = 1
+  let list: Array<Int> = []
+  list.add(original)
+  let copied: Int = original
+  print(copied.toString())
+}",
+        );
+        assert_eq!(found, Vec::<(String, String)>::new());
+    }
 }

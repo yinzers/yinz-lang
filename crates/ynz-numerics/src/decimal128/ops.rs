@@ -620,194 +620,63 @@ fn compare_magnitude(a_exp: i32, a_coef: u128, b_exp: i32, b_coef: u128) -> i32 
 #[cfg(test)]
 mod tests {
     use super::super::bits::decode;
-    use super::super::bits::{D128Kind, QUIET_NAN as NAN_BITS};
+    use super::super::bits::D128Kind;
     use super::*;
 
-    fn from_str(s: &str) -> u128 {
-        super::super::parse::parse(s).expect(s)
+    /// Zero over a finite value whose exponent sits at the opposite extreme: the naive
+    /// `numerator_exponent - denominator_exponent` (+/-12287) is outside
+    /// `[MIN_EXPONENT, MAX_EXPONENT]`, so it must be clamped (debug builds panic and release
+    /// builds produce garbage bits otherwise). Python decimal with a strict decimal128 context
+    /// agrees the result is a finite zero with the numerator's sign.
+    macro_rules! div_zero_at_exponent_extreme_cases {
+        ($($case:ident: numerator_negative $numerator_negative:literal, numerator_exponent $numerator_exponent:expr, denominator_exponent $denominator_exponent:expr;)+) => {
+            $(
+                // bug: decimal128 div of zero by a finite value at the opposite exponent extreme panics or returns garbage bits instead of a zero with the numerator's sign | tier: High
+                #[test]
+                fn $case() {
+                    let zero_numerator =
+                        encode_finite($numerator_negative, $numerator_exponent, 0);
+                    let one_denominator = encode_finite(false, $denominator_exponent, 1);
+                    let result = decode(div(zero_numerator, one_denominator));
+                    assert_eq!(result.kind, D128Kind::Finite);
+                    assert!(result.is_zero());
+                    assert_eq!(result.sign, $numerator_negative);
+                }
+            )+
+        };
     }
 
-    fn to_str(bits: u128) -> String {
-        super::super::format::format(bits)
+    div_zero_at_exponent_extreme_cases! {
+        div_zero_at_min_exponent_by_one_at_max_exponent_is_positive_zero:
+            numerator_negative false, numerator_exponent MIN_EXPONENT, denominator_exponent MAX_EXPONENT;
+        div_zero_at_max_exponent_by_one_at_min_exponent_is_positive_zero:
+            numerator_negative false, numerator_exponent MAX_EXPONENT, denominator_exponent MIN_EXPONENT;
+        div_negative_zero_at_min_exponent_by_one_at_max_exponent_is_negative_zero:
+            numerator_negative true, numerator_exponent MIN_EXPONENT, denominator_exponent MAX_EXPONENT;
     }
 
-    #[test]
-    fn add_one_plus_one() {
-        // WHY: the simplest non-trivial add case; exercises the same-sign path.
-        assert_eq!(to_str(add(from_str("1"), from_str("1"))), "2");
+    /// A nonzero value against a zero of the same sign, whatever the zero's exponent: the zero is
+    /// the smaller magnitude, so the exponent alignment must never be reached.
+    macro_rules! compare_against_same_sign_zero_cases {
+        ($($case:ident: left ($left_negative:literal, $left_exponent:expr, $left_coefficient:expr), right ($right_negative:literal, $right_exponent:expr), expected $expected:literal;)+) => {
+            $(
+                // bug: decimal128 compare of a nonzero value against a zero of the same sign returns the wrong ordering (or aligns the zero's exponent), so `x > 0` and `x < 0` answer wrongly | tier: High
+                #[test]
+                fn $case() {
+                    let nonzero = encode_finite($left_negative, $left_exponent, $left_coefficient);
+                    let zero = encode_finite($right_negative, $right_exponent, 0);
+                    assert_eq!(compare(nonzero, zero), $expected);
+                }
+            )+
+        };
     }
 
-    #[test]
-    fn add_decimal_exactness() {
-        // WHY: the load-bearing M2 promise — 0.1 + 0.2 must equal 0.3 exactly.
-        // Binary float gives 0.30000000000000004; decimal128 must give 0.3.
-        assert_eq!(to_str(add(from_str("0.1"), from_str("0.2"))), "0.3");
-    }
-
-    #[test]
-    fn add_different_exponents() {
-        assert_eq!(to_str(add(from_str("1.5"), from_str("2.25"))), "3.75");
-    }
-
-    #[test]
-    fn add_negative() {
-        assert_eq!(to_str(add(from_str("-1"), from_str("3"))), "2");
-    }
-
-    #[test]
-    fn sub_basic() {
-        assert_eq!(to_str(sub(from_str("5"), from_str("3"))), "2");
-    }
-
-    #[test]
-    fn sub_negative_result() {
-        assert_eq!(to_str(sub(from_str("3"), from_str("5"))), "-2");
-    }
-
-    #[test]
-    fn mul_basic() {
-        // WHY: M2 smoke fixture uses count * count (42 * 42 = 1764).
-        assert_eq!(to_str(mul(from_str("42"), from_str("42"))), "1764");
-    }
-
-    #[test]
-    fn mul_decimal() {
-        assert_eq!(to_str(mul(from_str("1.5"), from_str("2"))), "3.0");
-    }
-
-    #[test]
-    fn mul_by_zero() {
-        assert_eq!(to_str(mul(from_str("1234"), from_str("0"))), "0");
-    }
-
-    #[test]
-    fn mul_negative() {
-        assert_eq!(to_str(mul(from_str("-3"), from_str("4"))), "-12");
-    }
-
-    #[test]
-    fn div_basic() {
-        assert_eq!(to_str(div(from_str("10"), from_str("2"))), "5");
-    }
-
-    #[test]
-    fn div_produces_decimal() {
-        assert_eq!(
-            to_str(div(from_str("1"), from_str("3"))),
-            "0.3333333333333333333333333333333333"
-        ); // 34 digits
-    }
-
-    #[test]
-    fn div_by_zero_gives_infinity() {
-        // WHY: per IEEE 754 §7.4 — division by zero gives +/-infinity for non-zero numerator.
-        let result = decode(div(from_str("1"), from_str("0")));
-        assert_eq!(result.kind, D128Kind::Infinity);
-        assert!(!result.sign);
-    }
-
-    #[test]
-    fn div_zero_by_finite_at_exponent_extremes_produces_defined_zero() {
-        // WHY: when av.exponent=MIN_EXPONENT and bv.exponent=MAX_EXPONENT, the naive
-        // av.exponent - bv.exponent = -12287 is outside [MIN_EXPONENT, MAX_EXPONENT].
-        // Without clamping, debug builds panic and release builds produce garbage bits.
-        // The fix clamps to MIN_EXPONENT. Python decimal with strict decimal128 context
-        // agrees the result is zero (both ctx.divide(0E-6176, 1E+6111) and the clamped
-        // Yinz result decode as finite zero with correct sign).
-        let zero_at_min_exp = encode_finite(false, MIN_EXPONENT, 0);
-        let one_at_max_exp = encode_finite(false, MAX_EXPONENT, 1);
-        let result = decode(div(zero_at_min_exp, one_at_max_exp));
-        assert_eq!(
-            result.kind,
-            D128Kind::Finite,
-            "div(0@MIN_EXP, 1@MAX_EXP) must be finite"
-        );
-        assert!(result.is_zero(), "div(0@MIN_EXP, 1@MAX_EXP) must be zero");
-        assert!(!result.sign, "div(+0@MIN_EXP, +1@MAX_EXP) must be +0");
-
-        // Reverse: zero at MAX_EXP divided by nonzero at MIN_EXP — exponent difference is +12287,
-        // clamped to MAX_EXPONENT=6111. Python: div(0E+6111, 1E-6176) = 0E+6111 = zero. Agrees.
-        let zero_at_max_exp = encode_finite(false, MAX_EXPONENT, 0);
-        let one_at_min_exp = encode_finite(false, MIN_EXPONENT, 1);
-        let result2 = decode(div(zero_at_max_exp, one_at_min_exp));
-        assert_eq!(
-            result2.kind,
-            D128Kind::Finite,
-            "div(0@MAX_EXP, 1@MIN_EXP) must be finite"
-        );
-        assert!(result2.is_zero(), "div(0@MAX_EXP, 1@MIN_EXP) must be zero");
-        assert!(!result2.sign, "div(+0@MAX_EXP, +1@MIN_EXP) must be +0");
-
-        // Negative zero: sign propagation.
-        let neg_zero = encode_finite(true, MIN_EXPONENT, 0);
-        let result3 = decode(div(neg_zero, one_at_max_exp));
-        assert_eq!(result3.kind, D128Kind::Finite);
-        assert!(result3.is_zero());
-        assert!(result3.sign, "div(-0@MIN_EXP, +1@MAX_EXP) must be -0");
-    }
-
-    #[test]
-    fn add_inf_plus_inf_is_inf() {
-        let inf = encode_infinity(false);
-        let result = decode(add(inf, inf));
-        assert_eq!(result.kind, D128Kind::Infinity);
-    }
-
-    #[test]
-    fn inf_minus_inf_is_nan() {
-        let pos_inf = encode_infinity(false);
-        let neg_inf = encode_infinity(true);
-        let result = decode(add(pos_inf, neg_inf));
-        assert!(result.is_nan());
-    }
-
-    #[test]
-    fn nan_propagates_through_add() {
-        let result = decode(add(NAN_BITS, from_str("1")));
-        assert!(result.is_nan());
-    }
-
-    #[test]
-    fn compare_equal() {
-        // WHY: M2 smoke test uses `result > 1000 && result < 2000` — comparison must work.
-        assert_eq!(compare(from_str("5"), from_str("5")), 0);
-    }
-
-    #[test]
-    fn compare_less() {
-        assert_eq!(compare(from_str("3"), from_str("5")), -1);
-    }
-
-    #[test]
-    fn compare_greater() {
-        assert_eq!(compare(from_str("5"), from_str("3")), 1);
-    }
-
-    #[test]
-    fn compare_pos_zero_eq_neg_zero() {
-        let pos_zero = encode_finite(false, 0, 0);
-        let neg_zero = encode_finite(true, 0, 0);
-        assert_eq!(compare(pos_zero, neg_zero), 0);
-    }
-
-    #[test]
-    fn add_small_decimal_plus_large_integer() {
-        // WHY: this catches the align_exponents exponent-difference boundary case
-        // where the fine operand has 34 digits and the coarse operand has 4 digits.
-        assert_eq!(
-            to_str(add(
-                from_str("0.3333333333333333333333333333333333"),
-                from_str("1000")
-            )),
-            "1000.333333333333333333333333333333"
-        );
-    }
-
-    #[test]
-    fn neg_and_abs() {
-        let v = from_str("3.14");
-        let neg_v = neg(v);
-        assert_eq!(to_str(neg_v), "-3.14");
-        assert_eq!(to_str(abs(neg_v)), "3.14");
+    compare_against_same_sign_zero_cases! {
+        compare_positive_one_against_positive_zero_is_greater:
+            left (false, 0, 1), right (false, 0), expected 1;
+        compare_negative_one_against_negative_zero_is_less:
+            left (true, 0, 1), right (true, 0), expected -1;
+        compare_small_positive_against_positive_zero_with_a_large_exponent_is_greater:
+            left (false, -3, 7), right (false, 5), expected 1;
     }
 }

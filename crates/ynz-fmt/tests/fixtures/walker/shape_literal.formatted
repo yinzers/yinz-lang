@@ -1,9 +1,0 @@
-shape Point {
-  x: Int
-  y: Int
-}
-
-function makePoint(x: Int, y: Int) -> Nothing {
-  const p: Point = { x: x, y: y }
-  print(p.x)
-}

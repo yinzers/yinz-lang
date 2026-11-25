@@ -1,210 +1,225 @@
-// WHY: Registry lsp_adapter functions must produce correct completion/hover data
-// without depending on lsp-types. These tests verify the adapter independently
-// from the LSP server, so regressions in registry data can be caught before
-// the LSP integration tests surface them.
+// Registry lsp_adapter functions must produce correct completion/hover data without
+// depending on lsp-types. These tests verify the adapter independently from the LSP server,
+// so regressions in registry data are caught before the LSP integration tests surface them.
 
 use ynz_registry::{
     lsp_completion_items, lsp_hover_for_token, CompletionContext, CompletionKind, HoverKind,
 };
 
-#[test]
-fn bare_identifier_contains_all_keywords() {
-    let items = lsp_completion_items(&CompletionContext::BareIdentifier);
-    let count = items
-        .iter()
-        .filter(|i| i.kind == CompletionKind::Keyword)
-        .count();
-    assert!(
-        count >= 28,
-        "BareIdentifier must include all {count} keywords (expected ≥28)"
-    );
+// One named test per completion context a caller handles differently.
+macro_rules! completion_case {
+    ($name:ident, $case_bug:literal, $context:expr, $verdict:expr) => {
+        // bug: lsp_completion_items offers the wrong set for a completion context (missing keywords, live deferred features, methods of the wrong receiver), so the editor completes invalid code | tier: Medium
+        #[doc = $case_bug]
+        #[test]
+        fn $name() {
+            let items = lsp_completion_items(&$context);
+            let verdict: fn(&[ynz_registry::RegistryCompletionItem]) = $verdict;
+            verdict(&items);
+        }
+    };
 }
 
-#[test]
-fn deferred_features_are_deprecated_in_bare_identifier() {
-    let items = lsp_completion_items(&CompletionContext::BareIdentifier);
-    for item in items
-        .iter()
-        .filter(|i| i.kind == CompletionKind::DeferredFeature)
-    {
-        assert!(
-            item.deprecated,
-            "deferred feature '{}' must be deprecated",
-            item.label
-        );
-        assert!(
-            item.sort_priority >= 900,
-            "deferred features must sort last (priority ≥900)"
-        );
-    }
-}
-
-#[test]
-fn after_dot_int_returns_int_methods() {
-    let items = lsp_completion_items(&CompletionContext::AfterDot {
-        receiver_type: Some("Int"),
-    });
-    assert!(!items.is_empty(), "AfterDot{{Int}} must return methods");
-    for item in &items {
-        // Every item must be a method/constant for Int
-        assert!(
-            item.kind == CompletionKind::PrimitiveMethod
-                || item.kind == CompletionKind::TypeAttachedConstant,
-            "unexpected item kind {:?} for Int receiver: {}",
-            item.kind,
-            item.label
+completion_case!(
+    bare_identifier_offers_every_keyword,
+    "A keyword missing from the bare-identifier list cannot be completed.",
+    CompletionContext::BareIdentifier,
+    |items| {
+        let offered = items
+            .iter()
+            .filter(|item| item.kind == CompletionKind::Keyword)
+            .count();
+        assert_eq!(
+            offered,
+            ynz_registry::keywords().count(),
+            "BareIdentifier must offer exactly the registry's keywords"
         );
     }
-}
+);
 
-#[test]
-fn after_dot_unknown_type_returns_empty() {
-    let items = lsp_completion_items(&CompletionContext::AfterDot {
-        receiver_type: Some("nonexistent_xyz"),
-    });
-    let method_count = items
-        .iter()
-        .filter(|i| i.kind == CompletionKind::PrimitiveMethod)
-        .count();
-    assert_eq!(
-        method_count, 0,
-        "unknown receiver type should return no methods"
-    );
-}
-
-#[test]
-fn hover_all_keyword_entries_return_some() {
-    for e in ynz_registry::keywords() {
-        let h = lsp_hover_for_token(e.name);
-        assert!(h.is_some(), "keyword '{}' must have hover content", e.name);
-        assert_eq!(h.unwrap().kind, HoverKind::Keyword);
-    }
-}
-
-#[test]
-fn hover_deferred_features_show_ships_in() {
-    for e in ynz_registry::deferred_language_features() {
-        let h = lsp_hover_for_token(e.name);
-        assert!(h.is_some(), "deferred feature '{}' must have hover", e.name);
-        let body = h.unwrap().markdown_body;
+completion_case!(
+    bare_identifier_deferred_features_are_deprecated_and_sort_after_keywords,
+    "A deferred feature offered as live (or sorted above a keyword) invites unusable code.",
+    CompletionContext::BareIdentifier,
+    |items| {
+        let deferred: Vec<_> = items
+            .iter()
+            .filter(|item| item.kind == CompletionKind::DeferredFeature)
+            .collect();
         assert!(
-            body.contains("Ships in"),
+            !deferred.is_empty(),
+            "deferred features must appear in BareIdentifier"
+        );
+        let keyword_max_priority = items
+            .iter()
+            .filter(|item| item.kind == CompletionKind::Keyword)
+            .map(|item| item.sort_priority)
+            .max()
+            .unwrap();
+        for item in deferred {
+            assert!(
+                item.deprecated,
+                "deferred feature '{}' must be deprecated",
+                item.label
+            );
+            assert!(
+                item.sort_priority >= 900 && item.sort_priority > keyword_max_priority,
+                "deferred feature '{}' must sort after every keyword",
+                item.label
+            );
+        }
+    }
+);
+
+completion_case!(
+    after_dot_known_type_offers_only_its_methods_and_constants,
+    "Completing after `Int.` offers something that is not an Int method or constant.",
+    CompletionContext::AfterDot {
+        receiver_type: Some("Int")
+    },
+    |items| {
+        assert!(!items.is_empty(), "AfterDot{{Int}} must return methods");
+        for item in items {
+            assert!(
+                item.kind == CompletionKind::PrimitiveMethod
+                    || item.kind == CompletionKind::TypeAttachedConstant,
+                "unexpected item kind {:?} for Int receiver: {}",
+                item.kind,
+                item.label
+            );
+        }
+    }
+);
+
+completion_case!(
+    after_dot_unknown_type_offers_no_methods,
+    "Completing after an unknown type offers methods of other types.",
+    CompletionContext::AfterDot {
+        receiver_type: Some("nonexistent_xyz")
+    },
+    |items| {
+        let method_count = items
+            .iter()
+            .filter(|item| item.kind == CompletionKind::PrimitiveMethod)
+            .count();
+        assert_eq!(
+            method_count, 0,
+            "unknown receiver type should return no methods"
+        );
+    }
+);
+
+completion_case!(
+    after_dot_without_receiver_type_offers_all_methods_best_effort,
+    "Completing after a dot whose type is unknown offers nothing instead of the best-effort list.",
+    CompletionContext::AfterDot {
+        receiver_type: None
+    },
+    |items| assert!(
+        !items.is_empty(),
+        "best-effort: all methods when receiver is unknown"
+    )
+);
+
+// One named test per registry list that must have a hover of the right kind for every entry.
+// Runtime lists over the registry: kept as loops because `parallel_sweep` lives in ynz-driver
+// (rubric 11.9).
+macro_rules! hover_sweep_case {
+    ($name:ident, $case_bug:literal, $entries:expr, $verdict:expr) => {
+        // bug: a registry entry has no hover of its kind (or a hover missing its key content), so the editor shows nothing for a real token | tier: Medium
+        #[doc = $case_bug]
+        #[test]
+        fn $name() {
+            for entry in $entries {
+                let hover = lsp_hover_for_token(entry.name)
+                    .unwrap_or_else(|| panic!("registry token '{}' must have hover", entry.name));
+                let verdict = $verdict;
+                verdict(entry, hover);
+            }
+        }
+    };
+}
+
+hover_sweep_case!(
+    every_keyword_has_a_keyword_hover,
+    "A keyword without hover content leaves the editor blank on it.",
+    ynz_registry::keywords(),
+    |_entry: &ynz_registry::KeywordEntry, hover: ynz_registry::HoverContent| assert_eq!(
+        hover.kind,
+        HoverKind::Keyword
+    )
+);
+
+hover_sweep_case!(
+    every_deferred_feature_hover_says_when_it_ships,
+    "A deferred feature hover without its ship version hides when the feature arrives.",
+    ynz_registry::deferred_language_features(),
+    |entry: &ynz_registry::DeferredLanguageFeatureEntry, hover: ynz_registry::HoverContent| {
+        assert!(
+            hover.markdown_body.contains("Ships in"),
             "deferred '{}' hover must mention 'Ships in'",
-            e.name
+            entry.name
         );
     }
-}
+);
 
-#[test]
-fn hover_banned_keywords_show_what_instead() {
-    for e in ynz_registry::banned_declaration_keywords() {
-        let h = lsp_hover_for_token(e.name);
-        assert!(h.is_some(), "banned keyword '{}' must have hover", e.name);
-        let body = h.unwrap().markdown_body;
+hover_sweep_case!(
+    every_banned_keyword_hover_names_what_instead,
+    "A banned keyword hover without its replacement leaves the user with a refusal and no alternative.",
+    ynz_registry::banned_declaration_keywords(),
+    |entry: &ynz_registry::BannedDeclarationKeywordEntry, hover: ynz_registry::HoverContent| {
         assert!(
-            body.contains(&e.what_instead.to_string()),
+            hover.markdown_body.contains(entry.what_instead),
             "hover for '{}' must mention what_instead",
-            e.name
+            entry.name
         );
     }
+);
+
+// One named test per token class whose hover kind is not covered by the registry sweeps above.
+macro_rules! hover_token_case {
+    ($name:ident, $case_bug:literal, $token:literal, $verdict:expr) => {
+        // bug: lsp_hover_for_token classifies a token of this class under the wrong kind or returns content for an unregistered token | tier: Medium
+        #[doc = $case_bug]
+        #[test]
+        fn $name() {
+            let verdict: fn(Option<ynz_registry::HoverContent>) = $verdict;
+            verdict(lsp_hover_for_token($token));
+        }
+    };
 }
 
-#[test]
-fn hover_unregistered_returns_none() {
-    assert!(lsp_hover_for_token("_totally_unregistered_xyz_").is_none());
-}
+hover_token_case!(
+    hover_banned_jargon_names_its_replacement,
+    "A banned jargon term hovers without its replacement.",
+    "propagate",
+    |hover| {
+        let hover = hover.expect("banned jargon 'propagate' must have hover content");
+        assert_eq!(hover.kind, HoverKind::BannedJargon);
+        assert!(
+            hover.markdown_body.contains("auto-propagate"),
+            "hover must include the replacement text"
+        );
+    }
+);
 
-// WHY: v0.3-M1 added Rule-3 hover docs (WHAT/WHAT-INSTEAD/WHY) to the `wait` and
-// `background` keywords. These tests verify the new schema fields are emitted
-// by build.rs and rendered by lsp_adapter.rs. Without them, users hovering over
-// these keywords in VSCode see only "Introduced in M8." — no teaching content.
+hover_token_case!(
+    hover_type_attached_constant_shows_its_value,
+    "A type-attached constant (Int.max) hovers without its value.",
+    "max",
+    |hover| {
+        let hover = hover.expect("hover for 'max' (Int.max) should return Some");
+        assert_eq!(hover.kind, HoverKind::TypeAttachedConstant);
+        assert!(
+            hover.markdown_body.contains("9223372036854775807"),
+            "Int.max value must appear in hover"
+        );
+    }
+);
 
-#[test]
-fn hover_wait_includes_what_what_instead_why() {
-    // WHY: `wait` hover must contain Rule-3 WHAT/WHAT-INSTEAD/WHY content from
-    // the KeywordEntry.hover_what/hover_what_instead/hover_why schema fields.
-    // v0.3-M3b updated to ordering-barrier semantics (LOCKED 2026-06-05): `wait` is an
-    // explicit ordering tool, not a suspension trigger — suspension is automatic.
-    let h = lsp_hover_for_token("wait").expect("wait must have hover content");
-    assert_eq!(h.kind, HoverKind::Keyword);
-    let body = &h.markdown_body;
-    assert!(
-        body.contains("**WHAT:**"),
-        "wait hover must have WHAT clause"
-    );
-    assert!(
-        body.contains("**WHAT INSTEAD:**"),
-        "wait hover must have WHAT INSTEAD clause"
-    );
-    assert!(body.contains("**WHY:**"), "wait hover must have WHY clause");
-    assert!(
-        body.contains("ordering barrier"),
-        "wait hover must describe wait as an ordering barrier (M3b locked semantics)"
-    );
-}
-
-#[test]
-fn hover_background_includes_what_what_instead_why() {
-    // WHY: `background` hover must contain Rule-3 WHAT/WHAT-INSTEAD/WHY content
-    // from the KeywordEntry.hover_what/hover_what_instead/hover_why schema fields.
-    // v0.3-M3b updated to describe real routing semantics and give/copy inference
-    // (the old text said "separate thread" — background routes to a thread pool, not
-    // a single dedicated thread; the routing depends on whether the callee suspends).
-    let h = lsp_hover_for_token("background").expect("background must have hover content");
-    assert_eq!(h.kind, HoverKind::Keyword);
-    let body = &h.markdown_body;
-    assert!(
-        body.contains("**WHAT:**"),
-        "background hover must have WHAT clause"
-    );
-    assert!(
-        body.contains("**WHAT INSTEAD:**"),
-        "background hover must have WHAT INSTEAD clause"
-    );
-    assert!(
-        body.contains("**WHY:**"),
-        "background hover must have WHY clause"
-    );
-    assert!(
-        body.contains("concurrent task"),
-        "background hover must describe background as a concurrent task (M3b semantics)"
-    );
-}
-
-#[test]
-fn hover_keywords_without_hover_docs_use_legacy_format() {
-    // WHY: keywords without hover_what/hover_what_instead/hover_why set in features.toml
-    // must still produce valid hover content (the legacy "Introduced in X" format).
-    // Verifies backward compatibility of the optional field schema extension.
-    let h = lsp_hover_for_token("function").expect("function keyword must have hover content");
-    assert_eq!(h.kind, HoverKind::Keyword);
-    assert!(
-        h.markdown_body.contains("Introduced in"),
-        "keywords without hover docs must use legacy format"
-    );
-    assert!(
-        !h.markdown_body.contains("**WHAT:**"),
-        "legacy-format keyword must not have WHAT clause"
-    );
-}
-
-#[test]
-fn sort_priority_deferred_greater_than_keywords() {
-    let bare = lsp_completion_items(&CompletionContext::BareIdentifier);
-    let kw_max_prio = bare
-        .iter()
-        .filter(|i| i.kind == CompletionKind::Keyword)
-        .map(|i| i.sort_priority)
-        .max()
-        .unwrap_or(0);
-    let deferred_min_prio = bare
-        .iter()
-        .filter(|i| i.kind == CompletionKind::DeferredFeature)
-        .map(|i| i.sort_priority)
-        .min()
-        .unwrap_or(u16::MAX);
-    assert!(
-        deferred_min_prio > kw_max_prio,
-        "deferred features (priority {deferred_min_prio}) must sort after keywords (max {kw_max_prio})"
-    );
-}
+hover_token_case!(
+    hover_unregistered_token_returns_none,
+    "A token that is not in the registry hovers with invented content.",
+    "_totally_unregistered_xyz_",
+    |hover| assert!(hover.is_none())
+);

@@ -1,0 +1,56 @@
+name: Install apt packages (cached .deb files)
+description: >-
+  apt-get install with the downloaded .deb files cached between runs, so a slow or flaky
+  Ubuntu mirror costs one run, not every run. The cache key holds the package list and the
+  month, so the cache is rebuilt monthly and picks up security updates.
+
+inputs:
+  packages:
+    description: Space-separated apt package names.
+    required: true
+  recommends:
+    description: "'true' installs Recommends too (the original LLVM install did); 'false' does not."
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Compute the cache key
+      id: key
+      shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+        RECOMMENDS: ${{ inputs.recommends }}
+      run: |
+        package_hash="$(echo "${PACKAGES} ${RECOMMENDS}" | tr ' ' '\n' | sort | sha256sum | cut -c1-16)"
+        echo "key=apt-$(. /etc/os-release && echo "${VERSION_ID}")-${package_hash}-$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
+
+    - name: Restore cached .deb files
+      id: apt-cache
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: ~/apt-archives
+        key: ${{ steps.key.outputs.key }}
+
+    - name: Install packages
+      shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+        RECOMMENDS: ${{ inputs.recommends }}
+        CACHE_HIT: ${{ steps.apt-cache.outputs.cache-hit }}
+      run: |
+        set -euo pipefail
+        archives="${HOME}/apt-archives"
+        mkdir -p "${archives}/partial"
+        echo "apt cache hit: ${CACHE_HIT:-false} (${archives}: $(find "${archives}" -maxdepth 1 -name '*.deb' | wc -l) .deb files before install)"
+        apt_options=(-o Acquire::Retries=3 -o "Dir::Cache::archives=${archives}")
+        recommends_flag=()
+        if [ "${RECOMMENDS}" != "true" ]; then recommends_flag=(--no-install-recommends); fi
+        sudo apt-get "${apt_options[@]}" update
+        # shellcheck disable=SC2086 # PACKAGES is a deliberate word list
+        sudo apt-get "${apt_options[@]}" install -y "${recommends_flag[@]}" ${PACKAGES}
+        # Root wrote the downloads; the cache post-step runs as the runner user.
+        sudo chmod -R a+rX "${archives}"
+        echo "apt cache: $(find "${archives}" -maxdepth 1 -name '*.deb' | wc -l) .deb files after install"
+        echo "::notice title=apt cache::cache-hit=${CACHE_HIT:-false} for ${PACKAGES}"

@@ -1,6 +1,0 @@
-function classify(x: Int) -> String {
-  if (x > 100) {
-    return `high`
-  }
-  return `low`
-}

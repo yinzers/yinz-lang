@@ -1,221 +1,81 @@
-//! v0.3-M9 C1j (card #491): a `background` call that passes a field of a fresh call result
-//! (`make().items`) releases the whole temporary once, handing the task only a copy of the field.
+//! C1i, C1j and C1l (cards #472, #491, #493): what a `background` call may be handed from a value
+//! it does not own whole. A piece with an owned copy (a field of a fresh call result, a copyable
+//! field of a named value, a union field, a channel) is released once by the spawner while the task
+//! reads its own copy; one binding passed in two positions is handed over once; a piece with no
+//! owned copy (a `fixed` of arrays or maps, an array of channels, a union with no envelope) is
+//! refused at compile time, with typeck's teaching text and never a backend error.
 
 mod support;
 
 use support::{
-    assert_built_balanced_and_asan_clean_printing_one_of, at_both_optimization_levels, build,
-    compile,
+    assert_fixture_balanced_and_asan_clean_task_then_done as assert_balanced_either_order,
+    assert_refused_with,
 };
 
-/// Every fixture ends `wait sleep(50)` then `print(done)`, while the task it spawned prints
-/// `task_output`. Nothing waits for a fire-and-forget task, so the language fixes neither order:
-/// the balance and ASan are asserted in both orders.
-fn assert_fixture_balanced(fixture: &str, task_output_then_done: &str) {
-    let task_output = task_output_then_done
-        .strip_suffix("done\n")
-        .expect("expected output ends with the spawner's `done` line");
-    let done_first = format!("done\n{task_output}");
-    at_both_optimization_levels(|no_optimize| {
-        let built = build(fixture, no_optimize);
-        assert_built_balanced_and_asan_clean_printing_one_of(
-            fixture,
-            &built,
-            &[task_output_then_done, done_first.as_str()],
-            no_optimize,
-        );
-    });
+/// One named test per piece of the `background argument piece release` run unit; each case is a
+/// test the runner names.
+macro_rules! spawn_piece_release_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a piece handed to a `background` task leaks the original (or the temporary it came from), is freed twice, or the task reads memory the spawner freed | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
 }
 
-// Bug: 2 of 4 strings leaked; the original `fixed` field was never released (High: data
-// integrity and release).
-#[test]
-fn a_fixed_field_of_a_fresh_call_result_given_to_a_forgotten_task_is_released() {
-    assert_fixture_balanced("v0_3_m9_c1j_spawn_fresh_field_fixed.ynz", "2\nA\ndone\n");
+spawn_piece_release_high_case! {
+    // case: a `fixed` field of a fresh call result (`make().items`): 2 of 4 strings leaked, the original field was never released
+    a_fixed_field_of_a_fresh_call_result_given_to_a_forgotten_task_is_released => { assert_balanced_either_order("v0_3_m9_c1j_spawn_fresh_field_fixed.ynz", "2\nA\ndone\n"); }
+    // case: an `array` field of a fresh call result: the original array and two of its strings leaked
+    an_array_field_of_a_fresh_call_result_given_to_a_forgotten_task_is_released => { assert_balanced_either_order("v0_3_m9_c1j_spawn_fresh_field_array.ynz", "2\nA\ndone\n"); }
+    // case: a shape field of a fresh call result: the original shape field's strings leaked
+    a_shape_field_of_a_fresh_call_result_given_to_a_forgotten_task_is_released => { assert_balanced_either_order("v0_3_m9_c1j_spawn_fresh_field_shape.ynz", "A\nB\ndone\n"); }
+    // case: a field two levels deep: the whole temporary (outer shape, inner shape, array, strings) is released once
+    a_field_two_levels_deep_of_a_fresh_call_result_given_to_a_task_is_released => { assert_balanced_either_order("v0_3_m9_c1j_spawn_fresh_field_nested.ynz", "2\nA\ndone\n"); }
+    // case: `make()[0]`, a `maybe<string>` read out of the fresh array
+    an_element_of_a_fresh_call_result_given_to_a_task_is_released => { assert_balanced_either_order("v0_3_m9_c1j_spawn_fresh_index.ynz", "A\ndone\n"); }
+    // case: a channel piece is shared with the task by a counted reference; the piece refusal wrongly read the owned-copy table and rejected a correct program
+    a_channel_field_of_a_fresh_call_result_is_shared_with_the_task_and_the_rest_released => { assert_balanced_either_order("v0_3_m9_c1j_spawn_fresh_channel_field.ynz", "sent\ndone\n"); }
+    // case: control: a copyable field of a named value stays accepted and is released
+    a_copyable_field_of_a_named_value_given_to_a_task_stays_accepted => { assert_balanced_either_order("v0_3_m9_c1j_spawn_named_copyable_field.ynz", "2\nA\ndone\n"); }
+    // case: a union field of a named value gets a slot of its own in the task (on `main` it ran the wrong variant)
+    a_union_field_of_a_named_value_given_to_a_task_stays_accepted => { assert_balanced_either_order("v0_3_m9_c1j_spawn_named_union_field.ynz", "BOXED\ndone\n"); }
+    // case: a union variant that owns heap: the slot copies the payload and releases it once
+    a_union_field_with_a_heap_payload_of_a_named_value_is_copied_for_the_task => { assert_balanced_either_order("v0_3_m9_c1j_spawn_union_heap_field.ynz", "2\nA\nL\ndone\n"); }
+    // case: the same payload read out of a fresh call result: the temporary is released once, the task reads its own copy
+    a_union_field_with_a_heap_payload_of_a_fresh_call_result_is_copied_for_the_task => { assert_balanced_either_order("v0_3_m9_c1j_spawn_union_heap_fresh.ynz", "2\nA\nL\ndone\n"); }
+    // case: a named union with heap read by the spawner after the spawn and by the task after the spawner returned
+    a_named_union_with_a_heap_payload_read_after_the_spawn_is_copied_for_the_task => { assert_balanced_either_order("v0_3_m9_c1j_spawn_union_heap_reused.ynz", "L\n2\nA\nL\ndone\n"); }
+    // case: a union with no envelope (`array<int> | nothing`) is given as on `main`; `spawn_rehoming` promised a slot codegen never made (internal error)
+    a_named_union_without_an_envelope_is_given_to_a_task_as_before => { assert_balanced_either_order("v0_3_m9_c1j_spawn_plain_union_given.ynz", "task\ntask\ndone\n"); }
+    // case: one array binding in two positions of one spawn: the second read cloned the null the first read left in its slot (abort)
+    one_array_binding_passed_twice_to_a_task_is_copied_twice_and_released_once => { assert_balanced_either_order("v0_3_m9_c1l_spawn_same_binding_twice.ynz", "3\n3\ndone\n"); }
 }
 
-// Bug: the original `array` field and two of its strings leaked (High: data integrity and release).
-#[test]
-fn an_array_field_of_a_fresh_call_result_given_to_a_forgotten_task_is_released() {
-    assert_fixture_balanced("v0_3_m9_c1j_spawn_fresh_field_array.ynz", "2\nA\ndone\n");
+/// One named test per refused piece of the `background argument piece refusal` typeck unit; each
+/// case is a test the runner names. `$phrases` names the piece's type and the refusal.
+macro_rules! spawn_piece_refusal_high_case {
+    ($($case_name:ident, $fixture:literal, $phrases:expr;)+) => { $(
+        // bug: typeck accepts a piece with no owned copy as a `background` argument, so the task reads memory the spawner (or its dead frame) already freed | tier: High
+        #[test]
+        fn $case_name() {
+            assert_refused_with($fixture, $phrases);
+        }
+    )+ };
 }
 
-// Bug: the original shape field's strings leaked (High: data integrity and release).
-#[test]
-fn a_shape_field_of_a_fresh_call_result_given_to_a_forgotten_task_is_released() {
-    assert_fixture_balanced("v0_3_m9_c1j_spawn_fresh_field_shape.ynz", "A\nB\ndone\n");
-}
-
-// The same producer through a longer field chain: the whole temporary (outer shape, inner shape,
-// array, strings) is released once (High: data integrity and release).
-#[test]
-fn a_field_two_levels_deep_of_a_fresh_call_result_given_to_a_task_is_released() {
-    assert_fixture_balanced("v0_3_m9_c1j_spawn_fresh_field_nested.ynz", "2\nA\ndone\n");
-}
-
-// The same producer through an index: `make()[0]` is a `maybe<string>` read out of the fresh array.
-#[test]
-fn an_element_of_a_fresh_call_result_given_to_a_task_is_released() {
-    assert_fixture_balanced("v0_3_m9_c1j_spawn_fresh_index.ynz", "A\ndone\n");
-}
-
-// A piece with no owned copy (`fixed<array<string>>`) is handed to the task as it is, so
-// releasing the temporary at the statement end would free what the task still reads (garbage
-// output), and not releasing it leaks silently. The spawn is refused at compile time instead,
-// with the text of the one spawn refusal (High: data integrity and release).
-#[test]
-fn a_field_with_no_owned_copy_of_a_fresh_call_result_is_refused_for_a_task() {
-    assert_refused_with(
-        "v0_3_m9_c1j_spawn_fresh_field_refused.ynz",
-        &[
-            "A `Fixed<Array<String>>` read out of another value",
-            "cannot be handed to a background task",
-            "`Array<String>` values",
-            "when this line ends",
-            "background crunch(make().rows)",
-        ],
-    );
-}
-
-/// `fixture` must be refused by typeck: a user error carrying every fragment, never a backend
-/// error.
-fn assert_refused_with(fixture: &str, fragments: &[&str]) {
-    let compiled = compile(fixture);
-    assert!(
-        !compiled.success,
-        "{fixture}: must be refused, but compiled:\n{}",
-        compiled.diagnostics
-    );
-    for fragment in fragments {
-        assert!(
-            compiled.diagnostics.contains(fragment),
-            "{fixture}: diagnostic must contain {fragment:?}; got:\n{}",
-            compiled.diagnostics
-        );
-    }
-    for internal in ["codegen:", "internal error", "compiler bug"] {
-        assert!(
-            !compiled.diagnostics.contains(internal),
-            "{fixture}: a user error must come from typeck ({internal:?}):\n{}",
-            compiled.diagnostics
-        );
-    }
-}
-
-// A channel piece of a fresh value is not refused: the spawn shares a channel with the task by a
-// counted reference (`spawn_rehoming`), whatever else the argument is. Bug: the piece refusal read
-// the owned-copy table, which refuses a channel, and rejected a program `main` runs correctly
-// (3 allocations, 3 frees) (High: data integrity and release).
-#[test]
-fn a_channel_field_of_a_fresh_call_result_is_shared_with_the_task_and_the_rest_released() {
-    assert_fixture_balanced("v0_3_m9_c1j_spawn_fresh_channel_field.ynz", "sent\ndone\n");
-}
-
-// An array of channels has no independent copy: it stays refused for a fresh value.
-#[test]
-fn an_array_of_channels_field_of_a_fresh_call_result_stays_refused_for_a_task() {
-    assert_refused_with(
-        "v0_3_m9_c1j_spawn_fresh_channels_array_refused.ynz",
-        &[
-            "`Array<Channel<Int>>`",
-            "cannot be handed to a background task",
-            "background ping(make().lines)",
-        ],
-    );
-}
-
-// Bug: `background f(bag.rows)` with an uncopyable `rows` handed the task the array `bag` still
-// owns, and `launch` released `bag` while the task read it (garbage count, 4 allocations and 4
-// frees) (High: data integrity and release).
-#[test]
-fn an_array_of_channels_field_of_a_named_value_is_refused_for_a_task() {
-    assert_refused_with(
-        "v0_3_m9_c1j_spawn_named_channels_array_refused.ynz",
-        &[
-            "`Array<Channel<Int>>`",
-            "cannot be handed to a background task",
-            "background f(bag.rows)",
-        ],
-    );
-}
-
-// Bug: the same through a `fixed<array<string>, 2>` field: the task read the dead frame (crash,
-// ASan stack-use-after-return) (High: data integrity and release).
-#[test]
-fn a_fixed_of_arrays_field_of_a_named_value_is_refused_for_a_task() {
-    assert_refused_with(
-        "v0_3_m9_c1j_spawn_named_fixed_refused.ynz",
-        &[
-            "`Fixed<Array<String>>`",
-            "cannot be handed to a background task",
-            "background f(bag.rows)",
-        ],
-    );
-}
-
-// Control: a named piece the task gets its own copy of stays accepted.
-#[test]
-fn a_copyable_field_of_a_named_value_given_to_a_task_stays_accepted() {
-    assert_fixture_balanced("v0_3_m9_c1j_spawn_named_copyable_field.ynz", "2\nA\ndone\n");
-}
-
-// A union field of a named value stays accepted: a union parameter gets a slot of its own in the
-// task (`spawn_rehoming`: `UnionSlot`), so `launch` can return and release `bag` while the task
-// still reads its copy. Bug it guards: on `main` this ran wrong (the wrong variant at O2, nothing
-// at O0, ASan stack-use-after-return) (High: data integrity and release).
-#[test]
-fn a_union_field_of_a_named_value_given_to_a_task_stays_accepted() {
-    assert_fixture_balanced("v0_3_m9_c1j_spawn_named_union_field.ynz", "BOXED\ndone\n");
-}
-
-// A union variant that owns heap: the slot copies the payload and releases it once. Bug it
-// catches: a slot that shares the array or the string with `bag` frees them twice, or leaks them
-// (High: data integrity and release).
-#[test]
-fn a_union_field_with_a_heap_payload_of_a_named_value_is_copied_for_the_task() {
-    assert_fixture_balanced("v0_3_m9_c1j_spawn_union_heap_field.ynz", "2\nA\nL\ndone\n");
-}
-
-// The same payload read out of a fresh call result: the temporary is released once and the task
-// reads its own copy (High: data integrity and release).
-#[test]
-fn a_union_field_with_a_heap_payload_of_a_fresh_call_result_is_copied_for_the_task() {
-    assert_fixture_balanced("v0_3_m9_c1j_spawn_union_heap_fresh.ynz", "2\nA\nL\ndone\n");
-}
-
-// A named union that owns heap is read by the spawner after the spawn and by the task after the
-// spawner has returned: neither side may read freed storage (High: data integrity and release).
-#[test]
-fn a_named_union_with_a_heap_payload_read_after_the_spawn_is_copied_for_the_task() {
-    assert_fixture_balanced(
-        "v0_3_m9_c1j_spawn_union_heap_reused.ynz",
-        "L\n2\nA\nL\ndone\n",
-    );
-}
-
-// A union with no shape variant and no tag (`array<int> | nothing`, `int | float`) is the variant's
-// raw pointer or bits, and codegen makes a task slot only for an envelope union. The spawn must not
-// promise one: a named one is given as on `main`. Bug: `spawn_rehoming` said `UnionSlot` for every
-// union, so this program stopped the build with an internal error `main` never gave (High: data
-// integrity and release).
-#[test]
-fn a_named_union_without_an_envelope_is_given_to_a_task_as_before() {
-    assert_fixture_balanced(
-        "v0_3_m9_c1j_spawn_plain_union_given.ynz",
-        "task\ntask\ndone\n",
-    );
-}
-
-// The piece form of the same union: no slot to copy into, so the task would share the array with
-// the value it is read from. Refused by typeck with the one spawn refusal, never a backend error.
-#[test]
-fn a_field_of_a_union_without_an_envelope_of_a_fresh_call_result_is_refused_for_a_task() {
-    assert_refused_with(
-        "v0_3_m9_c1j_spawn_plain_union_field_refused.ynz",
-        &[
-            "`Array<Int> | Nothing`",
-            "cannot be handed to a background task",
-            "background crunch(make().items)",
-        ],
-    );
+spawn_piece_refusal_high_case! {
+    // case: a `fixed` of arrays (handed over whole) is kept with the function that made it
+    a_handed_over_fixed_of_arrays_is_refused_for_a_task, "v0_3_m9_c1i_spawn_fixed_array_refused.ynz", &["`xs` is a `Fixed<Array<String>>`, and a `Fixed<Array<String>>` cannot be handed to a background task"];
+    // case: a `fixed` of maps (handed over whole)
+    a_handed_over_fixed_of_maps_is_refused_for_a_task, "v0_3_m9_c1i_spawn_fixed_map_refused.ynz", &["`xs` is a `Fixed<Map<String, Int>>`, and a `Fixed<Map<String, Int>>` cannot be handed to a background task"];
+    // case: a field with no owned copy of a fresh call result: releasing the temporary at the statement end would free what the task reads
+    a_field_with_no_owned_copy_of_a_fresh_call_result_is_refused_for_a_task, "v0_3_m9_c1j_spawn_fresh_field_refused.ynz", &["A `Fixed<Array<String>>` read out of another value", "cannot be handed to a background task"];
+    // case: an array of channels has no independent copy and stays refused for a fresh value
+    an_array_of_channels_field_of_a_fresh_call_result_stays_refused_for_a_task, "v0_3_m9_c1j_spawn_fresh_channels_array_refused.ynz", &["`Array<Channel<Int>>`", "cannot be handed to a background task"];
+    // case: `background f(bag.rows)` with an uncopyable `rows` handed the task the array `bag` still owns, and `launch` released `bag` while the task read it
+    an_array_of_channels_field_of_a_named_value_is_refused_for_a_task, "v0_3_m9_c1j_spawn_named_channels_array_refused.ynz", &["`Array<Channel<Int>>`", "cannot be handed to a background task"];
+    // case: the same through a `fixed<array<string>, 2>` field: the task read the dead frame (ASan stack-use-after-return)
+    a_fixed_of_arrays_field_of_a_named_value_is_refused_for_a_task, "v0_3_m9_c1j_spawn_named_fixed_refused.ynz", &["`Fixed<Array<String>>`", "cannot be handed to a background task"];
+    // case: a field of a union with no envelope has no slot to copy into, so the task would share the array
+    a_field_of_a_union_without_an_envelope_of_a_fresh_call_result_is_refused_for_a_task, "v0_3_m9_c1j_spawn_plain_union_field_refused.ynz", &["`Array<Int> | Nothing`", "cannot be handed to a background task"];
 }

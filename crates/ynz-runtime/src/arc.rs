@@ -186,6 +186,7 @@ mod tests {
         arc_strong_count(data_ptr)
     }
 
+    // bug: ynz_arc_clone returns another block or miscounts, so a free releases the block while a reference is still live (use after free) or never frees it | tier: High
     #[test]
     fn new_clone_free_lifecycle_counts_correctly() {
         unsafe {
@@ -214,8 +215,8 @@ mod tests {
         GLUE_SAW.store((data as *const u64).read(), Ordering::SeqCst);
     }
 
-    // Bug it catches (C1o): a block's drop glue skipped, or run on a non-last release (it would
-    // release strings a task still reads), or run twice (a double free) — High: data integrity.
+    // A non-last release running the glue would release strings a task still reads.
+    // bug: ynz_arc_free skips a block's drop glue, runs it on a non-last release (strings freed under a reader) or runs it twice (a double free) | tier: High
     #[test]
     fn drop_glue_runs_once_on_the_last_release_with_the_data_intact() {
         unsafe {
@@ -242,11 +243,13 @@ mod tests {
         }
     }
 
+    // bug: ynz_arc_free of a null pointer (a moved-out or none slot) dereferences it and crashes | tier: High
     #[test]
     fn free_of_null_is_a_safe_no_op() {
         unsafe { ynz_arc_free(std::ptr::null_mut(), 16) }
     }
 
+    // bug: concurrent ynz_arc_clone and ynz_arc_free lose a count update or free the block under another thread (a data race the sanitizers see; the loom models cover the interleavings) | tier: High
     #[test]
     fn concurrent_clone_free_hammer_keeps_the_count_exact() {
         // 8 threads × 1000 clone+free pairs against one shared allocation while the main

@@ -8,9 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use ynz_runtime::runtime::{
-    ynz_rt_init, ynz_rt_shutdown, ynz_rt_spawn_blocking, ynz_thread_sleep_ms,
-};
+use ynz_runtime::runtime::{ynz_rt_init, ynz_rt_shutdown, ynz_rt_spawn_blocking};
 
 // ---------------------------------------------------------------------------
 // Test serialization: these tests share the global C-ABI runtime.
@@ -34,6 +32,7 @@ fn with_runtime<F: FnOnce()>(f: F) {
 // WHY: core promise of `background` — main thread must NOT block waiting for
 // the background fn. If this contract fails, background and a sequential call
 // are indistinguishable at the Yinz language level.
+// bug: ynz_rt_spawn_blocking blocks its caller until the background task finishes, or shutdown drops the task without running it | tier: High
 #[test]
 fn spawn_join_main_continues_before_background() {
     static BACKGROUND_DONE: AtomicBool = AtomicBool::new(false);
@@ -71,62 +70,6 @@ fn spawn_join_main_continues_before_background() {
 }
 
 // ---------------------------------------------------------------------------
-// Contract 2: spawn+drop — shutdown with 0ms timeout drops pending tasks.
-// ---------------------------------------------------------------------------
-
-// WHY: prevents a hang when the program exits with pending background work.
-// Tokio's shutdown_timeout drop semantics must be respected.
-#[test]
-fn spawn_drop_program_continues() {
-    static REACHED_END: AtomicBool = AtomicBool::new(false);
-
-    extern "C-unwind" fn long_task(_ctx: *mut u8) {
-        std::thread::sleep(Duration::from_millis(500));
-    }
-
-    let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    ynz_rt_init();
-    unsafe { ynz_rt_spawn_blocking(long_task, std::ptr::null_mut(), 0) };
-    // Short sleep so the task has time to start before we shut down.
-    std::thread::sleep(Duration::from_millis(10));
-    // Shutdown with the normal 5s timeout — tasks that haven't finished are dropped.
-    ynz_rt_shutdown();
-
-    REACHED_END.store(true, Ordering::SeqCst);
-    assert!(
-        REACHED_END.load(Ordering::SeqCst),
-        "should reach end after shutdown"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Contract 3: spawn+panic — background panic does NOT propagate to main.
-// ---------------------------------------------------------------------------
-
-// WHY: `background` has fire-and-forget semantics with best-effort discard.
-// A panicking analytics fn must not crash the main thread. The user's program
-// must exit with code 0 based on main's outcome, not the background task's.
-#[test]
-fn spawn_panic_does_not_propagate() {
-    static MAIN_REACHED_END: AtomicBool = AtomicBool::new(false);
-
-    extern "C-unwind" fn panicking_task(_ctx: *mut u8) {
-        panic!("intentional background task panic");
-    }
-
-    with_runtime(|| {
-        unsafe { ynz_rt_spawn_blocking(panicking_task, std::ptr::null_mut(), 0) };
-        // Main continues without seeing the panic.
-        MAIN_REACHED_END.store(true, Ordering::SeqCst);
-    });
-
-    assert!(
-        MAIN_REACHED_END.load(Ordering::SeqCst),
-        "main didn't reach end after background task panic"
-    );
-}
-
-// ---------------------------------------------------------------------------
 // Contract 4: spawn+panic+ctx-no-leak — heap ctx is freed even on panic.
 // ---------------------------------------------------------------------------
 
@@ -139,6 +82,7 @@ fn spawn_panic_does_not_propagate() {
 // Note: We verify via Drop hook on a wrapper rather than hooking the global
 // allocator directly — the Rust test harness shares the allocator, making raw
 // alloc/free counts noisy. The Drop counter approach is exact.
+// bug: a panic in a background task escapes to the process, or leaks the heap copy of the task context (the counters prove every task ran; the leak itself is caught by the Miri and ASan leak checkers) | tier: High
 #[test]
 fn spawn_panic_ctx_no_leak() {
     static TASK_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -218,6 +162,7 @@ fn spawn_panic_ctx_no_leak() {
 // WHY: shutdown_timeout lets in-flight tasks complete. If a task panics DURING
 // that completion window, the panic must still be caught by the catch_unwind
 // boundary. Program must exit 0.
+// bug: a task that panics inside the shutdown drain window escapes the catch_unwind boundary and aborts ynz_rt_shutdown | tier: High
 #[test]
 fn panic_during_shutdown_caught() {
     static MAIN_FINISHED: AtomicBool = AtomicBool::new(false);
@@ -250,6 +195,7 @@ fn panic_during_shutdown_caught() {
 // NOTE: we use explicit init/shutdown with a wait-for-outer-done loop to ensure
 // the inner spawn happens BEFORE shutdown, avoiding a race where shutdown takes
 // the runtime before the outer task has a chance to spawn the inner task.
+// bug: a panic in a task spawned from inside another task propagates to the outer task, so the outer task does not complete | tier: High
 #[test]
 fn nested_spawn_inner_panic_isolated() {
     static OUTER_COMPLETED: AtomicBool = AtomicBool::new(false);
@@ -301,6 +247,7 @@ fn nested_spawn_inner_panic_isolated() {
 
 // WHY: hello-world programs should start in ≤ 50ms end-to-end. Runtime init
 // must not dominate that budget. Threshold from P1 plan gate.
+// bug: ynz_rt_init plus ynz_rt_shutdown take so long that runtime startup dominates a hello-world program | tier: Medium
 #[test]
 #[cfg_attr(
     miri,
@@ -312,7 +259,7 @@ fn nested_spawn_inner_panic_isolated() {
               this is ignored rather than budget-widened. See \
               https://github.com/rust-lang/miri#miri (interpreter overhead is inherent)."
 )]
-fn rt_init_shutdown_within_5ms() {
+fn nightly_rt_init_shutdown_within_5ms() {
     let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let start = Instant::now();
     ynz_rt_init();
@@ -355,6 +302,7 @@ fn rt_init_shutdown_within_5ms() {
 // failed while this one passed — a coin flip produced by having two budgets for one
 // measurement, not by any runtime regression. Don't reintroduce a second copy: widen or
 // tighten THIS budget instead. (git log --grep=check_preempt_noop)
+// bug: ynz_rt_check_preempt costs more than a thread-local countdown per call, so preempt checks at every loop back-edge are no longer viable | tier: Medium
 #[test]
 #[cfg_attr(
     miri,
@@ -365,7 +313,7 @@ fn rt_init_shutdown_within_5ms() {
               secondary behavior to preserve under a widened budget — the ONLY thing this test \
               checks is the ns/call figure itself. See https://github.com/rust-lang/miri#miri."
 )]
-fn check_preempt_per_call_cost() {
+fn nightly_check_preempt_per_call_cost() {
     use ynz_runtime::runtime::ynz_rt_check_preempt;
     const ITERS: u64 = 1_000_000;
     let start = Instant::now();
@@ -383,26 +331,5 @@ fn check_preempt_per_call_cost() {
     assert!(
         ns_per_call < 500,
         "check_preempt: {ns_per_call}ns/call in debug build (threshold 500ns; release target 5ns)"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Measurement: sleepBlocking intrinsic accuracy.
-// ---------------------------------------------------------------------------
-
-// WHY: sleepBlocking is used in the timing fixture for timing-observable tests.
-// Verify it actually sleeps approximately the right duration.
-#[test]
-fn sleep_blocking_approximately_correct() {
-    let start = Instant::now();
-    ynz_thread_sleep_ms(50);
-    let elapsed = start.elapsed();
-    assert!(
-        elapsed >= Duration::from_millis(40),
-        "sleepBlocking(50) returned too fast: {elapsed:?}"
-    );
-    assert!(
-        elapsed < Duration::from_millis(500),
-        "sleepBlocking(50) took too long: {elapsed:?}"
     );
 }

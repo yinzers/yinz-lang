@@ -306,82 +306,102 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    // WHY (all project tests): resolve_target is the entry point for every watch session —
-    //      wrong path resolution silently watches the wrong files (missed rebuilds) or crashes
-    //      with a confusing error. Single-file mode and project mode are distinct code paths;
-    //      both must be verified.
-
-    #[test]
-    fn single_file_mode() {
-        let dir = TempDir::new().unwrap();
-        let file = dir.path().join("foo.ynz");
-        std::fs::write(&file, "// source\n").unwrap();
-
-        let target = resolve_target(&file).unwrap();
-        assert_eq!(target.sources.len(), 1);
-        assert_eq!(target.entry, file);
-        assert!(target.project_root.is_none());
+    // One named test per way `ynz watch <path>` resolves a target. Each writes `files` under a
+    // fresh temp dir (parent dirs included), creates `dirs`, resolves `<tempdir>/<target>` and
+    // hands the temp dir and the result to `$verdict`.
+    macro_rules! resolve_target_case {
+        ($name:ident, $case_bug:literal, files: [$(($file:literal, $content:literal)),*], dirs: [$($dir:literal),*], target: $target:literal, $verdict:expr) => {
+            // bug: resolve_target watches the wrong files, picks the wrong entry or hides a missing yinz.toml, so edits are not rebuilt or the wrong program runs | tier: Medium
+            #[doc = $case_bug]
+            #[test]
+            fn $name() {
+                let temp_dir = TempDir::new().unwrap();
+                $(std::fs::create_dir_all(temp_dir.path().join($dir)).unwrap();)*
+                $(
+                    let file_path = temp_dir.path().join($file);
+                    std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+                    std::fs::write(&file_path, $content).unwrap();
+                )*
+                let result = resolve_target(&temp_dir.path().join($target));
+                let verdict: fn(&Path, Result<WatchTarget>) = $verdict;
+                verdict(temp_dir.path(), result);
+            }
+        };
     }
 
-    #[test]
-    fn project_mode_requires_yinz_toml() {
-        // WHY: if no yinz.toml is found anywhere up the tree from an isolated temp dir,
-        //      we must return NoProjectFile — not silently watch nothing.
-        let dir = TempDir::new().unwrap();
-        // Use a sub-subdir that is fully isolated (no yinz.toml anywhere above in /tmp).
-        let sub = dir.path().join("a").join("b");
-        std::fs::create_dir_all(&sub).unwrap();
-        let result = resolve_target(&sub);
-        assert!(matches!(result, Err(WatchError::NoProjectFile { .. })));
-    }
+    resolve_target_case!(
+        single_file_mode,
+        "A single .ynz file argument must watch exactly that file with no project root.",
+        files: [("foo.ynz", "// source\n")],
+        dirs: [],
+        target: "foo.ynz",
+        |root, result| {
+            let target = result.unwrap();
+            assert_eq!(target.sources.len(), 1);
+            assert_eq!(target.entry, root.join("foo.ynz"));
+            assert!(target.project_root.is_none());
+        }
+    );
 
-    #[test]
-    fn project_mode_discovers_ynz_files() {
-        let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join("yinz.toml"), "entry = \"main.ynz\"\n").unwrap();
-        std::fs::write(dir.path().join("main.ynz"), "// main\n").unwrap();
-        std::fs::write(dir.path().join("lib.ynz"), "// lib\n").unwrap();
+    resolve_target_case!(
+        project_mode_requires_yinz_toml,
+        "With no yinz.toml anywhere up the tree, return NoProjectFile instead of silently watching nothing.",
+        files: [],
+        dirs: ["a/b"],
+        target: "a/b",
+        |_root, result| assert!(matches!(result, Err(WatchError::NoProjectFile { .. })))
+    );
 
-        let target = resolve_target(dir.path()).unwrap();
-        assert_eq!(target.sources.len(), 2);
-        assert_eq!(target.project_root, Some(dir.path().to_path_buf()));
-        assert_eq!(target.entry, dir.path().join("main.ynz"));
-    }
+    resolve_target_case!(
+        project_mode_discovers_ynz_files,
+        "A project directory must watch every .ynz file and use the yinz.toml entry.",
+        files: [
+            ("yinz.toml", "entry = \"main.ynz\"\n"),
+            ("main.ynz", "// main\n"),
+            ("lib.ynz", "// lib\n")
+        ],
+        dirs: [],
+        target: "",
+        |root, result| {
+            let target = result.unwrap();
+            assert_eq!(target.sources.len(), 2);
+            assert_eq!(target.project_root, Some(root.to_path_buf()));
+            assert_eq!(target.entry, root.join("main.ynz"));
+        }
+    );
 
-    #[test]
-    fn project_mode_walks_up_to_find_yinz_toml() {
-        // WHY: yinz.toml is always at project root, never in subdirectories. Passing a
-        //      subdir (e.g. `ynz watch ships/scripts/backfill`) must find root yinz.toml.
-        let dir = TempDir::new().unwrap();
-        let sub = dir.path().join("ships").join("scripts").join("backfill");
-        std::fs::create_dir_all(&sub).unwrap();
-        std::fs::write(dir.path().join("yinz.toml"), "entry = \"main.ynz\"\n").unwrap();
-        std::fs::write(dir.path().join("main.ynz"), "// main\n").unwrap();
+    resolve_target_case!(
+        project_mode_walks_up_to_find_yinz_toml,
+        "A subdirectory argument (ynz watch ships/scripts/backfill) must find the root yinz.toml.",
+        files: [
+            ("yinz.toml", "entry = \"main.ynz\"\n"),
+            ("main.ynz", "// main\n")
+        ],
+        dirs: ["ships/scripts/backfill"],
+        target: "ships/scripts/backfill",
+        |root, result| {
+            let target = result.unwrap();
+            assert_eq!(target.project_root, Some(root.to_path_buf()));
+            assert_eq!(target.entry, root.join("main.ynz"));
+        }
+    );
 
-        let target = resolve_target(&sub).unwrap();
-        assert_eq!(target.project_root, Some(dir.path().to_path_buf()));
-        assert_eq!(target.entry, dir.path().join("main.ynz"));
-    }
-
-    #[test]
-    fn project_mode_multi_entry_picks_matching_entry() {
-        // WHY: [entries] table multi-entry projects must use the hint path to select
-        //      the right entry — otherwise `ynz watch ships/backfill` always runs the
-        //      wrong entry or fails.
-        let dir = TempDir::new().unwrap();
-        let sub = dir.path().join("ships").join("backfill");
-        std::fs::create_dir_all(&sub).unwrap();
-        std::fs::write(
-            dir.path().join("yinz.toml"),
-            "[project]\nname = \"trading\"\n\n[entries]\nbackfill = \"ships/backfill/entrypoint.ynz\"\nother = \"ships/other/entrypoint.ynz\"\n",
-        ).unwrap();
-        std::fs::write(sub.join("entrypoint.ynz"), "// backfill\n").unwrap();
-
-        let target = resolve_target(&sub).unwrap();
-        assert_eq!(target.project_root, Some(dir.path().to_path_buf()));
-        assert_eq!(
-            target.entry,
-            dir.path().join("ships/backfill/entrypoint.ynz")
-        );
-    }
+    resolve_target_case!(
+        project_mode_multi_entry_picks_matching_entry,
+        "In an [entries] project the path hint must select its own entry, not always the first.",
+        files: [
+            (
+                "yinz.toml",
+                "[project]\nname = \"trading\"\n\n[entries]\nbackfill = \"ships/backfill/entrypoint.ynz\"\nother = \"ships/other/entrypoint.ynz\"\n"
+            ),
+            ("ships/backfill/entrypoint.ynz", "// backfill\n")
+        ],
+        dirs: [],
+        target: "ships/backfill",
+        |root, result| {
+            let target = result.unwrap();
+            assert_eq!(target.project_root, Some(root.to_path_buf()));
+            assert_eq!(target.entry, root.join("ships/backfill/entrypoint.ynz"));
+        }
+    );
 }

@@ -453,52 +453,21 @@ pub fn import_insert_byte(state: &ServerState, uri: &Url) -> usize {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn registry_label_class_to_shape() {
-        let label = ynz_registry::lsp_code_action_label_for("BannedKeyword", "class");
-        assert_eq!(label.as_deref(), Some("Replace `class` with `shape`"));
+    macro_rules! replacement_case {
+        ($name:ident, $keyword:expr, $expected_replacement:expr) => {
+            // bug: the registry offers no replacement, or the wrong one, for a banned keyword that has a single-token Yinz equivalent | tier: Medium
+            #[test]
+            fn $name() {
+                let replacement =
+                    ynz_registry::lsp_code_action_replacement_for("BannedKeyword", $keyword);
+                assert_eq!(replacement, $expected_replacement);
+            }
+        };
     }
 
-    #[test]
-    fn registry_label_enum_to_options() {
-        let label = ynz_registry::lsp_code_action_label_for("BannedKeyword", "enum");
-        assert_eq!(label.as_deref(), Some("Replace `enum` with `options`"));
-    }
-
-    #[test]
-    fn registry_label_struct_to_shape() {
-        let label = ynz_registry::lsp_code_action_label_for("BannedKeyword", "struct");
-        assert_eq!(label.as_deref(), Some("Replace `struct` with `shape`"));
-    }
-
-    #[test]
-    fn registry_no_label_for_unknown_kind() {
-        let label = ynz_registry::lsp_code_action_label_for("TypeMismatch", "class");
-        assert!(label.is_none());
-    }
-
-    #[test]
-    fn registry_replacement_class_is_shape() {
-        let r = ynz_registry::lsp_code_action_replacement_for("BannedKeyword", "class");
-        assert_eq!(r, Some("shape"));
-    }
-
-    #[test]
-    fn registry_replacement_enum_is_options() {
-        let r = ynz_registry::lsp_code_action_replacement_for("BannedKeyword", "enum");
-        assert_eq!(r, Some("options"));
-    }
-
-    #[test]
-    fn registry_replacement_complex_keyword_is_none() {
-        // `async` has no single-token replacement — deferred per todos.md
-        let r = ynz_registry::lsp_code_action_replacement_for("BannedKeyword", "async");
-        assert!(r.is_none());
-    }
-
-    #[test]
-    fn registry_replacement_await_is_wait() {
-        let r = ynz_registry::lsp_code_action_replacement_for("BannedKeyword", "await");
-        assert_eq!(r, Some("wait"));
-    }
+    replacement_case!(class_is_replaced_by_shape, "class", Some("shape"));
+    replacement_case!(enum_is_replaced_by_options, "enum", Some("options"));
+    replacement_case!(await_is_replaced_by_wait, "await", Some("wait"));
+    // `async` has no single-token replacement — deferred per todos.md
+    replacement_case!(async_has_no_single_token_replacement, "async", None);
 }

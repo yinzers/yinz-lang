@@ -1,0 +1,52 @@
+# cargo-nextest configuration, used by .github/workflows/ci.yml (profile `ci`) and
+# .github/workflows/nightly.yml (profile `nightly`). The nextest version is pinned in the
+# workflows; default-filter needs 0.9.76 or later.
+#
+# Nightly lane (frozen by plan #19, card #680): a test is in the nightly lane when its function
+# name starts with `nightly_` (`nightly_x` or `some::module::nightly_x`). The marker is the
+# name alone, never `#[ignore]`: the nightly selector does not pass `--run-ignored`, so a test
+# that is still ignored would silently not run in either lane.
+#   - CI and the default profile leave nightly_ tests out (the default-filter below).
+#   - Plain `cargo test` leaves them out with `-- --skip nightly_`.
+#   - The scheduled workflow runs them: `--ignore-default-filter -E 'test(/(^|::)nightly_/)'`.
+# What belongs in the lane: wall-clock timing and performance assertions, ratios, benchmarks,
+# soak and load tests, and dedicated-lane sweeps (the ASan and leak sweeps). Liveness timeouts
+# and deterministic counts stay in CI.
+
+[profile.default]
+default-filter = "not test(/(^|::)nightly_/)"
+
+# Timeouts here are for LIVENESS only (kill a hung test), never performance: a test sharing
+# cores with hundreds of siblings cannot measure speed. `period` x `terminate-after` is the
+# hard ceiling per test.
+[profile.ci]
+default-filter = "not test(/(^|::)nightly_/)"
+# Report every failure, not just the first: a CI run must show the whole red set.
+fail-fast = false
+# Flag a test SLOW every 10 min, kill it after 2 h (12 x 10 min). Spike S1 measured the two
+# `ynz-driver::cross_impl_consistency` corpus sweeps at 9 to 25 min each on a 4-vCPU runner,
+# so the ceiling is about 5x the slowest observed test. It only catches deadlocks.
+slow-timeout = { period = "600s", terminate-after = 12 }
+
+# ynz-driver's ASan harness and optimizer_red_gate hand `libynz_runtime.a` to clang at TEST RUN
+# time, by the absolute path build.rs baked in (YNZ_RT_LIB_PATH = <workspace>/target/debug/...).
+# The runtime is a dependency artifact, not a test binary, so `nextest archive` does not
+# include it by default and a partition job fails every such test at once.
+[[profile.ci.archive.include]]
+path = "debug/libynz_runtime.a"
+relative-to = "target"
+on-missing = "error"
+
+[profile.ci.junit]
+# Written to target/nextest/ci/junit.xml; uploaded as an artifact by the CI job.
+path = "junit.xml"
+
+# The scheduled lane. The workflow passes --ignore-default-filter and its own -E selector, so
+# this profile sets no filter of its own; it exists for liveness timeouts that suit soak and
+# load tests (a test may legitimately run for hours) and for its own junit file.
+[profile.nightly]
+fail-fast = false
+slow-timeout = { period = "1800s", terminate-after = 8 }
+
+[profile.nightly.junit]
+path = "junit.xml"

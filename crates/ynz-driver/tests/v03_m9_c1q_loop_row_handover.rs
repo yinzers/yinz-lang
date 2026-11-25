@@ -1,145 +1,99 @@
-//! v0.3-M9 C1q: `for (row in matrix) { if (...) { kept.add(row) } }` hands the row over, with no
-//! `.copy()` and no row copy, when `matrix` (and every name sharing it) is not read after the
-//! loop: Rust's `for row in matrix`. When it is read later, the `.copy()` refusal stands.
-//! Patrick's cost bar (2026-11-13): "clone where Rust clones, move where Rust moves".
-//!
-//! Tier: High (ownership and data integrity: a row owned by two lists is a double free, and a row
-//! copied where Rust moves is the cost Chief ruled out).
+//! C1q: `for (row in matrix) { if (...) { kept.add(row) } }` hands the row over, with no `.copy()`
+//! and no row copy, when `matrix` (and every name sharing it) is not read after the loop: Rust's
+//! `for row in matrix`. When it is read later, the `.copy()` refusal stands. Patrick's cost bar
+//! (2026-11-13): "clone where Rust clones, move where Rust moves".
 //!
 //! One case per row type (array, string, map, shape stored inline, union, the items of a `fixed`
 //! list). Every program hands over only SOME rows (an `if`), so the list's release must free the
-//! rows that stayed. Per case the bug each test catches:
-//!
-//! * `counts`: a row copied at the store (allocations above the copy-free baseline), a row left
-//!   with two owners (frees below allocations), a row freed twice. The expected counts are the
-//!   baseline of the same program whose store never runs (`seen == 99`), where nothing is copied.
-//! * `asan`: a blank cell the release walk frees, or a handed-over row freed with its list.
-//!
-//! Each runs at O2 and at O0.
+//! rows that stayed. Two tiers over the same fixtures: a row left with two owners, freed twice or
+//! leaked (balance + AddressSanitizer) is High; a row copied at the store (allocations above the
+//! copy-free baseline of the same program whose store never runs) is Medium.
 
 mod support;
 
-use support::{assert_asan_clean_and_prints, build, compile, run_counted};
+use support::{
+    assert_asan_clean_and_prints, assert_fixture_balanced_and_asan_clean as assert_balanced,
+    assert_refused_with, at_both_optimization_levels, build, run_counted,
+};
 
-/// `(alloc, free, string_alloc, string_free)` of a copy-free run.
-type Counts = (u64, u64, u64, u64);
-
-fn assert_counts(fixture: &str, no_optimize: bool, expected_stdout: &str, expected: Counts) {
-    let built = build(fixture, no_optimize);
-    let (output, counters) = run_counted(&built);
-    assert_eq!(output.exit_code, 0, "stderr:\n{}", output.stderr);
-    assert_eq!(output.stdout, expected_stdout, "{fixture}: wrong output");
-    assert_eq!(
-        (
-            counters.alloc,
-            counters.free,
-            counters.string_alloc,
-            counters.string_free
-        ),
-        expected,
-        "{fixture} (no_optimize={no_optimize}): a row was copied, shared or freed twice: {counters:?}"
-    );
+/// One named test per row type of the `loop row hand-over` run unit; each case is a test the
+/// runner names.
+macro_rules! handover_integrity_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a loop row handed over to another list is owned twice (double free), freed with its old list, or leaked, or a valid program reading the list after an `if` spawn is refused | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
 }
 
-macro_rules! handover_case {
-    ($case:ident, $fixture:literal, $stdout:literal, $counts:expr) => {
-        mod $case {
-            use super::*;
-
-            #[test]
-            fn counts_o2() {
-                assert_counts($fixture, false, $stdout, $counts);
-            }
-
-            #[test]
-            fn counts_o0() {
-                assert_counts($fixture, true, $stdout, $counts);
-            }
-
-            #[test]
-            fn asan_o2() {
-                assert_asan_clean_and_prints($fixture, false, $stdout);
-            }
-
-            #[test]
-            fn asan_o0() {
-                assert_asan_clean_and_prints($fixture, true, $stdout);
-            }
-        }
-    };
-}
-
-handover_case!(
-    array_rows,
-    "v0_3_m9_c1q_handover_array.ynz",
-    "2\n6\n",
-    (10, 10, 0, 0)
-);
-handover_case!(
-    string_rows,
-    "v0_3_m9_c1q_handover_string.ynz",
-    "2\nA\nC\n",
-    (4, 4, 3, 3)
-);
-handover_case!(
-    map_rows,
-    "v0_3_m9_c1q_handover_map.ynz",
-    "2\n4\n",
-    (19, 19, 5, 5)
-);
-handover_case!(
-    shape_rows,
-    "v0_3_m9_c1q_handover_shape.ynz",
-    "2\nA\nC\n",
-    (10, 10, 3, 3)
-);
-handover_case!(
-    union_rows,
-    "v0_3_m9_c1q_handover_union.ynz",
-    "2\nN1\ntiny\n",
-    (4, 4, 2, 2)
-);
-handover_case!(
-    fixed_items,
-    "v0_3_m9_c1q_handover_fixed.ynz",
-    "2\n6\n",
-    (8, 8, 0, 0)
-);
-handover_case!(
-    soa_candidate_list,
-    "v0_3_m9_c1q_handover_soa_list.ynz",
-    "10\n",
-    (9, 9, 0, 0)
-);
-
-#[test]
-fn a_row_given_away_while_the_list_is_read_after_the_loop_still_needs_copy() {
-    // WHY: the hand-over must not widen: reading `matrix` after the loop leaves it holding the
-    // rows, so handing one over is a double owner (High). The existing refusal, all three parts.
-    let compiled = compile("v0_3_m9_c1q_read_after_refused.ynz");
-    assert!(
-        !compiled.success,
-        "must be refused, but compiled:\n{}",
-        compiled.diagnostics
-    );
-    for fragment in [
-        "`row` is one cell of `matrix`, which this loop is walking",
-        "Give away a copy instead: `row.copy()`",
-        "Whoever receives a `Array<Int>` will eventually free it",
-    ] {
-        assert!(
-            compiled.diagnostics.contains(fragment),
-            "diagnostic must contain {fragment:?}; got:\n{}",
-            compiled.diagnostics
-        );
+handover_integrity_high_case! {
+    // case: array rows handed over by `kept.add(row)`
+    array_rows => { assert_balanced("v0_3_m9_c1q_handover_array.ynz", "2\n6\n"); }
+    // case: string rows
+    string_rows => { assert_balanced("v0_3_m9_c1q_handover_string.ynz", "2\nA\nC\n"); }
+    // case: map rows
+    map_rows => { assert_balanced("v0_3_m9_c1q_handover_map.ynz", "2\n4\n"); }
+    // case: shape rows stored inline
+    shape_rows => { assert_balanced("v0_3_m9_c1q_handover_shape.ynz", "2\nA\nC\n"); }
+    // case: union rows
+    union_rows => { assert_balanced("v0_3_m9_c1q_handover_union.ynz", "2\nN1\ntiny\n"); }
+    // case: the items of a `fixed` list
+    fixed_items => { assert_balanced("v0_3_m9_c1q_handover_fixed.ynz", "2\n6\n"); }
+    // case: a list that qualifies for the struct-of-arrays layout
+    soa_candidate_list => { assert_balanced("v0_3_m9_c1q_handover_soa_list.ynz", "10\n"); }
+    // case: the liveness walk behind the `background` give inference stopped at the end of the `if`, so a binding read after the `if` was refused as "given away"
+    a_spawn_in_an_if_copies_a_binding_that_is_read_after_the_if => {
+        at_both_optimization_levels(|no_optimize| {
+            assert_asan_clean_and_prints("v0_3_m9_c1q_spawn_in_if_read_after.ynz", no_optimize, "3\n");
+        });
     }
 }
 
+// bug: typeck accepts a row handed over while the list is read after the loop, so two lists own one row | tier: High
 #[test]
-fn a_spawn_in_an_if_copies_a_binding_that_is_read_after_the_if() {
-    // WHY (Medium): the liveness walk behind the `background` give inference stopped at the end
-    // of the `if` block, inferred `Give`, and the program was refused as "given away" at the read
-    // after the `if`. Before the fix: `rows` was already given away and cannot be used here.
-    assert_asan_clean_and_prints("v0_3_m9_c1q_spawn_in_if_read_after.ynz", false, "3\n");
-    assert_asan_clean_and_prints("v0_3_m9_c1q_spawn_in_if_read_after.ynz", true, "3\n");
+fn a_row_given_away_while_the_list_is_read_after_the_loop_still_needs_copy() {
+    assert_refused_with(
+        "v0_3_m9_c1q_read_after_refused.ynz",
+        &["`row` is one cell of `matrix`, which this loop is walking"],
+    );
+}
+
+/// One named test per row type of the `loop row hand-over cost` unit; each case is a test the
+/// runner names. `$counts` is `(alloc, string_alloc)` of the copy-free run.
+macro_rules! handover_cost_medium_case {
+    ($($case_name:ident, $fixture:literal, $stdout:literal, $counts:expr;)+) => { $(
+        // bug: a loop row is copied at the store where Rust moves it, so the program allocates more than the copy-free baseline | tier: Medium
+        #[test]
+        fn $case_name() {
+            at_both_optimization_levels(|no_optimize| {
+                let built = build($fixture, no_optimize);
+                let (output, counters) = run_counted(&built);
+                assert_eq!(output.exit_code, 0, "stderr:\n{}", output.stderr);
+                assert_eq!(output.stdout, $stdout, "{}: wrong output", $fixture);
+                assert_eq!(
+                    (counters.alloc, counters.string_alloc),
+                    $counts,
+                    "{} (no_optimize={no_optimize}): a row was copied at the store: {counters:?}",
+                    $fixture
+                );
+            });
+        }
+    )+ };
+}
+
+handover_cost_medium_case! {
+    // case: array rows
+    array_rows_are_not_copied, "v0_3_m9_c1q_handover_array.ynz", "2\n6\n", (10, 0);
+    // case: string rows
+    string_rows_are_not_copied, "v0_3_m9_c1q_handover_string.ynz", "2\nA\nC\n", (4, 3);
+    // case: map rows
+    map_rows_are_not_copied, "v0_3_m9_c1q_handover_map.ynz", "2\n4\n", (19, 5);
+    // case: shape rows stored inline
+    shape_rows_are_not_copied, "v0_3_m9_c1q_handover_shape.ynz", "2\nA\nC\n", (10, 3);
+    // case: union rows
+    union_rows_are_not_copied, "v0_3_m9_c1q_handover_union.ynz", "2\nN1\ntiny\n", (4, 2);
+    // case: the items of a `fixed` list
+    fixed_items_are_not_copied, "v0_3_m9_c1q_handover_fixed.ynz", "2\n6\n", (8, 0);
+    // case: a struct-of-arrays candidate list
+    soa_candidate_list_rows_are_not_copied, "v0_3_m9_c1q_handover_soa_list.ynz", "10\n", (9, 0);
 }

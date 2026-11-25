@@ -10,11 +10,20 @@ mod support;
 
 use support::assert_source_balanced_and_asan_clean as assert_balanced;
 
-/// Bug it catches: a buffered string and a parked (pending) send's string leak with the channel.
-/// A capacity-1 channel buffers the first string and parks the second send; the third never runs.
-#[test]
-fn strings_buffered_and_parked_in_a_channel_are_released_with_it() {
-    let source = "
+/// One named test per way a string meets a `channel<string>`'s teardown.
+macro_rules! channel_string_high_case {
+    ($($case_name:ident, $label:literal, $source:literal, $expected_stdout:literal;)+) => { $(
+        // bug: a string buffered in, parked on or given through a channel<string> leaks or is freed twice at teardown, silently at exit 0 | tier: High
+        #[test]
+        fn $case_name() {
+            assert_balanced($label, $source, $expected_stdout);
+        }
+    )+ };
+}
+
+channel_string_high_case! {
+    // case: a buffered string and a parked (pending) send's string leak with the channel; a capacity-1 channel buffers the first string and parks the second send, the third never runs
+    strings_buffered_and_parked_in_a_channel_are_released_with_it, "channel_string_unreceived", "
 function producer(wire: Channel<String>) -> Nothing {
   wire.send(`a`.toUpperCase())
   wire.send(`b`.toUpperCase())
@@ -28,17 +37,9 @@ function entrypoint() -> Nothing {
   wait sleep(50)
   print(`parent`)
 }
-";
-    assert_balanced("channel_string_unreceived", source, "parent\n");
-}
-
-/// Bug it catches: giving the channel a glue for strings must not make a task's own string a
-/// double owner. A string a task was given and sends on leaves the task's ladder
-/// (`release_ladder_payload`), so the receiver reads it intact after the task retired and frees
-/// it once.
-#[test]
-fn a_given_string_a_task_sends_is_received_intact_and_freed_once() {
-    let source = "
+", "parent\n";
+    // case: giving the channel a glue for strings must not make a task's own string a double owner; a string a task was given and sends on leaves the task's ladder (`release_ladder_payload`), so the receiver reads it intact after the task retired and frees it once
+    a_given_string_a_task_sends_is_received_intact_and_freed_once, "channel_string_given_then_received", "
 function producer(wire: Channel<String>, give text: String) -> Nothing {
   wire.send(text)
 }
@@ -51,6 +52,5 @@ function entrypoint() -> Nothing {
   let delivered = wire.receive()
   print(delivered.or(`none`))
 }
-";
-    assert_balanced("channel_string_given_then_received", source, "HELLO\n");
+", "HELLO\n";
 }

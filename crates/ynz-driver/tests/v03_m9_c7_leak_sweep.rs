@@ -3,17 +3,19 @@
 //!
 //! The release plan's measure is `frees == allocations`. This sweep is the list of where that
 //! still fails, so a producer fix can be checked against the whole corpus and the next agent
-//! can see what is left. It is `#[ignore]` because it builds ~950 programs (about 3 to 5
-//! minutes on 4 cores): a dedicated-lane test, not a pre-push one.
+//! can see what is left. It runs in the nightly lane (`nightly_`): it
+//! builds ~950 programs (about 3 to 5 minutes on 4 cores), too long for a pre-push run.
 //!
-//! It asserts two things. C7: a `plain`-class fixture leaks only if it is listed in
-//! `KNOWN_PLAIN_LEAKS` with its reason, and every listed one still leaks (a fixed leak must leave
-//! the list). C8 (card #385): no `state-machine`-class fixture leaks at all.
+//! It is a ratchet, one list per class. C7: a `plain`-class fixture leaks only if it is listed in
+//! `KNOWN_PLAIN_LEAKS` with its producer card. C8 (card #385): a `state-machine`-class fixture
+//! leaks only if it is listed in `KNOWN_STATE_MACHINE_LEAKS` with its producer card. For both
+//! lists, every listed fixture must still leak (a fixed leak must leave its list) and no unlisted
+//! fixture of that class may leak (a new leak fails).
 //!
 //! Re-run (writes the report, prints a summary):
 //!
 //! ```text
-//! cargo test -p ynz-driver --test v03_m9_c7_leak_sweep -- --ignored --nocapture
+//! cargo nextest run -p ynz-driver --test v03_m9_c7_leak_sweep --ignore-default-filter --no-capture
 //! ```
 //!
 //! The report goes to `$YNZ_LEAK_SWEEP_OUT` (default `<workspace>/target/leak_sweep.tsv`), one
@@ -41,9 +43,79 @@ use std::path::PathBuf;
 /// a plain program, whatever else it does.
 const CONCURRENCY_KEYWORDS: [&str; 5] = ["background", "wait", "channel", "errors", "fails"];
 
-/// The `plain`-class fixtures that leak today, each with the producer that is not fixed. The entry
-/// leaves the list in the change that fixes it.
-const KNOWN_PLAIN_LEAKS: [(&str, &str); 0] = [];
+/// Producer cards of the known leaks (see the ratchet in the module doc).
+const CARD_702: &str = "card #702: a number-to-string result is never released";
+const CARD_703: &str = "card #703: the key and value of a map for-loop are never released";
+const CARD_497: &str = "card #497: a maybe-array returned from a function is never released";
+
+/// The `plain`-class fixtures that leak today, each with the producer card that is not fixed. The
+/// entry leaves the list in the change that fixes it.
+const KNOWN_PLAIN_LEAKS: [(&str, &str); 7] = [
+    ("bignum_number_conversions.ynz", CARD_702),
+    ("card399_map_for_key_value.ynz", CARD_703),
+    ("number_to_string_owned.ynz", CARD_702),
+    ("v0_3_m7_p3_dangling_stack_return_siblings.ynz", CARD_702),
+    ("v0_3_m7_p3_maybe_number_payload.ynz", CARD_702),
+    ("v0_3_m9_c1m_maybe_array_returned.ynz", CARD_497),
+    ("v0_3_m9_c3a_to_string_distinct_results.ynz", CARD_702),
+];
+
+/// The `state-machine`-class fixtures that leak today, each with the producer card that is not
+/// fixed. The entry leaves the list in the change that fixes it.
+const KNOWN_STATE_MACHINE_LEAKS: [(&str, &str); 31] = [
+    (
+        "v0_3_hardening_c1_number_local_blocking_channel_send.ynz",
+        CARD_702,
+    ),
+    (
+        "v0_3_m3a_p1_ec_crossing_local_propagated_number.ynz",
+        CARD_702,
+    ),
+    (
+        "v0_3_m3a_p1_number_errors_returning_suspending_fn.ynz",
+        CARD_702,
+    ),
+    (
+        "v0_3_m3a_p1_number_errors_suspending_error_path.ynz",
+        CARD_702,
+    ),
+    ("v0_3_m3a_p3_audit_array_number_no_leak.ynz", CARD_702),
+    ("v0_3_m3a_p3_audit_number_crossing.ynz", CARD_702),
+    ("v0_3_m3a_p3_for_number_loop_var.ynz", CARD_702),
+    ("v0_3_m3b_p5_parallel_number_crosses_wait.ynz", CARD_702),
+    (
+        "v0_3_m3b_p5_parallel_number_ec_inline_collect.ynz",
+        CARD_702,
+    ),
+    ("v0_3_m3e_number_crossing_local_direct", CARD_702),
+    ("v0_3_m3e_reexport_ec_number", CARD_702),
+    ("v0_3_m3f_ec_failed_then_ok.ynz", CARD_702),
+    ("v0_3_m3f_ec_same_callee_aliasing.ynz", CARD_702),
+    ("v0_3_m3f_ec_three_bindings.ynz", CARD_702),
+    ("v0_3_m3f_parallel_group_decimal128_sibling.ynz", CARD_702),
+    ("v0_3_m3f_parallel_group_ec_number_and_bool.ynz", CARD_702),
+    ("v0_3_m4_handle_collect_number.ynz", CARD_702),
+    ("v0_3_m4_r5xr8_suspend_then_collect.ynz", CARD_702),
+    (
+        "v0_3_m6_non_escaping_args_false_positive_sweep.ynz",
+        CARD_702,
+    ),
+    ("v0_3_m6_number_arg_background_cpu.ynz", CARD_702),
+    ("v0_3_m6_number_arg_background_sm.ynz", CARD_702),
+    ("v0_3_m6_number_arg_cpu_member.ynz", CARD_702),
+    ("v0_3_m6_number_arg_fused_cpu_member.ynz", CARD_702),
+    ("v0_3_m6_number_arg_fused_group.ynz", CARD_702),
+    ("v0_3_m6_number_arg_parallel_group.ynz", CARD_702),
+    ("v0_3_m6_number_arg_pure_call.ynz", CARD_702),
+    ("v0_3_m7_p3_dangling_stack_return_sm_tier.ynz", CARD_702),
+    ("v0_3_m7_p6_backedge_value_integrity.ynz", CARD_702),
+    (
+        "v0_3_m9_c1h_number_literal_arg_suspending_call.ynz",
+        CARD_702,
+    ),
+    ("v0_3_m9_slot_p26_sibling_int_then_number.ynz", CARD_702),
+    ("v0_3_m9_slot_q05_errors_value_shadow.ynz", CARD_702),
+];
 
 struct Outcome {
     class: &'static str,
@@ -118,9 +190,9 @@ fn measure(fixture: &str) -> Result<Outcome, &'static str> {
     })
 }
 
+// bug: a fixture leaks (frees != allocations) that is not in its class's known list, or a listed leak is fixed but stays listed | tier: High
 #[test]
-#[ignore = "builds and runs ~950 programs (about 5 minutes on 4 cores): a dedicated-lane test; run with --ignored"]
-fn sweep_every_fixture_for_leaks_and_classify_them() {
+fn nightly_sweep_every_fixture_for_leaks_and_classify_them() {
     let filter = std::env::var("YNZ_LEAK_SWEEP_FILTER").unwrap_or_default();
     let names = support::fixture_names(&filter);
 
@@ -188,43 +260,59 @@ fn sweep_every_fixture_for_leaks_and_classify_them() {
         count_of("state-machine", false)
     );
 
-    // Bug caught (High: leak): a producer on the plain path that no fixture of the corpus
-    // exercises the counters of, or one that is fixed while its entry stays listed.
-    let mut plain_leaks: Vec<&str> = leaks
+    if filter.is_empty() {
+        // Bug caught (High: leak): a producer that no fixture of the corpus exercises the counters
+        // of, or one that is fixed while its entry stays listed.
+        assert_leaks_match_known_list("plain", &leaks, &KNOWN_PLAIN_LEAKS);
+        // Bug caught (High: leak, card #385 exit test): a state-machine function or a dropped task
+        // whose frame release misses a heap value or a string, or a fixed one still listed.
+        assert_leaks_match_known_list("state-machine", &leaks, &KNOWN_STATE_MACHINE_LEAKS);
+    }
+}
+
+/// The ratchet for one class: the fixtures of `class` that leak must be exactly the ones in
+/// `known`. A fixture leaking but unlisted is a new leak to fix; one listed but balanced is fixed,
+/// so its entry must leave the list.
+/// O(n log n) time, O(n) memory: sorts the names of the leaking fixtures and of the list.
+fn assert_leaks_match_known_list(class: &str, leaks: &[Outcome], known: &[(&str, &str)]) {
+    let mut leaking: Vec<&str> = leaks
         .iter()
-        .filter(|outcome| outcome.class == "plain")
+        .filter(|outcome| outcome.class == class)
         .map(|outcome| outcome.fixture.as_str())
         .collect();
-    plain_leaks.sort_unstable();
-    let mut listed: Vec<&str> = KNOWN_PLAIN_LEAKS.iter().map(|(name, _)| *name).collect();
-    listed.sort_unstable();
-    if filter.is_empty() {
-        assert_eq!(
-            plain_leaks, listed,
-            "the plain-path leaks of the corpus differ from KNOWN_PLAIN_LEAKS: a fixture on the \
-             left only is a new plain-path leak to fix; one on the right only is fixed, so remove \
-             it from the list"
-        );
+    leaking.sort_unstable();
+    let known_names: std::collections::HashSet<&str> =
+        known.iter().map(|(name, _)| *name).collect();
+    let leaking_names: std::collections::HashSet<&str> = leaking.iter().copied().collect();
 
-        // Bug caught (High: leak, card #385 exit test): a state-machine function or a dropped task
-        // whose frame release misses a heap value or a string. The corpus has no listed exception.
-        let state_machine_leaks: Vec<String> = leaks
-            .iter()
-            .filter(|outcome| outcome.class == "state-machine")
-            .map(|outcome| {
-                format!(
-                    "{} (heap {}/{}, strings {}/{})",
-                    outcome.fixture,
-                    outcome.heap.0,
-                    outcome.heap.1,
-                    outcome.strings.0,
-                    outcome.strings.1
-                )
-            })
-            .collect();
-        assert!(
-            state_machine_leaks.is_empty(),
-            "state-machine fixtures must not leak after C8; leaking: {state_machine_leaks:#?}"
-        );
-    }
+    let new_leaks: Vec<String> = leaks
+        .iter()
+        .filter(|outcome| outcome.class == class && !known_names.contains(outcome.fixture.as_str()))
+        .map(|outcome| {
+            format!(
+                "{} (heap {}/{}, strings {}/{})",
+                outcome.fixture,
+                outcome.heap.0,
+                outcome.heap.1,
+                outcome.strings.0,
+                outcome.strings.1
+            )
+        })
+        .collect();
+    assert!(
+        new_leaks.is_empty(),
+        "{class} fixtures leak that are not in the known list; fix the leak (do not add it): \
+         {new_leaks:#?}"
+    );
+
+    let mut fixed: Vec<String> = known
+        .iter()
+        .filter(|(name, _)| !leaking_names.contains(name))
+        .map(|(name, producer)| format!("{name} ({producer})"))
+        .collect();
+    fixed.sort_unstable();
+    assert!(
+        fixed.is_empty(),
+        "these {class} fixtures no longer leak; remove them from the known list: {fixed:#?}"
+    );
 }

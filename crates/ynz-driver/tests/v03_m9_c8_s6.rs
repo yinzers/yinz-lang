@@ -36,11 +36,6 @@ function entrypoint() -> Nothing {
 }
 ";
 
-#[test]
-fn child_called_twice_does_not_release_a_stale_slot() {
-    balanced_and_asan_clean("c8s6_stale_child_slot", STALE_CHILD_SLOT, "parent\n");
-}
-
 /// The parked task holds the handle of its own child. The drop entry releases the handle
 /// (`ynz_handle_free` aborts the child); the child's own future frees the child's frame.
 const OWN_CHILD_HANDLE: &str = "
@@ -61,11 +56,6 @@ function entrypoint() -> Nothing {
   print(`parent`)
 }
 ";
-
-#[test]
-fn parked_task_holding_its_childs_handle_composes() {
-    balanced_and_asan_clean("c8s6_own_child_handle", OWN_CHILD_HANDLE, "parent\n");
-}
 
 /// A borrowed parameter (read again after the wait, so it sits in a frame slot) is in non-null frame slots the task does not own: the
 /// spawn ladder frees the argument's clone, so the drop entry must not.
@@ -89,11 +79,6 @@ function entrypoint() -> Nothing {
 }
 ";
 
-#[test]
-fn borrowed_parameter_and_view_are_not_released_by_the_drop_entry() {
-    balanced_and_asan_clean("c8s6_borrowed_parameter", BORROWED_PARAMETER, "parent\n");
-}
-
 /// A local given away before the wait is not released by the drop entry (the slot is null).
 const MOVED_BEFORE_WAIT: &str = "
 function take(give rows: Array<Int>) -> Int {
@@ -114,11 +99,6 @@ function entrypoint() -> Nothing {
   print(`parent`)
 }
 ";
-
-#[test]
-fn a_local_given_away_before_the_wait_is_released_once() {
-    balanced_and_asan_clean("c8s6_moved_before_wait", MOVED_BEFORE_WAIT, "parent\n");
-}
 
 /// The two dropped-while-pending programs of `v03_m9_c8_s0`, under AddressSanitizer (their counters are pinned
 /// there).
@@ -156,22 +136,12 @@ function entrypoint() -> Nothing {
 }
 ";
 
-#[test]
-fn a_task_dropped_at_shutdown_or_in_a_nested_child_is_asan_clean_and_balanced() {
-    balanced_and_asan_clean("c8s6_dropped_at_shutdown", DROPPED_AT_SHUTDOWN, "parent\n");
-    balanced_and_asan_clean(
-        "c8s6_dropped_in_nested_child",
-        DROPPED_IN_NESTED_CHILD,
-        "parent\n",
-    );
-}
-
 // ── one test per suspension site ────────────────────────────────────────────────────────────
 //
 // Each parks a spawned task at that site, lets the parent return, and requires every allocation
 // freed and no AddressSanitizer report. Bug each catches: the site has no drop state, so the
 // task's frame locals leak (or the dispatch falls through to `sm_dead` and the frame is not
-// walked). Tier: Medium (one integration test per contract).
+// walked).
 
 /// Conduit site: parked in `receive` on a channel nobody sends to.
 const PARKED_IN_CONDUIT: &str = "
@@ -188,11 +158,6 @@ function entrypoint() -> Nothing {
   print(`parent`)
 }
 ";
-
-#[test]
-fn parked_in_a_conduit_receive_releases_its_frame() {
-    balanced_and_asan_clean("c8s6_conduit", PARKED_IN_CONDUIT, "parent\n");
-}
 
 /// Independent I/O group: two suspending calls that overlap; both members are parked in their
 /// own `wait`, each holding a local of its own, beside a local of the parent.
@@ -223,15 +188,6 @@ function entrypoint() -> Nothing {
 }
 ";
 
-#[test]
-fn parked_in_an_independent_group_releases_every_member_frame() {
-    balanced_and_asan_clean(
-        "c8s6_independent_group",
-        PARKED_IN_INDEPENDENT_GROUP,
-        "parent\n",
-    );
-}
-
 /// Independent I/O group where one member already returned a heap value: the value sits in the
 /// finished member's return slot, owned by nobody else, until the group joins.
 const PARKED_IN_GROUP_WITH_A_RETURNED_MEMBER: &str = "
@@ -259,15 +215,6 @@ function entrypoint() -> Nothing {
 }
 ";
 
-#[test]
-fn parked_in_a_group_releases_the_value_a_finished_member_returned() {
-    balanced_and_asan_clean(
-        "c8s6_group_returned_member",
-        PARKED_IN_GROUP_WITH_A_RETURNED_MEMBER,
-        "parent\n",
-    );
-}
-
 /// Back-edge yield: a wait-free loop in a state-machine function yields at its back edge; the
 /// task is parked there holding a local declared before the loop and a loop-carried string.
 const PARKED_AT_A_BACK_EDGE: &str = "
@@ -288,11 +235,6 @@ function entrypoint() -> Nothing {
   print(`parent`)
 }
 ";
-
-#[test]
-fn parked_at_a_loop_back_edge_releases_its_frame() {
-    balanced_and_asan_clean("c8s6_back_edge", PARKED_AT_A_BACK_EDGE, "parent\n");
-}
 
 /// Fused CPU + I/O group: the host is parked at the shared poll state with its CPU handle live
 /// and its I/O member in a `wait`.
@@ -326,11 +268,6 @@ function entrypoint() -> Nothing {
   print(`parent`)
 }
 ";
-
-#[test]
-fn parked_in_a_fused_group_releases_its_frame() {
-    balanced_and_asan_clean("c8s6_fused_group", PARKED_IN_FUSED_GROUP, "parent\n");
-}
 
 /// CPU spike group: a promoted host (no `wait` of its own; its CPU join is the suspension) is
 /// parked at the join while the two CPU members still run.
@@ -371,39 +308,11 @@ function entrypoint() -> Nothing {
 }
 ";
 
-/// The two CPU members are still running when the process exits: a spawned CPU task cannot be
-/// cancelled (it owns its argument context until it ends), so the one context box of each stays
-/// allocated. Everything the host's frame holds (`mine`, 2 allocations) is released by the drop
-/// entry; without it 4 allocations leak.
-#[test]
-fn a_promoted_host_parked_at_its_cpu_join_releases_its_frame() {
-    at_both_optimization_levels(|no_optimize| {
-        let counters = run_balanced(
-            "c8s6_cpu_join",
-            PARKED_AT_A_CPU_JOIN,
-            "parent\n",
-            no_optimize,
-        );
-        assert_eq!(
-            counters.alloc - counters.free,
-            2,
-            "c8s6_cpu_join (no_optimize={no_optimize}): only the two running members' contexts \
-             may stay allocated: {counters:?}"
-        );
-        assert_asan_clean(
-            "c8s6_cpu_join",
-            PARKED_AT_A_CPU_JOIN,
-            "parent\n",
-            no_optimize,
-        );
-    });
-}
-
 // ── what a parked frame holds ────────────────────────────────────────────────────────────────
 //
 // Bug each catches: the drop entry skips a kind of frame local (its frame home differs: two slots,
 // a region behind a moved flag, a copy a statement made), so a task dropped while parked leaks it
-// or, for a moved one, frees it twice. Tier: Medium.
+// or, for a moved one, frees it twice.
 
 const PARKED_HOLDERS: &str = "
 shape Big {
@@ -428,90 +337,11 @@ function takeShape(give kept: Maybe<Big>) -> Int {
 }
 ";
 
-/// An errors-capable local (two frame slots), a `maybe<Shape>` local (a region behind a moved
-/// flag) and a `maybe` given away before the wait (its flag cleared: freeing it again is a double
-/// free), all parked in one wait.
-#[test]
-fn a_parked_task_releases_errors_and_maybe_locals_and_skips_a_given_one() {
-    let source = format!(
-        "{PARKED_HOLDERS}
-function worker() -> Nothing {{
-  let name = fetchName(false)
-  let big = pickShape(0)
-  let given = pickShape(0)
-  let count = takeShape(given)
-  wait sleep(500)
-  print(name.or(`x`))
-  print(`${{count}}`)
-}}
-
-function entrypoint() -> Nothing {{
-  background worker()
-  wait sleep(100)
-  print(`parent`)
-}}
-"
-    );
-    balanced_and_asan_clean("c8s6_holders", &source, "parent\n");
-}
-
-/// The copy a `for` loop makes of its variable (`hold_copy_in_frame`) is held in a frame slot of the
-/// open iteration, beside the local the iteration declares; the task is parked in the first
-/// iteration.
-#[test]
-fn a_parked_task_releases_the_loop_variable_copy_and_the_iteration_local() {
-    let source = "
-function makeNames() -> Array<String> {
-  let names: Array<String> = [`a`.toUpperCase(), `b`.toUpperCase()]
-  return names
-}
-
-function worker() -> Nothing {
-  let names = makeNames()
-  for (label in names) {
-    let shout: String = label.toUpperCase()
-    wait sleep(500)
-    print(shout)
-  }
-}
-
-function entrypoint() -> Nothing {
-  background worker()
-  wait sleep(100)
-  print(`parent`)
-}
-";
-    balanced_and_asan_clean("c8s6_for_copies", source, "parent\n");
-}
-
-/// A `for` over a range yields at its back edge: parked between two iterations.
-#[test]
-fn a_task_parked_at_a_for_back_edge_releases_its_frame() {
-    let source = "
-function hog() -> Nothing {
-  let keep: String = `k`.toUpperCase()
-  let sink = 0
-  for (outer in range(0, 2000000000)) {
-    sink = sink + outer
-  }
-  print(keep)
-  wait sleep(0)
-}
-
-function entrypoint() -> Nothing {
-  background hog()
-  wait sleep(100)
-  print(`parent`)
-}
-";
-    balanced_and_asan_clean("c8s6_for_back_edge", source, "parent\n");
-}
-
 // ── a task result nobody receives ────────────────────────────────────────────────────────────
 //
 // Bug each catches: a task that finished with a heap result nobody `.receive()`s leaves the result
 // in the handle's outbox (or drops it when the handle was freed before the task finished), and
-// nothing releases it. Tier: Medium. The task finishes before the parent exits, so its result is
+// nothing releases it. The task finishes before the parent exits, so its result is
 // parked; a second program frees the handle before the task finishes.
 
 /// `spawn_source(result_function)`: a parent that starts `make()` as a handle task and never
@@ -527,92 +357,6 @@ function entrypoint() -> Nothing {{
 }}
 "
     )
-}
-
-#[test]
-fn an_unreceived_string_result_is_released_with_the_handle() {
-    let source = unreceived_after_finish(
-        "function make() -> String {
-  wait sleep(1)
-  return `big`.toUpperCase()
-}",
-    );
-    balanced_and_asan_clean("c8s6_unreceived_string", &source, "parent\n");
-}
-
-#[test]
-fn an_unreceived_array_result_is_released_with_the_handle() {
-    let source = unreceived_after_finish(
-        "function make() -> Array<String> {
-  wait sleep(1)
-  let items: Array<String> = [`a`.toUpperCase(), `b`.toUpperCase()]
-  return items
-}",
-    );
-    balanced_and_asan_clean("c8s6_unreceived_array", &source, "parent\n");
-}
-
-#[test]
-fn an_unreceived_maybe_result_is_released_with_the_handle() {
-    let source = unreceived_after_finish(
-        "function make() -> Maybe<String> {
-  wait sleep(1)
-  let items: Array<String> = [`a`.toUpperCase()]
-  let found = items.get(0)
-  return found
-}",
-    );
-    balanced_and_asan_clean("c8s6_unreceived_maybe", &source, "parent\n");
-}
-
-#[test]
-fn an_unreceived_errors_result_is_released_with_the_handle() {
-    let source = unreceived_after_finish(
-        "function make() -> String errors {
-  wait sleep(1)
-  return `big`.toUpperCase()
-}",
-    );
-    balanced_and_asan_clean("c8s6_unreceived_errors", &source, "parent\n");
-}
-
-/// The handle is freed (block end) while the task is still running: the abort drops the parked
-/// task through its drop entry, and no completion is ever delivered.
-#[test]
-fn a_handle_freed_while_its_task_runs_aborts_it_and_leaks_nothing() {
-    let source = "
-function make() -> String {
-  wait sleep(100)
-  return `big`.toUpperCase()
-}
-
-function spawnAndLeave() -> Nothing {
-  let pending = background make()
-  wait sleep(1)
-}
-
-function entrypoint() -> Nothing {
-  spawnAndLeave()
-  wait sleep(300)
-  print(`parent`)
-}
-";
-    balanced_and_asan_clean("c8s6_result_after_free", source, "parent\n");
-}
-
-/// The task failed: the unreceived completion is an error object, not a payload. Bug caught: the
-/// result release frees what a failed completion does not own, or frees the error object twice
-/// (ASan). The counters cannot see the error object (`ynz_error_new` uses raw `malloc`), so this
-/// test passes without the release; it guards the failing path against a wrong release only.
-#[test]
-fn an_unreceived_error_result_is_released_with_the_handle() {
-    let source = unreceived_after_finish(
-        "function make() -> String errors {
-  let status = wait __testFallibleAsync(true)
-  return `name${status}`
-}",
-    );
-    balanced_and_asan_clean("c8s6_unreceived_error", &source, "parent\n");
 }
 
 /// A flat shape given to a task: the spawn allocates its cell and the ladder frees it
@@ -642,43 +386,13 @@ function entrypoint() -> Nothing {
 }
 ";
 
-#[test]
-fn a_parked_task_given_a_flat_shape_releases_its_fields_and_the_ladder_frees_the_cell() {
-    balanced_and_asan_clean("c8s6_given_shape", PARKED_WITH_A_GIVEN_SHAPE, "parent\n");
-}
-
-/// The same task never polled (dropped in state 0): the given parameter is still a whole shape in
-/// its frame slot.
-#[test]
-fn a_task_dropped_before_its_first_poll_releases_a_given_shape() {
-    let source = "
-shape Crew {
-  label: String
-  members: Array<String>
-}
-
-function worker(give crew: Crew) -> Nothing {
-  wait sleep(500)
-  print(crew.label)
-}
-
-function entrypoint() -> Nothing {
-  let members: Array<String> = [`a`.toUpperCase()]
-  let crew: Crew = { label: `L`.toUpperCase(), members: members }
-  background worker(crew)
-  print(`parent`)
-}
-";
-    balanced_and_asan_clean("c8s6_given_shape_state0", source, "parent\n");
-}
-
 // ── a value given to the callee the task is parked in ───────────────────────────────────────
 //
 // The parked statement hands a local to a suspending callee, which owns it from then on. The local
 // is not read after the park, so it has no frame slot: its stack slot is never written on the drop
 // path. Bug each catches: the drop state reads that uninitialized stack slot and frees whatever it
 // holds (a double free of the callee's value, or a free of a stray pointer), or the callee's own
-// drop entry is skipped and the value leaks. Tier: High (memory safety of the drop entry).
+// drop entry is skipped and the value leaks.
 
 /// One local given to the parked callee.
 const GIVEN_TO_PARKED_CHILD: &str = "
@@ -792,159 +506,12 @@ function entrypoint() -> Nothing {
 }
 ";
 
-#[test]
-fn a_local_given_to_the_parked_callee_is_released_once_by_the_callee() {
-    balanced_and_asan_clean(
-        "c8s6_given_to_parked_child",
-        GIVEN_TO_PARKED_CHILD,
-        "parent\n",
-    );
-    balanced_and_asan_clean(
-        "c8s6_string_given_to_parked_child",
-        STRING_GIVEN_TO_PARKED_CHILD,
-        "parent\n",
-    );
-    balanced_and_asan_clean(
-        "c8s6_given_to_parked_group",
-        GIVEN_TO_PARKED_GROUP,
-        "parent\n",
-    );
-    balanced_and_asan_clean(
-        "c8s6_given_to_parked_child_in_a_loop",
-        GIVEN_TO_PARKED_CHILD_IN_A_LOOP,
-        "1\nparent\n",
-    );
-    balanced_and_asan_clean(
-        "c8s6_given_down_a_parked_recursion",
-        GIVEN_DOWN_A_PARKED_RECURSION,
-        "parent\n",
-    );
-}
-
 // ── `return suspendingCall()` ───────────────────────────────────────────────────────────────
-
-/// Bug caught (High: leak, and a free of a never-written slot): `return suspendingCall()` stored the
-/// callee's result and returned Ready without releasing the open locals (`mine`, `more` leaked), and
-/// typeck's crossing scan did not count the call as a suspension, so those locals had no frame slot:
-/// the resumed state released stack slots it never wrote. The second program parks the same function
-/// in that call and drops it, so the drop entry reads the same slots.
-#[test]
-fn return_of_a_suspending_call_releases_the_open_locals() {
-    let program = "
-function inner() -> Int {
-  wait sleep(1)
-  return 7
-}
-
-function mid() -> Int {
-  let mine: Array<Int> = [4, 5]
-  let more: String = `x${mine.count()}`
-  return inner()
-}
-
-function entrypoint() -> Nothing {
-  let result = mid()
-  print(`${result}`)
-}
-";
-    balanced_and_asan_clean("c8s6_return_suspending_call", program, "7\n");
-}
-
-#[test]
-fn a_task_parked_in_a_returned_suspending_call_releases_the_open_locals() {
-    let program = "
-function inner() -> Int {
-  wait sleep(500)
-  return 7
-}
-
-function worker() -> Int {
-  let mine: Array<Int> = [4, 5]
-  let more: String = `x${mine.count()}`
-  return inner()
-}
-
-function entrypoint() -> Nothing {
-  background worker()
-  wait sleep(100)
-  print(`parent`)
-}
-";
-    balanced_and_asan_clean("c8s6_return_suspending_call_parked", program, "parent\n");
-}
-
-/// Bug caught (High: a free of a never-written slot, or a compile-time internal error): a
-/// `return suspendingCall()` nested in an `if` (or in an `if` inside a loop) was not a suspension
-/// to typeck's crossing scan, which only enters a branch whose body suspends. The open locals got
-/// no frame slot: the resumed return released stack slots it never wrote (bad free / SEGV at -O0),
-/// and since the drop entry refuses a binding with no frame slot, the program failed to compile.
-/// Each program completes one call and drops a second task parked in the nested return.
-#[test]
-fn a_return_of_a_suspending_call_nested_in_a_branch_releases_the_open_locals() {
-    let in_a_branch = "
-function inner(n: Int) -> Int {
-  wait sleep(n)
-  return n
-}
-
-function worker(n: Int) -> Int {
-  let keep: Array<Int> = [1, 2]
-  let label: String = `k`.toUpperCase()
-  if (n > 0) {
-    return inner(n)
-  }
-  print(`${keep.count()} ${label}`)
-  return 0
-}
-
-function entrypoint() -> Nothing {
-  let done = worker(5)
-  print(`${done}`)
-  background worker(500)
-  wait sleep(100)
-  print(`parent`)
-}
-";
-    balanced_and_asan_clean(
-        "c8s6_return_suspending_in_branch",
-        in_a_branch,
-        "5\nparent\n",
-    );
-
-    let in_a_loop = "
-function inner(n: Int) -> Int {
-  wait sleep(n)
-  return n
-}
-
-function worker(n: Int) -> Int {
-  let keep: Array<Int> = [1, 2]
-  let i = 0
-  while (i < 3) {
-    let local: String = `x`.toUpperCase()
-    if (i == 1) {
-      return inner(n)
-    }
-    i = i + 1
-  }
-  return keep.count()
-}
-
-function entrypoint() -> Nothing {
-  let done = worker(5)
-  print(`${done}`)
-  background worker(500)
-  wait sleep(100)
-  print(`parent`)
-}
-";
-    balanced_and_asan_clean("c8s6_return_suspending_in_loop", in_a_loop, "5\nparent\n");
-}
 
 /// Bug caught: pre-existing, found by the C8 round-2 review; a task dropped while its EMBEDDED child
 /// is parked in `wait sleep` leaked the child's Tokio `Sleep` box (120 bytes, invisible to the alloc
 /// counters, so LeakSanitizer is the check): the runtime's drop freed the sleep handle of the root
-/// frame and of the recursion chain only. Tier Medium. Each frame's own wait-sleep drop state now
+/// frame and of the recursion chain only. Each frame's own wait-sleep drop state now
 /// frees its handle once, so the same run also pins that the root frame and a recursion child (whose
 /// handles the runtime used to free) are freed exactly once, not twice.
 const EMBEDDED_CHILD_SLEEP: &str = "
@@ -972,34 +539,23 @@ function worker(depth: Int) -> Nothing {
 }
 ";
 
-#[test]
-fn a_task_dropped_while_a_frame_sleeps_frees_that_frames_sleep_box_once() {
-    for (name, worker, spawn) in [
-        ("embedded_child", EMBEDDED_CHILD_SLEEP, "worker()"),
-        ("root", ROOT_SLEEP, "worker()"),
-        ("recursion_child", RECURSION_CHILD_SLEEP, "worker(2)"),
-    ] {
-        let source = format!(
-            "{worker}
+fn assert_sleep_box_freed_once(name: &str, worker: &str, spawn: &str) {
+    let source = format!(
+        "{worker}
 function entrypoint() -> Nothing {{
   background {spawn}
   wait sleep(100)
   print(`parent`)
 }}
 "
-        );
-        support::assert_source_asan_and_leaks_clean(
-            &format!("c8s6_sleep_{name}"),
-            &source,
-            "parent\n",
-        );
-    }
+    );
+    support::assert_source_asan_and_leaks_clean(&format!("c8s6_sleep_{name}"), &source, "parent\n");
 }
 
 /// Bug caught: pre-existing, a leak found by the C8 round-2 review: `callee_result_type` listed only
 /// a string, array, map and an errors result of those or of a scalar, so a `maybe`, a union or a
 /// bignum a finished group member left in its return slot leaked when the task was dropped Pending
-/// before the group joined. Tier Medium. One program per result type: `quick` finishes with the
+/// before the group joined. One program per result type: `quick` finishes with the
 /// value, `slow` keeps the group parked, and the parent returns while it waits.
 fn finished_member_program(return_type: &str, body: &str) -> String {
     format!(
@@ -1037,41 +593,10 @@ function entrypoint() -> Nothing {{
     )
 }
 
-macro_rules! finished_member_cases {
-    ($($name:ident: $return_type:literal, $body:literal;)+) => {
-        $(
-            #[test]
-            fn $name() {
-                let source = finished_member_program($return_type, $body);
-                balanced_and_asan_clean(stringify!($name), &source, "parent\n");
-            }
-        )+
-    };
-}
-
-finished_member_cases! {
-    a_finished_member_returning_a_maybe_string_is_released_when_the_task_is_dropped: "Maybe<String>",
-        "  let items: Array<String> = [`a`.toUpperCase()]\n  return items.get(0)";
-    a_finished_member_returning_a_maybe_shape_is_released_when_the_task_is_dropped: "Maybe<Big>",
-        "  let items: Array<Big> = [{ label: `a`, count: 1 }]\n  return items.get(0)";
-    a_finished_member_returning_a_maybe_decimal_is_released_when_the_task_is_dropped: "Maybe<Number<20> >",
-        "  let items: Array<Number<20> > = [2.5]\n  return items.get(0)";
-    a_finished_member_returning_a_union_is_released_when_the_task_is_dropped: "Thing",
-        "  let big: Big = { label: `a`.toUpperCase(), count: 1 }\n  return big";
-    a_finished_member_returning_a_maybe_string_errors_is_released_when_the_task_is_dropped: "Maybe<String> errors",
-        "  let items: Array<String> = [`a`.toUpperCase()]\n  return items.get(0)";
-    a_finished_member_returning_a_maybe_shape_errors_is_released_when_the_task_is_dropped: "Maybe<Big> errors",
-        "  let items: Array<Big> = [{ label: `a`, count: 1 }]\n  return items.get(0)";
-    a_finished_member_returning_a_union_errors_is_released_when_the_task_is_dropped: "Thing errors",
-        "  let big: Big = { label: `a`.toUpperCase(), count: 1 }\n  return big";
-    a_finished_member_returning_a_bignum_errors_is_released_when_the_task_is_dropped: "Number<40> errors",
-        "  let made: Number<40> = 2.5\n  return made";
-}
-
 /// Bug caught: pre-existing, a leak found by the C8 round-2 review: `handle_result_release_fn`
 /// released the unreceived completion of a task only for a string, array, map, plain `maybe` and an
 /// errors result of a plain word or scalar, so a `maybe<string> errors` (and every other result type
-/// a handle can carry that the list lacked) leaked when nobody received it. Tier Medium. One program
+/// a handle can carry that the list lacked) leaked when nobody received it. One program
 /// per result type: the task finishes, the parent never receives it and frees the handle.
 fn unreceived_result_program(return_type: &str, body: &str) -> String {
     unreceived_after_finish(&format!(
@@ -1089,33 +614,6 @@ function make() -> {return_type} {{
 {body}
 }}"
     ))
-}
-
-macro_rules! unreceived_result_cases {
-    ($($name:ident: $return_type:literal, $body:literal;)+) => {
-        $(
-            #[test]
-            fn $name() {
-                let source = unreceived_result_program($return_type, $body);
-                balanced_and_asan_clean(stringify!($name), &source, "parent\n");
-            }
-        )+
-    };
-}
-
-unreceived_result_cases! {
-    an_unreceived_maybe_shape_result_is_released_with_the_handle: "Maybe<Big>",
-        "  let items: Array<Big> = [{ label: `a`, count: 1 }]\n  return items.get(0)";
-    an_unreceived_maybe_decimal_result_is_released_with_the_handle: "Maybe<Number<20> >",
-        "  let items: Array<Number<20> > = [2.5]\n  return items.get(0)";
-    an_unreceived_maybe_string_errors_result_is_released_with_the_handle: "Maybe<String> errors",
-        "  let items: Array<String> = [`a`.toUpperCase()]\n  return items.get(0)";
-    an_unreceived_maybe_shape_errors_result_is_released_with_the_handle: "Maybe<Big> errors",
-        "  let items: Array<Big> = [{ label: `a`, count: 1 }]\n  return items.get(0)";
-    an_unreceived_maybe_decimal_errors_result_is_released_with_the_handle: "Maybe<Number<20> > errors",
-        "  let items: Array<Number<20> > = [2.5]\n  return items.get(0)";
-    an_unreceived_bignum_errors_result_is_released_with_the_handle: "Number<40> errors",
-        "  let made: Number<40> = 2.5\n  return made";
 }
 
 // ── a union a task returns through its handle ───────────────────────────────────────────────
@@ -1172,78 +670,12 @@ const RECEIVE_AND_CHECK: &str = "  let got = pending.receive()
 
 const NEVER_RECEIVE: &str = "  print(`parent`)";
 
-macro_rules! union_handle_cases {
-    ($($name:ident: $return_type:literal, $receive:expr, $expected:literal;)+) => {
-        $(
-            #[test]
-            fn $name() {
-                let source = union_handle_program($return_type, $receive);
-                balanced_and_asan_clean(stringify!($name), &source, $expected);
-            }
-        )+
-    };
-}
-
-union_handle_cases! {
-    a_union_a_task_returns_is_received_and_narrowed_once: "Thing", RECEIVE_AND_NARROW, "ABC\n7\n";
-    a_union_errors_a_task_returns_is_received_and_narrowed_once: "Thing errors", RECEIVE_AND_NARROW, "ABC\n7\n";
-    a_union_a_task_returns_is_received_without_narrowing_and_released_once: "Thing", RECEIVE_AND_CHECK, "false\n";
-    a_union_errors_a_task_returns_is_received_without_narrowing_and_released_once: "Thing errors", RECEIVE_AND_CHECK, "false\n";
-    an_unreceived_union_result_is_released_with_the_handle: "Thing", NEVER_RECEIVE, "parent\n";
-    an_unreceived_union_errors_result_is_released_with_the_handle: "Thing errors", NEVER_RECEIVE, "parent\n";
-}
-
-/// Bug caught: the union-through-a-handle fix moving the embedded return into a cell too (a regression
-/// the cell tests above would not see); tier High. The embedded call keeps the frame-region form: a
-/// union a suspending callee returns to a plain call site is read from the callee's region before its
-/// frame is freed, as before.
-#[test]
-fn a_union_an_embedded_suspending_call_returns_is_unchanged() {
-    let source = "shape Tiny {
-  flag: Boolean
-}
-shape Big {
-  label: String
-  count: Int
-}
-shape Thing = Tiny | Big
-
-function make() -> Thing {
-  wait sleep(1)
-  let big: Big = { label: `abc`.toUpperCase(), count: 7 }
-  return big
-}
-
-function entrypoint() -> Nothing {
-  let value = make()
-  if (value) {
-    is Big => {
-      print(value.label)
-    }
-    is Tiny => {
-      print(`tiny`)
-    }
-  }
-}
-";
-    balanced_and_asan_clean("c8s6_embedded_union", source, "ABC\n");
-}
-
 /// Bug caught: the union-through-a-handle move freeing or reading a cell the failing path never made
-/// (a double free); tier High. The failing `-> Thing errors` task: no cell exists (the move glue
+/// (a double free). The failing `-> Thing errors` task: no cell exists (the move glue
 /// leaves `ok` 0), the error object is received or released, and nothing is freed twice.
-#[test]
-fn a_failed_union_errors_task_delivers_its_error_and_no_cell() {
-    for (name, receive, expected) in [
-        (
-            "received",
-            "  let got = pending.receive()\n  print(got.failed())",
-            "true\n",
-        ),
-        ("unreceived", "  print(`parent`)", "parent\n"),
-    ] {
-        let source = format!(
-            "shape Tiny {{
+fn assert_failed_union_errors_task(name: &str, receive: &str, expected: &str) {
+    let source = format!(
+        "shape Tiny {{
   flag: Boolean
 }}
 shape Big {{
@@ -1264,27 +696,18 @@ function entrypoint() -> Nothing {{
 {receive}
 }}
 "
-        );
-        balanced_and_asan_clean(&format!("c8s6_failed_union_{name}"), &source, expected);
-    }
+    );
+    balanced_and_asan_clean(&format!("c8s6_failed_union_{name}"), &source, expected);
 }
 
 /// Bug caught: a leak found by the C8 round-3 review: a handle receive of a `number<40> errors`
 /// result marked the binding's ok word as the handle's own (`ec_borrowed_ok`, right for a `number`
 /// the handle copies into its buffer), but a bignum's ok word is the text the task allocated and the
-/// handle hands over (`RET_KIND_EC_WORD`), so the binding's scope exit freed none of it. Tier Medium.
+/// handle hands over (`RET_KIND_EC_WORD`), so the binding's scope exit freed none of it.
 /// Received and checked, received and read with `or`.
-#[test]
-fn a_received_bignum_errors_result_is_released_with_its_binding() {
-    for (name, read) in [
-        ("failed", "print(got.failed())"),
-        (
-            "or",
-            "let fallback: Number<40> = 0.5\n  print(got.or(fallback))",
-        ),
-    ] {
-        let source = format!(
-            "function make() -> Number<40> errors {{
+fn assert_received_bignum_errors_released(name: &str, read: &str, expected: &str) {
+    let source = format!(
+        "function make() -> Number<40> errors {{
   wait sleep(1)
   let made: Number<40> = 1.5
   return made
@@ -1297,10 +720,8 @@ function entrypoint() -> Nothing {{
   {read}
 }}
 "
-        );
-        let expected = if name == "failed" { "false\n" } else { "1.5\n" };
-        balanced_and_asan_clean(&format!("c8s6_received_bignum_{name}"), &source, expected);
-    }
+    );
+    balanced_and_asan_clean(&format!("c8s6_received_bignum_{name}"), &source, expected);
 }
 
 // ── a `maybe` of a union a task returns ─────────────────────────────────────────────────────
@@ -1394,26 +815,747 @@ const DROP_GROUP_WITH_MAYBE_UNION: &str = "  background worker()
   wait sleep(100)
   print(`parent`)";
 
-macro_rules! maybe_union_handle_cases {
-    ($($name:ident: $return_type:literal, $body:expr, $entry:expr, $expected:literal;)+) => {
-        $(
-            #[test]
-            fn $name() {
-                let source = maybe_union_program($return_type, $body, $entry);
-                balanced_and_asan_clean(stringify!($name), &source, $expected);
-            }
-        )+
-    };
+/// One named test per frame, result or ownership form of the `slice 6 task dropped while pending (feature run, integrity)` run unit; each case is balanced (heap and strings) and ASan clean at both optimization levels unless its body says otherwise.
+macro_rules! s6_drop_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a task dropped while Pending, a task result (a union, maybe or bignum) nobody receives or received, or a value given to a parked callee leaks, double frees, frees a never-written slot or is read after free, silently or as an ASan report | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
 }
 
-maybe_union_handle_cases! {
-    a_maybe_union_a_task_returns_is_received_and_read_once: "Maybe<Thing>", MAYBE_UNION_SOME, RECEIVE_MAYBE_UNION, "true\nABC\n7\n";
-    a_maybe_union_errors_a_task_returns_is_received_and_read_once: "Maybe<Thing> errors", MAYBE_UNION_SOME, RECEIVE_MAYBE_UNION, "true\nABC\n7\n";
-    a_none_maybe_union_a_task_returns_is_received_once: "Maybe<Thing>", MAYBE_UNION_NONE, RECEIVE_MAYBE_UNION, "false\n";
-    a_none_maybe_union_errors_a_task_returns_is_received_once: "Maybe<Thing> errors", MAYBE_UNION_NONE, RECEIVE_MAYBE_UNION, "false\n";
-    an_unreceived_maybe_union_result_is_released_with_the_handle: "Maybe<Thing>", MAYBE_UNION_SOME, NEVER_RECEIVE_MAYBE_UNION, "parent\n";
-    an_unreceived_maybe_union_errors_result_is_released_with_the_handle: "Maybe<Thing> errors", MAYBE_UNION_SOME, NEVER_RECEIVE_MAYBE_UNION, "parent\n";
-    an_unreceived_none_maybe_union_result_is_released_with_the_handle: "Maybe<Thing>", MAYBE_UNION_NONE, NEVER_RECEIVE_MAYBE_UNION, "parent\n";
-    a_finished_group_member_returning_a_maybe_union_is_released_when_the_task_is_dropped: "Maybe<Thing>", MAYBE_UNION_SOME, DROP_GROUP_WITH_MAYBE_UNION, "parent\n";
-    a_finished_group_member_returning_a_maybe_union_errors_is_released_when_the_task_is_dropped: "Maybe<Thing> errors", MAYBE_UNION_SOME, DROP_GROUP_WITH_MAYBE_UNION, "parent\n";
+s6_drop_high_case! {
+    child_called_twice_does_not_release_a_stale_slot => {
+        balanced_and_asan_clean("c8s6_stale_child_slot", STALE_CHILD_SLOT, "parent\n");
+    }
+    parked_task_holding_its_childs_handle_composes => {
+        balanced_and_asan_clean("c8s6_own_child_handle", OWN_CHILD_HANDLE, "parent\n");
+    }
+    borrowed_parameter_and_view_are_not_released_by_the_drop_entry => {
+        balanced_and_asan_clean("c8s6_borrowed_parameter", BORROWED_PARAMETER, "parent\n");
+    }
+    a_local_given_away_before_the_wait_is_released_once => {
+        balanced_and_asan_clean("c8s6_moved_before_wait", MOVED_BEFORE_WAIT, "parent\n");
+    }
+    a_task_dropped_at_shutdown_is_asan_clean_and_balanced => {
+        balanced_and_asan_clean("c8s6_dropped_at_shutdown", DROPPED_AT_SHUTDOWN, "parent\n");
+    }
+    a_task_dropped_in_a_nested_child_is_asan_clean_and_balanced => {
+        balanced_and_asan_clean(
+            "c8s6_dropped_in_nested_child",
+            DROPPED_IN_NESTED_CHILD,
+            "parent\n",
+        );
+    }
+    parked_in_a_conduit_receive_releases_its_frame => {
+        balanced_and_asan_clean("c8s6_conduit", PARKED_IN_CONDUIT, "parent\n");
+    }
+    parked_in_an_independent_group_releases_every_member_frame => {
+        balanced_and_asan_clean(
+            "c8s6_independent_group",
+            PARKED_IN_INDEPENDENT_GROUP,
+            "parent\n",
+        );
+    }
+    parked_in_a_group_releases_the_value_a_finished_member_returned => {
+        balanced_and_asan_clean(
+            "c8s6_group_returned_member",
+            PARKED_IN_GROUP_WITH_A_RETURNED_MEMBER,
+            "parent\n",
+        );
+    }
+    parked_at_a_loop_back_edge_releases_its_frame => {
+        balanced_and_asan_clean("c8s6_back_edge", PARKED_AT_A_BACK_EDGE, "parent\n");
+    }
+    parked_in_a_fused_group_releases_its_frame => {
+        balanced_and_asan_clean("c8s6_fused_group", PARKED_IN_FUSED_GROUP, "parent\n");
+    }
+    // case: The two CPU members are still running when the process exits: a spawned CPU task cannot be cancelled (it owns its argument context until it ends), so the one context box of each stays allocated. Everything the host's frame holds (`mine`, 2 allocations) is released by the drop entry; without it 4 allocations leak.
+    a_promoted_host_parked_at_its_cpu_join_releases_its_frame => {
+        at_both_optimization_levels(|no_optimize| {
+            let counters = run_balanced(
+                "c8s6_cpu_join",
+                PARKED_AT_A_CPU_JOIN,
+                "parent\n",
+                no_optimize,
+            );
+            assert_eq!(
+                counters.alloc - counters.free,
+                2,
+                "c8s6_cpu_join (no_optimize={no_optimize}): only the two running members' contexts \
+                 may stay allocated: {counters:?}"
+            );
+            assert_asan_clean(
+                "c8s6_cpu_join",
+                PARKED_AT_A_CPU_JOIN,
+                "parent\n",
+                no_optimize,
+            );
+        });
+    }
+    // case: An errors-capable local (two frame slots), a `maybe<Shape>` local (a region behind a moved flag) and a `maybe` given away before the wait (its flag cleared: freeing it again is a double free), all parked in one wait.
+    a_parked_task_releases_errors_and_maybe_locals_and_skips_a_given_one => {
+    let source = format!(
+        "{PARKED_HOLDERS}
+function worker() -> Nothing {{
+  let name = fetchName(false)
+  let big = pickShape(0)
+  let given = pickShape(0)
+  let count = takeShape(given)
+  wait sleep(500)
+  print(name.or(`x`))
+  print(`${{count}}`)
+}}
+
+function entrypoint() -> Nothing {{
+  background worker()
+  wait sleep(100)
+  print(`parent`)
+}}
+"
+    );
+    balanced_and_asan_clean("c8s6_holders", &source, "parent\n");
+    }
+    // case: The copy a `for` loop makes of its variable (`hold_copy_in_frame`) is held in a frame slot of the open iteration, beside the local the iteration declares; the task is parked in the first iteration.
+    a_parked_task_releases_the_loop_variable_copy_and_the_iteration_local => {
+    let source = "
+function makeNames() -> Array<String> {
+  let names: Array<String> = [`a`.toUpperCase(), `b`.toUpperCase()]
+  return names
+}
+
+function worker() -> Nothing {
+  let names = makeNames()
+  for (label in names) {
+    let shout: String = label.toUpperCase()
+    wait sleep(500)
+    print(shout)
+  }
+}
+
+function entrypoint() -> Nothing {
+  background worker()
+  wait sleep(100)
+  print(`parent`)
+}
+";
+    balanced_and_asan_clean("c8s6_for_copies", source, "parent\n");
+    }
+    // case: A `for` over a range yields at its back edge: parked between two iterations.
+    a_task_parked_at_a_for_back_edge_releases_its_frame => {
+    let source = "
+function hog() -> Nothing {
+  let keep: String = `k`.toUpperCase()
+  let sink = 0
+  for (outer in range(0, 2000000000)) {
+    sink = sink + outer
+  }
+  print(keep)
+  wait sleep(0)
+}
+
+function entrypoint() -> Nothing {
+  background hog()
+  wait sleep(100)
+  print(`parent`)
+}
+";
+    balanced_and_asan_clean("c8s6_for_back_edge", source, "parent\n");
+    }
+    an_unreceived_string_result_is_released_with_the_handle => {
+    let source = unreceived_after_finish(
+        "function make() -> String {
+  wait sleep(1)
+  return `big`.toUpperCase()
+}",
+    );
+    balanced_and_asan_clean("c8s6_unreceived_string", &source, "parent\n");
+    }
+    an_unreceived_array_result_is_released_with_the_handle => {
+    let source = unreceived_after_finish(
+        "function make() -> Array<String> {
+  wait sleep(1)
+  let items: Array<String> = [`a`.toUpperCase(), `b`.toUpperCase()]
+  return items
+}",
+    );
+    balanced_and_asan_clean("c8s6_unreceived_array", &source, "parent\n");
+    }
+    an_unreceived_maybe_result_is_released_with_the_handle => {
+    let source = unreceived_after_finish(
+        "function make() -> Maybe<String> {
+  wait sleep(1)
+  let items: Array<String> = [`a`.toUpperCase()]
+  let found = items.get(0)
+  return found
+}",
+    );
+    balanced_and_asan_clean("c8s6_unreceived_maybe", &source, "parent\n");
+    }
+    an_unreceived_errors_result_is_released_with_the_handle => {
+    let source = unreceived_after_finish(
+        "function make() -> String errors {
+  wait sleep(1)
+  return `big`.toUpperCase()
+}",
+    );
+    balanced_and_asan_clean("c8s6_unreceived_errors", &source, "parent\n");
+    }
+    // case: The handle is freed (block end) while the task is still running: the abort drops the parked task through its drop entry, and no completion is ever delivered.
+    a_handle_freed_while_its_task_runs_aborts_it_and_leaks_nothing => {
+    let source = "
+function make() -> String {
+  wait sleep(100)
+  return `big`.toUpperCase()
+}
+
+function spawnAndLeave() -> Nothing {
+  let pending = background make()
+  wait sleep(1)
+}
+
+function entrypoint() -> Nothing {
+  spawnAndLeave()
+  wait sleep(300)
+  print(`parent`)
+}
+";
+    balanced_and_asan_clean("c8s6_result_after_free", source, "parent\n");
+    }
+    // case: The task failed: the unreceived completion is an error object, not a payload. Bug caught: the result release frees what a failed completion does not own, or frees the error object twice (ASan). The counters cannot see the error object (`ynz_error_new` uses raw `malloc`), so this test passes without the release; it guards the failing path against a wrong release only.
+    an_unreceived_error_result_is_released_with_the_handle => {
+    let source = unreceived_after_finish(
+        "function make() -> String errors {
+  let status = wait __testFallibleAsync(true)
+  return `name${status}`
+}",
+    );
+    balanced_and_asan_clean("c8s6_unreceived_error", &source, "parent\n");
+    }
+    a_parked_task_given_a_flat_shape_releases_its_fields_and_the_ladder_frees_the_cell => {
+        balanced_and_asan_clean("c8s6_given_shape", PARKED_WITH_A_GIVEN_SHAPE, "parent\n");
+    }
+    // case: The same task never polled (dropped in state 0): the given parameter is still a whole shape in its frame slot.
+    a_task_dropped_before_its_first_poll_releases_a_given_shape => {
+    let source = "
+shape Crew {
+  label: String
+  members: Array<String>
+}
+
+function worker(give crew: Crew) -> Nothing {
+  wait sleep(500)
+  print(crew.label)
+}
+
+function entrypoint() -> Nothing {
+  let members: Array<String> = [`a`.toUpperCase()]
+  let crew: Crew = { label: `L`.toUpperCase(), members: members }
+  background worker(crew)
+  print(`parent`)
+}
+";
+    balanced_and_asan_clean("c8s6_given_shape_state0", source, "parent\n");
+    }
+    a_local_given_to_the_parked_callee_is_released_once_by_the_callee => {
+        balanced_and_asan_clean(
+            "c8s6_given_to_parked_child",
+            GIVEN_TO_PARKED_CHILD,
+            "parent\n",
+        );
+    }
+    a_string_given_to_the_parked_callee_is_released_once_by_the_callee => {
+        balanced_and_asan_clean(
+            "c8s6_string_given_to_parked_child",
+            STRING_GIVEN_TO_PARKED_CHILD,
+            "parent\n",
+        );
+    }
+    locals_given_to_the_members_of_a_parked_group_are_released_once_by_the_members => {
+        balanced_and_asan_clean(
+            "c8s6_given_to_parked_group",
+            GIVEN_TO_PARKED_GROUP,
+            "parent\n",
+        );
+    }
+    a_local_given_to_a_parked_callee_called_in_a_loop_is_released_once_by_the_callee => {
+        balanced_and_asan_clean(
+            "c8s6_given_to_parked_child_in_a_loop",
+            GIVEN_TO_PARKED_CHILD_IN_A_LOOP,
+            "1\nparent\n",
+        );
+    }
+    a_local_given_down_a_parked_recursion_is_released_once_by_the_callee => {
+        balanced_and_asan_clean(
+            "c8s6_given_down_a_parked_recursion",
+            GIVEN_DOWN_A_PARKED_RECURSION,
+            "parent\n",
+        );
+    }
+    // case: Bug caught (High: leak, and a free of a never-written slot): `return suspendingCall()` stored the callee's result and returned Ready without releasing the open locals (`mine`, `more` leaked), and typeck's crossing scan did not count the call as a suspension, so those locals had no frame slot: the resumed state released stack slots it never wrote. The second program parks the same function in that call and drops it, so the drop entry reads the same slots.
+    return_of_a_suspending_call_releases_the_open_locals => {
+    let program = "
+function inner() -> Int {
+  wait sleep(1)
+  return 7
+}
+
+function mid() -> Int {
+  let mine: Array<Int> = [4, 5]
+  let more: String = `x${mine.count()}`
+  return inner()
+}
+
+function entrypoint() -> Nothing {
+  let result = mid()
+  print(`${result}`)
+}
+";
+    balanced_and_asan_clean("c8s6_return_suspending_call", program, "7\n");
+    }
+    a_task_parked_in_a_returned_suspending_call_releases_the_open_locals => {
+    let program = "
+function inner() -> Int {
+  wait sleep(500)
+  return 7
+}
+
+function worker() -> Int {
+  let mine: Array<Int> = [4, 5]
+  let more: String = `x${mine.count()}`
+  return inner()
+}
+
+function entrypoint() -> Nothing {
+  background worker()
+  wait sleep(100)
+  print(`parent`)
+}
+";
+    balanced_and_asan_clean("c8s6_return_suspending_call_parked", program, "parent\n");
+    }
+    // case: Bug caught (High: a free of a never-written slot, or a compile-time internal error): a `return suspendingCall()` nested in an `if` (or in an `if` inside a loop) was not a suspension to typeck's crossing scan, which only enters a branch whose body suspends. The open locals got no frame slot: the resumed return released stack slots it never wrote (bad free / SEGV at -O0), and since the drop entry refuses a binding with no frame slot, the program failed to compile. Each program completes one call and drops a second task parked in the nested return.
+    a_return_of_a_suspending_call_nested_in_a_branch_releases_the_open_locals => {
+    let in_a_branch = "
+function inner(n: Int) -> Int {
+  wait sleep(n)
+  return n
+}
+
+function worker(n: Int) -> Int {
+  let keep: Array<Int> = [1, 2]
+  let label: String = `k`.toUpperCase()
+  if (n > 0) {
+    return inner(n)
+  }
+  print(`${keep.count()} ${label}`)
+  return 0
+}
+
+function entrypoint() -> Nothing {
+  let done = worker(5)
+  print(`${done}`)
+  background worker(500)
+  wait sleep(100)
+  print(`parent`)
+}
+";
+    balanced_and_asan_clean(
+        "c8s6_return_suspending_in_branch",
+        in_a_branch,
+        "5\nparent\n",
+    );
+    }
+    a_return_of_a_suspending_call_nested_in_a_loop_releases_the_open_locals => {
+    let in_a_loop = "
+function inner(n: Int) -> Int {
+  wait sleep(n)
+  return n
+}
+
+function worker(n: Int) -> Int {
+  let keep: Array<Int> = [1, 2]
+  let i = 0
+  while (i < 3) {
+    let local: String = `x`.toUpperCase()
+    if (i == 1) {
+      return inner(n)
+    }
+    i = i + 1
+  }
+  return keep.count()
+}
+
+function entrypoint() -> Nothing {
+  let done = worker(5)
+  print(`${done}`)
+  background worker(500)
+  wait sleep(100)
+  print(`parent`)
+}
+";
+    balanced_and_asan_clean("c8s6_return_suspending_in_loop", in_a_loop, "5\nparent\n");
+    }
+    a_task_dropped_while_an_embedded_child_sleeps_frees_that_childs_sleep_box_once => {
+        assert_sleep_box_freed_once("embedded_child", EMBEDDED_CHILD_SLEEP, "worker()");
+    }
+    a_task_dropped_while_its_root_frame_sleeps_frees_that_frames_sleep_box_once => {
+        assert_sleep_box_freed_once("root", ROOT_SLEEP, "worker()");
+    }
+    a_task_dropped_while_a_recursion_child_sleeps_frees_that_childs_sleep_box_once => {
+        assert_sleep_box_freed_once("recursion_child", RECURSION_CHILD_SLEEP, "worker(2)");
+    }
+    // case: the union-through-a-handle fix moving the embedded return into a cell too (a regression the cell tests above would not see). The embedded call keeps the frame-region form: a union a suspending callee returns to a plain call site is read from the callee's region before its frame is freed, as before.
+    a_union_an_embedded_suspending_call_returns_is_unchanged => {
+    let source = "shape Tiny {
+  flag: Boolean
+}
+shape Big {
+  label: String
+  count: Int
+}
+shape Thing = Tiny | Big
+
+function make() -> Thing {
+  wait sleep(1)
+  let big: Big = { label: `abc`.toUpperCase(), count: 7 }
+  return big
+}
+
+function entrypoint() -> Nothing {
+  let value = make()
+  if (value) {
+    is Big => {
+      print(value.label)
+    }
+    is Tiny => {
+      print(`tiny`)
+    }
+  }
+}
+";
+    balanced_and_asan_clean("c8s6_embedded_union", source, "ABC\n");
+    }
+    a_failed_union_errors_task_delivers_its_error_and_no_cell_when_received => {
+        assert_failed_union_errors_task(
+            "received",
+            "  let got = pending.receive()\n  print(got.failed())",
+            "true\n",
+        );
+    }
+    a_failed_union_errors_task_delivers_its_error_and_no_cell_when_unreceived => {
+        assert_failed_union_errors_task("unreceived", "  print(`parent`)", "parent\n");
+    }
+    a_received_bignum_errors_result_is_released_with_its_binding_when_checked => {
+        assert_received_bignum_errors_released("failed", "print(got.failed())", "false\n");
+    }
+    a_received_bignum_errors_result_is_released_with_its_binding_when_read_with_or => {
+        assert_received_bignum_errors_released(
+            "or",
+            "let fallback: Number<40> = 0.5\n  print(got.or(fallback))",
+            "1.5\n",
+        );
+    }
+    a_finished_member_returning_a_maybe_string_is_released_when_the_task_is_dropped => {
+        let source = finished_member_program(
+            "Maybe<String>",
+            "  let items: Array<String> = [`a`.toUpperCase()]\n  return items.get(0)",
+        );
+        balanced_and_asan_clean(
+            "a_finished_member_returning_a_maybe_string_is_released_when_the_task_is_dropped",
+            &source,
+            "parent\n",
+        );
+    }
+    a_finished_member_returning_a_maybe_shape_is_released_when_the_task_is_dropped => {
+        let source = finished_member_program(
+            "Maybe<Big>",
+            "  let items: Array<Big> = [{ label: `a`, count: 1 }]\n  return items.get(0)",
+        );
+        balanced_and_asan_clean(
+            "a_finished_member_returning_a_maybe_shape_is_released_when_the_task_is_dropped",
+            &source,
+            "parent\n",
+        );
+    }
+    a_finished_member_returning_a_maybe_decimal_is_released_when_the_task_is_dropped => {
+        let source = finished_member_program(
+            "Maybe<Number<20> >",
+            "  let items: Array<Number<20> > = [2.5]\n  return items.get(0)",
+        );
+        balanced_and_asan_clean(
+            "a_finished_member_returning_a_maybe_decimal_is_released_when_the_task_is_dropped",
+            &source,
+            "parent\n",
+        );
+    }
+    a_finished_member_returning_a_union_is_released_when_the_task_is_dropped => {
+        let source = finished_member_program(
+            "Thing",
+            "  let big: Big = { label: `a`.toUpperCase(), count: 1 }\n  return big",
+        );
+        balanced_and_asan_clean(
+            "a_finished_member_returning_a_union_is_released_when_the_task_is_dropped",
+            &source,
+            "parent\n",
+        );
+    }
+    a_finished_member_returning_a_maybe_string_errors_is_released_when_the_task_is_dropped => {
+        let source = finished_member_program(
+            "Maybe<String> errors",
+            "  let items: Array<String> = [`a`.toUpperCase()]\n  return items.get(0)",
+        );
+        balanced_and_asan_clean(
+            "a_finished_member_returning_a_maybe_string_errors_is_released_when_the_task_is_dropped",
+            &source,
+            "parent\n",
+        );
+    }
+    a_finished_member_returning_a_maybe_shape_errors_is_released_when_the_task_is_dropped => {
+        let source = finished_member_program(
+            "Maybe<Big> errors",
+            "  let items: Array<Big> = [{ label: `a`, count: 1 }]\n  return items.get(0)",
+        );
+        balanced_and_asan_clean(
+            "a_finished_member_returning_a_maybe_shape_errors_is_released_when_the_task_is_dropped",
+            &source,
+            "parent\n",
+        );
+    }
+    a_finished_member_returning_a_union_errors_is_released_when_the_task_is_dropped => {
+        let source = finished_member_program(
+            "Thing errors",
+            "  let big: Big = { label: `a`.toUpperCase(), count: 1 }\n  return big",
+        );
+        balanced_and_asan_clean(
+            "a_finished_member_returning_a_union_errors_is_released_when_the_task_is_dropped",
+            &source,
+            "parent\n",
+        );
+    }
+    a_finished_member_returning_a_bignum_errors_is_released_when_the_task_is_dropped => {
+        let source = finished_member_program(
+            "Number<40> errors",
+            "  let made: Number<40> = 2.5\n  return made",
+        );
+        balanced_and_asan_clean(
+            "a_finished_member_returning_a_bignum_errors_is_released_when_the_task_is_dropped",
+            &source,
+            "parent\n",
+        );
+    }
+    an_unreceived_maybe_shape_result_is_released_with_the_handle => {
+        let source = unreceived_result_program(
+            "Maybe<Big>",
+            "  let items: Array<Big> = [{ label: `a`, count: 1 }]\n  return items.get(0)",
+        );
+        balanced_and_asan_clean(
+            "an_unreceived_maybe_shape_result_is_released_with_the_handle",
+            &source,
+            "parent\n",
+        );
+    }
+    an_unreceived_maybe_decimal_result_is_released_with_the_handle => {
+        let source = unreceived_result_program(
+            "Maybe<Number<20> >",
+            "  let items: Array<Number<20> > = [2.5]\n  return items.get(0)",
+        );
+        balanced_and_asan_clean(
+            "an_unreceived_maybe_decimal_result_is_released_with_the_handle",
+            &source,
+            "parent\n",
+        );
+    }
+    an_unreceived_maybe_string_errors_result_is_released_with_the_handle => {
+        let source = unreceived_result_program(
+            "Maybe<String> errors",
+            "  let items: Array<String> = [`a`.toUpperCase()]\n  return items.get(0)",
+        );
+        balanced_and_asan_clean(
+            "an_unreceived_maybe_string_errors_result_is_released_with_the_handle",
+            &source,
+            "parent\n",
+        );
+    }
+    an_unreceived_maybe_shape_errors_result_is_released_with_the_handle => {
+        let source = unreceived_result_program(
+            "Maybe<Big> errors",
+            "  let items: Array<Big> = [{ label: `a`, count: 1 }]\n  return items.get(0)",
+        );
+        balanced_and_asan_clean(
+            "an_unreceived_maybe_shape_errors_result_is_released_with_the_handle",
+            &source,
+            "parent\n",
+        );
+    }
+    an_unreceived_maybe_decimal_errors_result_is_released_with_the_handle => {
+        let source = unreceived_result_program(
+            "Maybe<Number<20> > errors",
+            "  let items: Array<Number<20> > = [2.5]\n  return items.get(0)",
+        );
+        balanced_and_asan_clean(
+            "an_unreceived_maybe_decimal_errors_result_is_released_with_the_handle",
+            &source,
+            "parent\n",
+        );
+    }
+    an_unreceived_bignum_errors_result_is_released_with_the_handle => {
+        let source = unreceived_result_program(
+            "Number<40> errors",
+            "  let made: Number<40> = 2.5\n  return made",
+        );
+        balanced_and_asan_clean(
+            "an_unreceived_bignum_errors_result_is_released_with_the_handle",
+            &source,
+            "parent\n",
+        );
+    }
+    a_union_a_task_returns_is_received_and_narrowed_once => {
+        let source = union_handle_program("Thing", RECEIVE_AND_NARROW);
+        balanced_and_asan_clean(
+            "a_union_a_task_returns_is_received_and_narrowed_once",
+            &source,
+            "ABC\n7\n",
+        );
+    }
+    a_union_errors_a_task_returns_is_received_and_narrowed_once => {
+        let source = union_handle_program("Thing errors", RECEIVE_AND_NARROW);
+        balanced_and_asan_clean(
+            "a_union_errors_a_task_returns_is_received_and_narrowed_once",
+            &source,
+            "ABC\n7\n",
+        );
+    }
+    a_union_a_task_returns_is_received_without_narrowing_and_released_once => {
+        let source = union_handle_program("Thing", RECEIVE_AND_CHECK);
+        balanced_and_asan_clean(
+            "a_union_a_task_returns_is_received_without_narrowing_and_released_once",
+            &source,
+            "false\n",
+        );
+    }
+    a_union_errors_a_task_returns_is_received_without_narrowing_and_released_once => {
+        let source = union_handle_program("Thing errors", RECEIVE_AND_CHECK);
+        balanced_and_asan_clean(
+            "a_union_errors_a_task_returns_is_received_without_narrowing_and_released_once",
+            &source,
+            "false\n",
+        );
+    }
+    an_unreceived_union_result_is_released_with_the_handle => {
+        let source = union_handle_program("Thing", NEVER_RECEIVE);
+        balanced_and_asan_clean(
+            "an_unreceived_union_result_is_released_with_the_handle",
+            &source,
+            "parent\n",
+        );
+    }
+    an_unreceived_union_errors_result_is_released_with_the_handle => {
+        let source = union_handle_program("Thing errors", NEVER_RECEIVE);
+        balanced_and_asan_clean(
+            "an_unreceived_union_errors_result_is_released_with_the_handle",
+            &source,
+            "parent\n",
+        );
+    }
+    a_maybe_union_a_task_returns_is_received_and_read_once => {
+        let source = maybe_union_program("Maybe<Thing>", MAYBE_UNION_SOME, RECEIVE_MAYBE_UNION);
+        balanced_and_asan_clean(
+            "a_maybe_union_a_task_returns_is_received_and_read_once",
+            &source,
+            "true\nABC\n7\n",
+        );
+    }
+    a_maybe_union_errors_a_task_returns_is_received_and_read_once => {
+        let source = maybe_union_program(
+            "Maybe<Thing> errors",
+            MAYBE_UNION_SOME,
+            RECEIVE_MAYBE_UNION,
+        );
+        balanced_and_asan_clean(
+            "a_maybe_union_errors_a_task_returns_is_received_and_read_once",
+            &source,
+            "true\nABC\n7\n",
+        );
+    }
+    a_none_maybe_union_a_task_returns_is_received_once => {
+        let source = maybe_union_program("Maybe<Thing>", MAYBE_UNION_NONE, RECEIVE_MAYBE_UNION);
+        balanced_and_asan_clean(
+            "a_none_maybe_union_a_task_returns_is_received_once",
+            &source,
+            "false\n",
+        );
+    }
+    a_none_maybe_union_errors_a_task_returns_is_received_once => {
+        let source = maybe_union_program(
+            "Maybe<Thing> errors",
+            MAYBE_UNION_NONE,
+            RECEIVE_MAYBE_UNION,
+        );
+        balanced_and_asan_clean(
+            "a_none_maybe_union_errors_a_task_returns_is_received_once",
+            &source,
+            "false\n",
+        );
+    }
+    an_unreceived_maybe_union_result_is_released_with_the_handle => {
+        let source = maybe_union_program(
+            "Maybe<Thing>",
+            MAYBE_UNION_SOME,
+            NEVER_RECEIVE_MAYBE_UNION,
+        );
+        balanced_and_asan_clean(
+            "an_unreceived_maybe_union_result_is_released_with_the_handle",
+            &source,
+            "parent\n",
+        );
+    }
+    an_unreceived_maybe_union_errors_result_is_released_with_the_handle => {
+        let source = maybe_union_program(
+            "Maybe<Thing> errors",
+            MAYBE_UNION_SOME,
+            NEVER_RECEIVE_MAYBE_UNION,
+        );
+        balanced_and_asan_clean(
+            "an_unreceived_maybe_union_errors_result_is_released_with_the_handle",
+            &source,
+            "parent\n",
+        );
+    }
+    an_unreceived_none_maybe_union_result_is_released_with_the_handle => {
+        let source = maybe_union_program(
+            "Maybe<Thing>",
+            MAYBE_UNION_NONE,
+            NEVER_RECEIVE_MAYBE_UNION,
+        );
+        balanced_and_asan_clean(
+            "an_unreceived_none_maybe_union_result_is_released_with_the_handle",
+            &source,
+            "parent\n",
+        );
+    }
+    a_finished_group_member_returning_a_maybe_union_is_released_when_the_task_is_dropped => {
+        let source = maybe_union_program(
+            "Maybe<Thing>",
+            MAYBE_UNION_SOME,
+            DROP_GROUP_WITH_MAYBE_UNION,
+        );
+        balanced_and_asan_clean(
+            "a_finished_group_member_returning_a_maybe_union_is_released_when_the_task_is_dropped",
+            &source,
+            "parent\n",
+        );
+    }
+    a_finished_group_member_returning_a_maybe_union_errors_is_released_when_the_task_is_dropped => {
+        let source = maybe_union_program(
+            "Maybe<Thing> errors",
+            MAYBE_UNION_SOME,
+            DROP_GROUP_WITH_MAYBE_UNION,
+        );
+        balanced_and_asan_clean(
+            "a_finished_group_member_returning_a_maybe_union_errors_is_released_when_the_task_is_dropped",
+            &source,
+            "parent\n",
+        );
+    }
 }

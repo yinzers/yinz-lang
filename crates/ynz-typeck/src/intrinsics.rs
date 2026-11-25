@@ -32,8 +32,6 @@ pub struct PrimitiveIntrinsicTable {
     /// `lookup_free_fn_including_internal`. NOT `#[cfg(test)]` because production
     /// typeck must resolve these names in driver fixtures.
     internal_fns: Vec<(&'static str, FreeFnSig)>,
-    #[cfg(test)]
-    test_fns: Vec<(&'static str, FreeFnSig)>,
 }
 
 /// Parse a registry `return_type` / `receiver_type` string into a `Type` enum value.
@@ -157,8 +155,6 @@ fn build_table(since_filter: impl Fn(&str) -> bool) -> PrimitiveIntrinsicTable {
         methods,
         methods_1arg,
         internal_fns: Vec::new(),
-        #[cfg(test)]
-        test_fns: Vec::new(),
     }
 }
 
@@ -292,19 +288,5 @@ impl PrimitiveIntrinsicTable {
         names.sort_unstable();
         names.dedup();
         names
-    }
-
-    #[cfg(test)]
-    pub fn lookup_test_fn(&self, name: &str) -> Option<&FreeFnSig> {
-        self.test_fns
-            .iter()
-            .find(|(n, _)| *n == name)
-            .map(|(_, sig)| sig)
-    }
-
-    #[cfg(test)]
-    pub fn with_test_intrinsic(mut self, name: &'static str, params: Vec<Type>, ret: Type) -> Self {
-        self.test_fns.push((name, FreeFnSig { params, ret }));
-        self
     }
 }

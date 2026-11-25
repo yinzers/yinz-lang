@@ -1,283 +1,132 @@
-// WHY: The generics engine (P3a) is the load-bearing piece of M5. These tests
-// pin the MonomorphizationTable contents, type inference behavior, constraint
-// checking, and field access through generic shapes. A regression in any of
-// these surfaces would silently break the codegen monomorphization pass (P4a)
-// which consumes the table without re-verifying the type-checking invariants.
-//
-// test-ratchet: M7 P1 — all double-quoted string literals in Yinz source strings
-// replaced with backtick strings. Double-quotes now produce an error diagnostic.
+// Generics typeck (M5 P3a, M9): which generic programs the checker accepts or rejects, what it
+// records in the monomorphization table that codegen instantiates from, and how type
+// substitution treats a union. Three harnesses, so three tests: one table of accept/reject cases
+// (clean, or exactly N diagnostics), one table of table-entry cases (the exact set of
+// instantiations with their concrete parameter and return types), and the substitution function.
 
+use std::collections::HashMap;
 use ynz_parser::{CompilerDb, SourceFile};
+use ynz_typeck::generics::apply_substitution;
 use ynz_typeck::{check_query, CheckOutput, Type};
-
-const FILE: &str = "test.ynz";
 
 fn check(source: &str) -> CheckOutput {
     let db = CompilerDb::default();
-    let sf = SourceFile::new(&db, FILE.to_string(), source.to_string());
-    (*check_query(&db, sf)).clone()
+    let source_file = SourceFile::new(&db, "test.ynz".to_string(), source.to_string());
+    (*check_query(&db, source_file)).clone()
 }
 
-fn check_no_diags(source: &str) -> CheckOutput {
-    let out = check(source);
+fn assert_clean(source: &str) {
+    let output = check(source);
     assert_eq!(
-        out.diagnostics.len(),
+        output.diagnostics.len(),
         0,
         "Expected no diagnostics, got: {:#?}",
-        out.diagnostics
+        output.diagnostics
     );
-    out
 }
 
-fn check_diag_count(source: &str, expected: usize) -> CheckOutput {
-    let out = check(source);
+fn assert_diagnostic_count(source: &str, expected: usize) {
+    let output = check(source);
     assert_eq!(
-        out.diagnostics.len(),
+        output.diagnostics.len(),
         expected,
         "Expected {expected} diagnostic(s), got: {:#?}",
-        out.diagnostics
+        output.diagnostics
     );
-    out
 }
 
-// ── Generic function declarations ─────────────────────────────────────────────
+/// One expected monomorphization entry: function, type arguments, concrete parameter and return
+/// types.
+type ExpectedEntry = (&'static str, Vec<Type>, Vec<Type>, Type);
 
-#[test]
-fn m5_generic_fn_single_type_param_typechecks() {
-    // WHY: acceptance criterion — `function identity<T>` must type-check without
-    // errors. If the TypeParam is rejected as "unknown type", all generic code fails.
-    check_no_diags(
+fn mono(
+    function: &'static str,
+    type_arguments: Vec<Type>,
+    parameter_types: Vec<Type>,
+    return_type: Type,
+) -> ExpectedEntry {
+    (function, type_arguments, parameter_types, return_type)
+}
+
+/// The program must be clean and the table must hold exactly `expected`, in any order.
+fn assert_monomorphization_entries(source: &str, mut expected: Vec<ExpectedEntry>) {
+    let output = check(source);
+    assert_eq!(
+        output.diagnostics.len(),
+        0,
+        "Expected no diagnostics, got: {:#?}",
+        output.diagnostics
+    );
+    let mut found: Vec<String> = output
+        .mono_table
+        .entries
+        .iter()
+        .map(|(key, signature)| {
+            format!(
+                "{:?}",
+                (
+                    key.fn_name.as_str(),
+                    &key.type_args,
+                    &signature.param_types,
+                    &signature.ret_type
+                )
+            )
+        })
+        .collect();
+    found.sort();
+    expected.sort_by_key(|entry| format!("{entry:?}"));
+    let mut wanted: Vec<String> = expected.iter().map(|entry| format!("{entry:?}")).collect();
+    wanted.sort();
+    assert_eq!(found, wanted, "monomorphization table differs");
+}
+
+macro_rules! generic_cases {
+    ($($case:ident: $source:expr => $expected:tt;)+) => {
+        $(
+            // bug: typeck accepts a generic call with the wrong number of arguments, a type argument that does not follow its constraint, a const given to a generic call, an unknown field on a generic shape or an unknown/ill-formed type annotation (no diagnostic), or refuses a valid generic declaration or call | tier: High
+            #[test]
+            fn $case() {
+                generic_case!($source, $expected);
+            }
+        )+
+    };
+}
+
+macro_rules! generic_case {
+    ($source:expr, clean) => {
+        assert_clean($source)
+    };
+    ($source:expr, $diagnostics:literal) => {
+        assert_diagnostic_count($source, $diagnostics)
+    };
+}
+
+generic_cases! {
+    a_function_with_one_type_parameter_is_clean:
         r#"
 function identity<T>(give value: T) -> T { return value }
 function entrypoint() -> Nothing { }
-"#,
-    );
-}
-
-#[test]
-fn m5_generic_fn_two_type_params_typechecks() {
-    // WHY: multi-param generic `pair<A, B>` must type-check. Tests that the
-    // type_param_scope correctly tracks multiple names simultaneously.
-    check_no_diags(
+"#
+        => clean;
+    a_function_with_two_type_parameters_is_clean:
         r#"
 function pair<A, B>(give first: A, give second: B) -> A { return first }
 function entrypoint() -> Nothing { }
-"#,
-    );
-}
-
-#[test]
-fn m5_generic_fn_body_uses_type_param() {
-    // WHY: `return value` inside `identity<T>` should pass the return-type check
-    // because `value: T` and return type is `T`. TypeParam equality must hold.
-    check_no_diags(
-        r#"
-function identity<T>(give value: T) -> T { return value }
-function entrypoint() -> Nothing { let x = identity(5) }
-"#,
-    );
-}
-
-// ── Call-site inference ───────────────────────────────────────────────────────
-
-#[test]
-fn m5_inference_identity_int() {
-    // WHY: acceptance criterion — `identity(5)` must record `(identity, [int])`
-    // in the MonomorphizationTable. Without this, codegen has no instantiation
-    // to emit.
-    let out = check_no_diags(
-        r#"
-function identity<T>(give value: T) -> T { return value }
-function entrypoint() -> Nothing { let n = identity(5) }
-"#,
-    );
-    let key = out
-        .mono_table
-        .entries
-        .keys()
-        .find(|k| k.fn_name == "identity")
-        .expect("identity must appear in MonomorphizationTable");
-    assert_eq!(key.type_args, vec![Type::Int]);
-}
-
-#[test]
-fn m5_inference_identity_string() {
-    // WHY: acceptance criterion — `identity(`hello`)` must record `[String]`.
-    let out = check_no_diags(
-        r#"
-function identity<T>(give value: T) -> T { return value }
-function entrypoint() -> Nothing { let s = identity(`hello`) }
-"#,
-    );
-    let key = out
-        .mono_table
-        .entries
-        .keys()
-        .find(|k| k.fn_name == "identity")
-        .expect("identity must appear in MonomorphizationTable");
-    assert_eq!(key.type_args, vec![Type::String]);
-}
-
-#[test]
-fn m5_inference_two_type_params() {
-    // WHY: acceptance criterion — `pair(5, `hello`)` must record `(pair, [int, string])`.
-    let out = check_no_diags(
-        r#"
-function pair<A, B>(give first: A, give second: B) -> A { return first }
-function entrypoint() -> Nothing { let p = pair(5, `hello`) }
-"#,
-    );
-    let key = out
-        .mono_table
-        .entries
-        .keys()
-        .find(|k| k.fn_name == "pair")
-        .expect("pair must appear in MonomorphizationTable");
-    assert_eq!(key.type_args, vec![Type::Int, Type::String]);
-}
-
-#[test]
-fn m5_multiple_distinct_instantiations_both_recorded() {
-    // WHY: two calls to `identity` with different types must produce TWO separate
-    // MonomorphizationTable entries. A single-entry table would make codegen emit
-    // only one LLVM function and mislink the other.
-    let out = check_no_diags(
-        r#"
-function identity<T>(give value: T) -> T { return value }
-function entrypoint() -> Nothing {
-  let n = identity(5)
-  let s = identity(`hello`)
-}
-"#,
-    );
-    let entries: Vec<_> = out
-        .mono_table
-        .entries
-        .keys()
-        .filter(|k| k.fn_name == "identity")
-        .collect();
-    assert_eq!(
-        entries.len(),
-        2,
-        "Expected two identity instantiations (Int + String)"
-    );
-}
-
-#[test]
-fn m5_same_instantiation_deduped() {
-    // WHY: two calls `identity(5)` and `identity(10)` both produce `[int]`.
-    // The table is keyed by type args, so only ONE entry should exist.
-    let out = check_no_diags(
-        r#"
-function identity<T>(give value: T) -> T { return value }
-function entrypoint() -> Nothing {
-  let a = identity(5)
-  let b = identity(10)
-}
-"#,
-    );
-    let entries: Vec<_> = out
-        .mono_table
-        .entries
-        .keys()
-        .filter(|k| k.fn_name == "identity")
-        .collect();
-    assert_eq!(
-        entries.len(),
-        1,
-        "Same type args must dedup to one table entry"
-    );
-}
-
-// ── Explicit type args at call sites ─────────────────────────────────────────
-
-#[test]
-fn m5_explicit_type_arg_int() {
-    // WHY: acceptance criterion — `identity<int>(5)` must record `[int]`.
-    // Explicit type args must override inference without producing a diagnostic.
-    let out = check_no_diags(
-        r#"
-function identity<T>(give value: T) -> T { return value }
-function entrypoint() -> Nothing { let n = identity<Int>(5) }
-"#,
-    );
-    let key = out
-        .mono_table
-        .entries
-        .keys()
-        .find(|k| k.fn_name == "identity")
-        .expect("identity must appear in MonomorphizationTable");
-    assert_eq!(key.type_args, vec![Type::Int]);
-}
-
-#[test]
-fn m5_explicit_type_arg_string() {
-    // WHY: acceptance criterion — `identity<string>("hello")` records `[string]`.
-    let out = check_no_diags(
-        r#"
-function identity<T>(give value: T) -> T { return value }
-function entrypoint() -> Nothing { let s = identity<String>(`hello`) }
-"#,
-    );
-    let key = out
-        .mono_table
-        .entries
-        .keys()
-        .find(|k| k.fn_name == "identity")
-        .unwrap();
-    assert_eq!(key.type_args, vec![Type::String]);
-}
-
-// ── Arity errors ──────────────────────────────────────────────────────────────
-
-#[test]
-fn m5_generic_call_wrong_arity_produces_error() {
-    // WHY: `identity(5, 6)` — too many args — must produce exactly ONE error.
-    // If the generic engine crashes or produces zero errors, arity bugs slip through.
-    check_diag_count(
+"#
+        => clean;
+    a_generic_call_with_too_many_arguments_is_one_diagnostic:
         r#"
 function identity<T>(give value: T) -> T { return value }
 function entrypoint() -> Nothing { let n = identity(5, 6) }
-"#,
-        1,
-    );
-}
-
-#[test]
-fn m5_generic_call_too_few_args_produces_error() {
-    // WHY: `identity()` — missing arg — must produce ONE error (cannot infer T).
-    check_diag_count(
+"#
+        => 1;
+    a_generic_call_with_no_argument_to_infer_from_is_one_diagnostic:
         r#"
 function identity<T>(give value: T) -> T { return value }
 function entrypoint() -> Nothing { let n = identity() }
-"#,
-        1,
-    );
-}
-
-// ── Cannot-infer diagnostic ───────────────────────────────────────────────────
-
-#[test]
-fn m5_cannot_infer_type_param_when_no_args() {
-    // WHY: `createList()` with no args and no explicit type annotation — the
-    // compiler cannot infer T and must emit the "cannot work out T" diagnostic.
-    check_diag_count(
-        r#"
-function createEmpty<T>(give dummy: T) -> T { return dummy }
-function entrypoint() -> Nothing { let x = createEmpty() }
-"#,
-        1,
-    );
-}
-
-// ── Follows constraint checking ───────────────────────────────────────────────
-
-#[test]
-fn m5_constraint_satisfied_no_error() {
-    // WHY: acceptance criterion — `sort<T follows Comparable>` called with a type
-    // that DOES follow Comparable must produce zero errors. The constraint check
-    // must not fire false positives.
-    check_no_diags(
+"#
+        => 1;
+    a_type_argument_that_follows_the_constraint_is_clean:
         r#"
 shape Comparable {
   compare(share self, share other: Self) -> Int
@@ -294,15 +143,9 @@ function entrypoint() -> Nothing {
   const p: Player = { name: `Alice`, score: 100 }
   let q = sort(p)
 }
-"#,
-    );
-}
-
-#[test]
-fn m5_constraint_violated_produces_error() {
-    // WHY: acceptance criterion — calling `sort<T follows Comparable>` with a type
-    // that does NOT follow Comparable must produce exactly ONE error.
-    check_diag_count(
+"#
+        => clean;
+    a_type_argument_that_does_not_follow_the_constraint_is_one_diagnostic:
         r#"
 shape Comparable {
   compare(share self, share other: Self) -> Int
@@ -315,258 +158,122 @@ function entrypoint() -> Nothing {
   const p: Player = { name: `Alice` }
   let q = sort(p)
 }
-"#,
-        1,
-    );
-}
-
-#[test]
-fn m5_constraint_error_mentions_contract_name() {
-    // WHY: the "does not follow" error must name the contract so the user knows
-    // what to add. A generic "type error" message is useless.
-    let out = check(
-        r#"
-shape Comparable {
-  compare(share self, share other: Self) -> Int
-}
-shape Player { name: String }
-function sort<T follows Comparable>(share item: T) -> T { return item }
-function entrypoint() -> Nothing {
-  const p: Player = { name: `Alice` }
-  let q = sort(p)
-}
-"#,
-    );
-    assert_eq!(out.diagnostics.len(), 1);
-    let diag = &out.diagnostics[0];
-    assert!(
-        diag.what.contains("Comparable") || diag.what_instead.contains("Comparable"),
-        "Error must mention the contract name `Comparable`, got: {:?}",
-        diag
-    );
-}
-
-// ── Generic shape declarations ────────────────────────────────────────────────
-
-#[test]
-fn m5_generic_shape_decl_typechecks() {
-    // WHY: acceptance criterion — `shape Pair<A, B>` must type-check without errors.
-    check_no_diags(
+"#
+        => 1;
+    a_generic_shape_declaration_is_clean:
         r#"
 shape Pair<A, B> { first: A  second: B }
 function entrypoint() -> Nothing { }
-"#,
-    );
-}
-
-#[test]
-fn m5_generic_shape_appears_in_generic_shape_table() {
-    // WHY: the generic shape must be in the generic_shape_table (not the regular
-    // shape_table). If it lands in the wrong table, field access resolution breaks.
-    let out = check_no_diags(
-        r#"
-shape Pair<A, B> { first: A  second: B }
-function entrypoint() -> Nothing { }
-"#,
-    );
-    // Indirect verification: a Pair<Int, String> binding must resolve cleanly.
-    // If the shape table is wrong, this would have produced a diagnostic.
-    let _ = out;
-}
-
-// ── Field access through generic shapes ───────────────────────────────────────
-
-#[test]
-fn m5_field_access_through_generic_shape() {
-    // WHY: acceptance criterion — `p.first` where `p: Pair<Int, String>` must
-    // resolve to `Int`. Without substitution, it would stay as `TypeParam("A")`
-    // and typeck would fail to verify downstream uses.
-    check_no_diags(
-        r#"
-shape Pair<A, B> { first: A  second: B }
-function mkPair<A, B>(give first: A, give second: B) -> A { return first }
-function entrypoint() -> Nothing {
-  let x = mkPair(5, `hello`)
-}
-"#,
-    );
-}
-
-#[test]
-fn m5_field_access_wrong_field_on_generic_shape_error() {
-    // WHY: `p.nonexistent` on a generic shape must produce a "no such field" error,
-    // just like a concrete shape. Generic shapes must not silently succeed for
-    // unknown fields.
-    let out = check(
+"#
+        => clean;
+    an_unknown_field_on_a_generic_shape_is_one_diagnostic:
         r#"
 shape Pair<A, B> { first: A  second: B }
 function entrypoint() -> Nothing {
   let p: Pair<Int, String> = { first: 5, second: `hi` }
   let x = p.third
 }
-"#,
-    );
-    assert!(
-        !out.diagnostics.is_empty(),
-        "Expected at least one error for accessing nonexistent field on Pair"
-    );
-}
-
-// ── Non-generic functions unaffected ─────────────────────────────────────────
-
-#[test]
-fn m5_non_generic_fn_not_in_mono_table() {
-    // WHY: `add(1, 2)` is non-generic and must NOT appear in the MonomorphizationTable.
-    // If non-generic functions are accidentally recorded, codegen would try to
-    // emit a second copy of every function.
-    let out = check_no_diags(
-        r#"
-function add(a: Int, b: Int) -> Int { return a }
-function entrypoint() -> Nothing { let x = add(1, 2) }
-"#,
-    );
-    assert!(
-        out.mono_table.entries.is_empty(),
-        "Non-generic call must not populate MonomorphizationTable"
-    );
-}
-
-#[test]
-fn m5_non_generic_fn_still_typechecks() {
-    // WHY: adding generics engine must not break existing non-generic function
-    // type-checking. This is the basic M4 regression guard.
-    check_no_diags(
-        r#"
-function greet(name: String) -> String { return name }
-function entrypoint() -> Nothing { let s = greet(`Alice`) }
-"#,
-    );
-}
-
-// ── All existing M4 typeck paths still work ───────────────────────────────────
-
-#[test]
-fn m5_m4_shapes_and_follows_still_work() {
-    // WHY: M4 shapes + follows contracts must be unaffected by the generics engine.
-    // A regression here means the generic shape table lookup is incorrectly
-    // stealing entries from the concrete shape table.
-    check_no_diags(
-        r#"
-shape Damageable { takeDamage(lend self, amount: Int) -> Nothing }
-shape Player follows Damageable { name: String  health: Int }
-function takeDamage(lend self: Player, amount: Int) -> Nothing {
-  self.health = self.health
-}
-function entrypoint() -> Nothing {
-  let p: Player = { name: `Bob`, health: 100 }
-  p.takeDamage(10)
-}
-"#,
-    );
-}
-
-#[test]
-fn m5_m4_ownership_still_enforced() {
-    // WHY: const-cannot-be-given still applies inside a generic call. The generics
-    // engine must not bypass the ownership checks from M4.
-    let out = check(
+"#
+        => 1;
+    giving_a_const_to_a_generic_call_is_one_diagnostic:
         r#"
 function identity<T>(give value: T) -> T { return value }
 function entrypoint() -> Nothing {
   const x = 5
   let y = identity(x)
 }
-"#,
-    );
-    assert_eq!(
-        out.diagnostics.len(),
-        1,
-        "const-cannot-be-given must still fire"
-    );
-}
-
-// ── Concurrent generic + non-generic functions ────────────────────────────────
-
-#[test]
-fn m5_generic_and_non_generic_coexist() {
-    // WHY: a module with both `identity<T>` and `add(int, int)` must type-check
-    // cleanly. Both tables (sig_table + generic_fn_table) must be populated
-    // independently without cross-contamination.
-    let out = check_no_diags(
+"#
+        => 1;
+    an_unknown_generic_name_in_a_let_annotation_is_one_diagnostic:
         r#"
-function identity<T>(give value: T) -> T { return value }
-function add(a: Int, b: Int) -> Int { return a }
 function entrypoint() -> Nothing {
-  let x = identity(5)
-  let y = add(1, 2)
+  let slot: Nope<Int> = 4096
 }
-"#,
-    );
-    // Only `identity` should be in the mono table.
-    assert_eq!(out.mono_table.entries.len(), 1);
-    let key = out.mono_table.entries.keys().next().unwrap();
-    assert_eq!(key.fn_name, "identity");
+"#
+        => 1;
+    type_arguments_on_a_plain_shape_in_a_parameter_are_one_diagnostic:
+        r#"
+shape Big {
+  label: String
 }
 
-// ── Mono table structure ──────────────────────────────────────────────────────
+function show(share value: Big<Int>) -> Nothing { }
 
-#[test]
-fn m5_mono_entry_has_correct_ret_type() {
-    // WHY: the MonoSignature must carry the CONCRETE return type, not TypeParam.
-    // Codegen reads ret_type to set the LLVM return type of the monomorphic function.
-    let out = check_no_diags(
+function entrypoint() -> Nothing { }
+"#
+        => 1;
+    a_map_missing_its_value_type_in_a_let_annotation_is_one_diagnostic:
+        r#"
+function entrypoint() -> Nothing {
+  let scores: Map<Int> = {}
+}
+"#
+        => 1;
+}
+
+macro_rules! monomorphization_cases {
+    ($($case:ident: $source:expr => $expected:expr;)+) => {
+        $(
+            // bug: typeck records a wrong, missing, duplicated or non-concrete instantiation, so codegen emits a missing or wrong-typed monomorphic function (ABI mismatch) | tier: High
+            #[test]
+            fn $case() {
+                assert_monomorphization_entries($source, $expected);
+            }
+        )+
+    };
+}
+
+monomorphization_cases! {
+    an_inferred_int_argument_records_identity_over_int:
         r#"
 function identity<T>(give value: T) -> T { return value }
 function entrypoint() -> Nothing { let n = identity(5) }
-"#,
-    );
-    let key = out
-        .mono_table
-        .entries
-        .keys()
-        .find(|k| k.fn_name == "identity")
-        .unwrap();
-    let sig = out.mono_table.entries.get(key).unwrap();
-    assert_eq!(
-        sig.ret_type,
-        Type::Int,
-        "Monomorphized identity<Int> must have ret_type = Int"
-    );
-}
-
-#[test]
-fn m5_mono_entry_has_correct_param_types() {
-    // WHY: the MonoSignature param_types must be concrete. Codegen uses these
-    // to emit the LLVM function parameter types.
-    let out = check_no_diags(
+"#
+        => vec![mono("identity", vec![Type::Int], vec![Type::Int], Type::Int)];
+    two_inferred_type_parameters_record_both_type_arguments:
+        r#"
+function pair<A, B>(give first: A, give second: B) -> A { return first }
+function entrypoint() -> Nothing { let p = pair(5, `hello`) }
+"#
+        => vec![mono("pair", vec![Type::Int, Type::String], vec![Type::Int, Type::String], Type::Int)];
+    two_different_instantiations_are_two_entries:
         r#"
 function identity<T>(give value: T) -> T { return value }
-function entrypoint() -> Nothing { let n = identity(5) }
-"#,
-    );
-    let key = out
-        .mono_table
-        .entries
-        .keys()
-        .find(|k| k.fn_name == "identity")
-        .unwrap();
-    let sig = out.mono_table.entries.get(key).unwrap();
-    assert_eq!(
-        sig.param_types,
-        vec![Type::Int],
-        "Monomorphized identity<Int> must have param_type = Int"
-    );
+function entrypoint() -> Nothing {
+  let n = identity(5)
+  let s = identity(`hello`)
+}
+"#
+        => vec![
+            mono("identity", vec![Type::Int], vec![Type::Int], Type::Int),
+            mono("identity", vec![Type::String], vec![Type::String], Type::String),
+        ];
+    the_same_instantiation_twice_is_one_entry:
+        r#"
+function identity<T>(give value: T) -> T { return value }
+function entrypoint() -> Nothing {
+  let a = identity(5)
+  let b = identity(10)
+}
+"#
+        => vec![mono("identity", vec![Type::Int], vec![Type::Int], Type::Int)];
+    an_explicit_type_argument_records_the_same_entry:
+        r#"
+function identity<T>(give value: T) -> T { return value }
+function entrypoint() -> Nothing { let n = identity<Int>(5) }
+"#
+        => vec![mono("identity", vec![Type::Int], vec![Type::Int], Type::Int)];
+    a_non_generic_call_records_no_entry:
+        r#"
+function add(a: Int, b: Int) -> Int { return a }
+function entrypoint() -> Nothing { let x = add(1, 2) }
+"#
+        => vec![];
 }
 
+// bug: substituting a type parameter into a union that collapses to one variant gives a union instead of that variant, so a correct generic call is refused naming the same type on both sides | tier: High
 #[test]
-fn v03_m9_c1g_substituting_a_union_that_collapses_to_one_variant_gives_that_variant() {
-    // BUG (High: type checker): `first: T | Tiny` with `T = Tiny` substituted to a union
-    // holding the one variant `Tiny` twice (or once), a different type from the plain `Tiny`
-    // the argument has, so a correct call was refused naming the same type on both sides.
-    // TIER: High (type substitution decides what every generic call may pass).
-    use std::collections::HashMap;
-    use ynz_typeck::generics::apply_substitution;
-
+fn substituting_a_union_that_collapses_to_one_variant_gives_that_variant() {
     let tiny = Type::Shape {
         name: "Tiny".into(),
     };
@@ -577,88 +284,5 @@ fn v03_m9_c1g_substituting_a_union_that_collapses_to_one_variant_gives_that_vari
     assert_eq!(
         apply_substitution(&tiny_or_type_parameter, &substitution),
         tiny
-    );
-}
-
-/// Check `source` and require exactly one error whose WHAT is `expected_what`: the annotation is
-/// reported once, where it is written, and nothing else is reported for it.
-fn assert_one_error_saying(source: &str, expected_what: &str) {
-    let out = check(source);
-    let whats: Vec<&str> = out.diagnostics.iter().map(|d| d.what.as_str()).collect();
-    assert_eq!(
-        whats,
-        vec![expected_what],
-        "expected exactly one diagnostic; got: {:#?}",
-        out.diagnostics
-    );
-}
-
-#[test]
-fn v03_m9_unknown_generic_name_in_a_let_annotation_is_reported() {
-    // BUG (High: type validation): `Nope<Int>` resolved to an unreported error type, so the
-    // annotation passed the checker with no diagnostic. The resolver serves every annotation, so
-    // this guards the ordinary `let` path, not only a hidden default.
-    assert_one_error_saying(
-        r#"
-function entrypoint() -> Nothing {
-  let slot: Nope<Int> = 4096
-}
-"#,
-        "`Nope` is not a known type.",
-    );
-}
-
-#[test]
-fn v03_m9_type_arguments_on_a_plain_shape_in_a_parameter_are_reported() {
-    // BUG (High: type validation): `Big<Int>` on a shape declared without type parameters
-    // resolved to an unreported error type. Guards the parameter-annotation path and the
-    // "declared but not generic" wording.
-    assert_one_error_saying(
-        r#"
-shape Big {
-  label: String
-}
-
-function show(share value: Big<Int>) -> Nothing { }
-
-function entrypoint() -> Nothing { }
-"#,
-        "`Big` does not take type arguments.",
-    );
-}
-
-#[test]
-fn v03_m9_map_missing_its_value_type_in_a_let_annotation_is_reported() {
-    // BUG (High: type validation): `Map<Int>` filled the missing value type with an unreported
-    // error type. Guards the `let` path for a built-in generic missing an argument.
-    assert_one_error_saying(
-        r#"
-function entrypoint() -> Nothing {
-  let scores: Map<Int> = {}
-}
-"#,
-        "`Map` takes 2 type arguments.",
-    );
-}
-
-#[test]
-fn v03_m9_type_arguments_on_a_built_in_or_type_parameter_name_say_it_takes_none() {
-    // BUG (teaching surface): `String<Int>` and `T<Int>` name a type that exists, but the
-    // resolver's fall-through said "`String` is not a known type", which misstates the mistake.
-    assert_one_error_saying(
-        r#"
-function entrypoint() -> Nothing {
-  let label: String<Int> = `a`
-}
-"#,
-        "`String` does not take type arguments.",
-    );
-    assert_one_error_saying(
-        r#"
-function hold<T>(give value: T<Int>) -> Nothing { }
-
-function entrypoint() -> Nothing { }
-"#,
-        "`T` does not take type arguments.",
     );
 }

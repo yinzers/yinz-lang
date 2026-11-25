@@ -166,6 +166,7 @@ fn assert_both_tiers_print_correct_haul(fixture_name: &str) {
     assert_tier_prints_correct_haul(fixture_name, &[], "default optimized");
 }
 
+// bug: a `background` receiver that is a maybe payload rides into the task as a raw stack pointer and the task reads a dead frame (use after free) | tier: High
 #[test]
 fn fr23_red_maybe_payload_spawn_receiver_reads_live_values() {
     // WHY: locks fr23 shape B' — a maybe-payload spawn receiver's backing storage
@@ -193,6 +194,7 @@ fn fr23_red_maybe_payload_spawn_receiver_reads_live_values() {
     assert_both_tiers_print_correct_haul("v0_3_m7_fr23_maybe_payload_spawn_receiver.ynz");
 }
 
+// bug: a call-materialized `background` receiver rides into the task as the callee's dead return-temp stack address (use after free) | tier: High
 #[test]
 fn fr23_red_call_materialized_spawn_receiver_reads_live_values() {
     // WHY: locks fr23 shape C2 — a call-materialized spawn receiver
@@ -203,6 +205,7 @@ fn fr23_red_call_materialized_spawn_receiver_reads_live_values() {
     assert_both_tiers_print_correct_haul("v0_3_m7_fr23_call_materialized_spawn_receiver.ynz");
 }
 
+// bug: a generic-callee call-materialized `background` receiver is missed by the sig_table-only admission and the task reads a dead frame (use after free) | tier: High
 #[test]
 fn fr23_generic_call_materialized_spawn_receiver_reads_live_values() {
     // WHY: locks the GENERIC-callee C2 variant (`background identity(c).haul()` with
@@ -216,6 +219,7 @@ fn fr23_generic_call_materialized_spawn_receiver_reads_live_values() {
     );
 }
 
+// bug: a generic call whose type comes only from a nested call argument is not admitted as a heap-upgraded `background` receiver (use after free) | tier: High
 #[test]
 fn fr23_generic_call_nested_arg_spawn_receiver_reads_live_values() {
     // WHY: locks the GENERIC-callee C2 variant with a NON-IDENT argument
@@ -229,6 +233,7 @@ fn fr23_generic_call_nested_arg_spawn_receiver_reads_live_values() {
     assert_both_tiers_print_correct_haul("v0_3_m7_fr23_generic_call_nested_arg_spawn_receiver.ynz");
 }
 
+// bug: a `background` receiver built from a generic call nested in a generic call is not heap-upgraded and the task reads a dead frame (use after free) | tier: High
 #[test]
 fn fr23_generic_call_nested_generic_arg_spawn_receiver_reads_live_values() {
     // WHY: locks the GENERIC-callee C2 variant nested TWO levels deep
@@ -246,6 +251,7 @@ fn fr23_generic_call_nested_generic_arg_spawn_receiver_reads_live_values() {
     );
 }
 
+// bug: the nested-generic receiver resolver is depth-bounded, so a three-deep generic call receiver is not heap-upgraded (use after free) | tier: High
 #[test]
 fn fr23_generic_call_triple_nested_spawn_receiver_reads_live_values() {
     // WHY: proves the resolver is genuinely RECURSIVE, not a fixed number of
@@ -259,6 +265,7 @@ fn fr23_generic_call_triple_nested_spawn_receiver_reads_live_values() {
     );
 }
 
+// bug: a `background` receiver whose generic argument is a UFCS chain is not classified and not heap-upgraded (use after free) | tier: High
 #[test]
 fn fr23_generic_call_ufcs_nested_arg_spawn_receiver_reads_live_values() {
     // WHY: locks the GENERIC-callee C2 variant whose argument is a UFCS METHOD-CALL
@@ -291,6 +298,7 @@ fn fr23_generic_call_ufcs_nested_arg_spawn_receiver_reads_live_values() {
     );
 }
 
+// bug: a `background` receiver whose generic argument is a maybe-payload field access is not classified and not heap-upgraded (use after free) | tier: High
 #[test]
 fn fr23_generic_call_fieldaccess_nested_arg_spawn_receiver_reads_live_values() {
     // WHY: locks the GENERIC-callee C2 variant whose argument is a MAYBE-PAYLOAD
@@ -319,6 +327,7 @@ fn fr23_generic_call_fieldaccess_nested_arg_spawn_receiver_reads_live_values() {
     );
 }
 
+// bug: the state-machine spawn arm hands a call-materialized receiver's dead stack address to the task (use after free) | tier: High
 #[test]
 fn fr23_sm_arm_call_materialized_spawn_receiver_reads_live_values() {
     // WHY: locks the C2 shape through the STATE-MACHINE spawn arm
@@ -329,6 +338,7 @@ fn fr23_sm_arm_call_materialized_spawn_receiver_reads_live_values() {
     assert_both_tiers_print_correct_haul("v0_3_m7_fr23_sm_call_materialized_spawn_receiver.ynz");
 }
 
+// bug: the state-machine spawn arm hands a maybe-payload receiver's dead stack address to the task (use after free) | tier: High
 #[test]
 fn fr23_sm_arm_maybe_payload_spawn_receiver_reads_live_values() {
     // WHY: locks the B' shape through the STATE-MACHINE spawn arm — same
@@ -357,6 +367,7 @@ fn fr23_sm_arm_maybe_payload_spawn_receiver_reads_live_values() {
 // red on any of these means the default-deny wildcard regressed back toward an
 // allowlist.
 
+// bug: an anonymous struct literal passed as a `background` argument rides as a raw stack pointer and the task reads a dead frame (use after free) | tier: High
 #[test]
 fn fr23_structlit_spawn_receiver_reads_live_values() {
     // WHY: locks FRAGO 021 finding 1 — a bare anonymous struct literal used
@@ -369,6 +380,7 @@ fn fr23_structlit_spawn_receiver_reads_live_values() {
     assert_both_tiers_print_correct_haul("v0_3_m7_fr23_structlit_spawn_receiver.ynz");
 }
 
+// bug: a `background` receiver `entry.value` of a MapEntry rides as a raw pointer into the task (use after free) | tier: High
 #[test]
 fn fr23_mapentry_value_spawn_receiver_reads_live_values() {
     // WHY: locks FRAGO 021 finding 2 — `entry.value.haul()` inside `for (entry in
@@ -384,6 +396,7 @@ fn fr23_mapentry_value_spawn_receiver_reads_live_values() {
     assert_both_tiers_print_correct_haul("v0_3_m7_fr23_mapentry_value_spawn_receiver.ynz");
 }
 
+// bug: a generic call whose type resolves only through a nested `.copy()` argument is not failed closed and its receiver is not heap-upgraded (use after free) | tier: High
 #[test]
 fn fr23_generic_call_copy_nested_arg_spawn_receiver_reads_live_values() {
     // WHY: locks FRAGO 021 finding 3 — `identity(c.copy()).haul()` (`identity<T>(give
@@ -401,6 +414,7 @@ fn fr23_generic_call_copy_nested_arg_spawn_receiver_reads_live_values() {
     );
 }
 
+// bug: a generic call whose type resolves only through a nested `wait` argument is not failed closed and its receiver is not heap-upgraded (use after free) | tier: High
 #[test]
 fn fr23_generic_call_wait_nested_arg_spawn_receiver_reads_live_values() {
     // WHY: locks FRAGO 021 finding 4 — `identity(wait makeCargo()).haul()`, the
@@ -424,6 +438,7 @@ fn fr23_generic_call_wait_nested_arg_spawn_receiver_reads_live_values() {
 // materialization gap). Neither is "an 11th allowlist shape" — see each test's
 // WHY for the distinct root cause.
 
+// bug: a `background` spawn on the right of a field assignment records no ownership, so its receiver rides raw into the task (use after free) | tier: High
 #[test]
 fn fr24_fieldassign_spawn_receiver_reads_live_values() {
     // WHY: locks FRAGO 024 Bug 1 — the ownership-recording machinery was wired
@@ -438,6 +453,7 @@ fn fr24_fieldassign_spawn_receiver_reads_live_values() {
     assert_both_tiers_print_correct_haul("v0_3_m7_fr24_fieldassign_spawn_receiver.ynz");
 }
 
+// bug: a nested spawn of `self` is classified safe, so the outer task frees `self`'s heap cell while the inner task still reads it (use after free) | tier: High
 #[test]
 fn fr24_nested_self_spawn_receiver_reads_live_values() {
     // WHY: locks FRAGO 024 Bug 2 — `bg_arg_is_provably_safe`'s `SelfValue => true`
@@ -456,6 +472,7 @@ fn fr24_nested_self_spawn_receiver_reads_live_values() {
     assert_both_tiers_print_correct_haul("v0_3_m7_fr24_nested_self_spawn_receiver.ynz");
 }
 
+// bug: a nested spawn whose receiver is a plain ident parameter stops being heap-upgraded and the inner task reads freed memory (use after free) | tier: High
 #[test]
 fn fr24_nested_ident_spawn_receiver_control_reads_live_values() {
     // WHY: CONTROL for the Bug 2 lock above — identical shape, but the receiver

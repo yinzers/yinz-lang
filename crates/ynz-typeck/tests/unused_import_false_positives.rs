@@ -1,11 +1,5 @@
-// WHY: Regression tests for the six false-positive unused-import sites. An import
-// used ONLY via one of these AST positions was incorrectly flagged "imported but
-// never used" because the corresponding check path never called
-// `referenced_names.insert`. These tests fail before the fix and pass after,
-// proving the insert was the missing link.
-//
-// Also covers the control case (genuinely-unused import still warns) and the
-// adversarial dual-pattern case (two uses of one name don't mask a sibling unused import).
+// Which AST positions count as a use of an import: an import used only at one of them must
+// not get the "imported but never used" warning, and a genuinely unused sibling must still get it.
 
 use ynz_diagnostics::DiagnosticKind;
 use ynz_parser::{CompilerDb, SourceFile};
@@ -95,43 +89,53 @@ fn assert_has_unused_import_warning(db: &CompilerDb, sf: SourceFile, name: &str)
     );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Bug 1 — options-variant access (`Timeframe.fiveMinute`)
-// ─────────────────────────────────────────────────────────────────────────────
+/// Check `main_source` against a dependency file and assert, for each name, whether the
+/// `UnusedImport` warning was (`flagged`) or was not (`not_flagged`) emitted.
+fn assert_unused_import_warnings(
+    dependency_name: &str,
+    dependency_source: &str,
+    main_source: &str,
+    not_flagged: &[&str],
+    flagged: &[&str],
+) {
+    let (db, sf, dir) = two_file_db(dependency_name, dependency_source, main_source);
+    for name in not_flagged {
+        assert_no_unused_import_warning(&db, sf, name);
+    }
+    for name in flagged {
+        assert_has_unused_import_warning(&db, sf, name);
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
 
-#[test]
-fn options_variant_access_does_not_warn_unused_import() {
-    // WHY: `check_options_value` returned early without inserting into
-    // `referenced_names`, so `Timeframe.fiveMinute` was counted as unused even
-    // though it's the exact call site that references the type. This is the
-    // user-reported repro that opened the bug class.
-    let dep = r#"export options Timeframe { fiveMinute: `Five Minute`, daily: `Daily` }"#;
-    let main = r#"
+macro_rules! unused_import_cases {
+    ($($case:ident: $dependency_name:literal, $dependency:expr, $main:expr, not_flagged: $not_flagged:expr, flagged: $flagged:expr;)+) => {
+        $(
+            // bug: typeck warns "imported but never used" for an import used only in one AST position (the check path never recorded the name), or masks a genuinely unused sibling import | tier: Medium
+            #[test]
+            fn $case() {
+                assert_unused_import_warnings($dependency_name, $dependency, $main, &$not_flagged, &$flagged);
+            }
+        )+
+    };
+}
+
+// Medium cases: each is a different AST position where an import is referenced (the check path
+// for that position is separate), plus the control that a sibling genuinely unused import still
+// warns.
+unused_import_cases! {
+    an_options_variant_access_counts_as_a_use: "timeframes", r#"export options Timeframe { fiveMinute: `Five Minute`, daily: `Daily` }"#, r#"
 import { Timeframe } from `timeframes`
 function entrypoint() -> Nothing {
     print(Timeframe.fiveMinute.toString())
 }
-"#;
-    let (db, sf, dir) = two_file_db("timeframes", dep, main);
-    assert_no_unused_import_warning(&db, sf, "Timeframe");
-    let _ = std::fs::remove_dir_all(dir);
-}
+"#, not_flagged: ["Timeframe"], flagged: [];
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Bug 2.1 — `is`-narrowing (`if (s is Circle)`)
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn is_narrowing_does_not_warn_unused_import() {
-    // WHY: `check_is_expr` validated type_path.name against the union variants
-    // but never inserted it into referenced_names. An import used exclusively
-    // via `is TypeName` was false-positive flagged as unused.
-    let dep = r#"
+    an_is_narrowing_counts_as_a_use: "shapes", r#"
 export shape Circle { radius: Int }
 export shape Square { side: Int }
 export shape Polygon = Circle | Square
-"#;
-    let main = r#"
+"#, r#"
 import { Circle } from `shapes`
 import { Polygon } from `shapes`
 function area(s: Polygon) -> Int {
@@ -141,27 +145,13 @@ function area(s: Polygon) -> Int {
     return 0
 }
 function entrypoint() -> Nothing { }
-"#;
-    let (db, sf, dir) = two_file_db("shapes", dep, main);
-    assert_no_unused_import_warning(&db, sf, "Circle");
-    let _ = std::fs::remove_dir_all(dir);
-}
+"#, not_flagged: ["Circle"], flagged: [];
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Bug 2.2 — `extends` parent / `follows` contract
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn follows_contract_does_not_warn_unused_import() {
-    // WHY: `check_module` skipped `Item::ShapeDecl` entirely, so an imported
-    // contract used only in `shape X follows Contract` was never inserted into
-    // referenced_names and was incorrectly flagged as unused.
-    let dep = r#"
+    a_follows_contract_counts_as_a_use: "contracts", r#"
 export shape Damageable {
     takeDamage(lend self, amount: Int) -> Nothing
 }
-"#;
-    let main = r#"
+"#, r#"
 import { Damageable } from `contracts`
 shape Player follows Damageable {
     name: String
@@ -171,110 +161,41 @@ function takeDamage(lend self: Player, amount: Int) -> Nothing {
     self.health = self.health - amount
 }
 function entrypoint() -> Nothing { }
-"#;
-    let (db, sf, dir) = two_file_db("contracts", dep, main);
-    assert_no_unused_import_warning(&db, sf, "Damageable");
-    let _ = std::fs::remove_dir_all(dir);
-}
+"#, not_flagged: ["Damageable"], flagged: [];
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Bug 2.2 (continued) — `extends` parent only
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn extends_parent_does_not_warn_unused_import() {
-    // WHY: `check_module` skipped `Item::ShapeDecl` entirely, so an imported parent
-    // shape used only in `shape X extends Parent` was never inserted into
-    // referenced_names and was incorrectly flagged as unused. The dual-pattern
-    // adversarial test covers `extends + field-type` together; this test covers
-    // `extends` alone to prove the single-use case is also protected.
-    //
-    // Note: the `two_file_db` helper exercises the typeck check_query path directly
-    // (file-local resolution), which is what check_module's ShapeDecl arm covers.
-    // The driver-level cross-file compile path hits shapes.rs:393 (`all_names` is
-    // file-local only), which emits "not defined — cannot extend it" before the
-    // unused-import check runs. This unit test reaches the fixed check_module path;
-    // the driver limitation is documented in entrypoint.ynz and todos.md
-    // "m8-typeck-cross-file-resolution".
-    let dep = r#"
+    an_extends_parent_counts_as_a_use: "world", r#"
 export shape Entity {
     name: String
     health: Int
 }
-"#;
-    let main = r#"
+"#, r#"
 import { Entity } from `world`
 shape Warrior extends Entity {
     weapon: String
 }
 function entrypoint() -> Nothing { }
-"#;
-    let (db, sf, dir) = two_file_db("world", dep, main);
-    assert_no_unused_import_warning(&db, sf, "Entity");
-    let _ = std::fs::remove_dir_all(dir);
-}
+"#, not_flagged: ["Entity"], flagged: [];
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Bug 2.3 — shape field type annotation (`tf: Timeframe`)
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn shape_field_type_does_not_warn_unused_import() {
-    // WHY: field-type resolution runs in `shapes.rs` before the check pass and
-    // has no access to `referenced_names`. `check_module` skipped ShapeDecl
-    // entirely, so an import used only as a field type annotation was never
-    // tracked and was false-positive flagged.
-    let dep = r#"export options Status { active: `Active`, inactive: `Inactive` }"#;
-    let main = r#"
+    a_shape_field_type_counts_as_a_use: "statuses", r#"export options Status { active: `Active`, inactive: `Inactive` }"#, r#"
 import { Status } from `statuses`
 shape Bar {
     status: Status
     value: Int
 }
 function entrypoint() -> Nothing { }
-"#;
-    let (db, sf, dir) = two_file_db("statuses", dep, main);
-    assert_no_unused_import_warning(&db, sf, "Status");
-    let _ = std::fs::remove_dir_all(dir);
-}
+"#, not_flagged: ["Status"], flagged: [];
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Bug 2.3 (continued) — module-level `const` with imported type
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn module_const_type_annotation_does_not_warn_unused_import() {
-    // WHY: `Item::ConstDecl` was folded into a combined arm that did nothing,
-    // so `export const DEFAULT: Status = Status.active` never registered `Status`
-    // as referenced even though it appears in both the type annotation and the
-    // initializer expression. Top-level consts must be exported in Yinz.
-    let dep = r#"export options Status { active: `Active`, inactive: `Inactive` }"#;
-    let main = r#"
+    a_module_const_type_and_initializer_count_as_a_use: "statuses", r#"export options Status { active: `Active`, inactive: `Inactive` }"#, r#"
 import { Status } from `statuses`
 export const DEFAULT: Status = Status.active
 function entrypoint() -> Nothing { }
-"#;
-    let (db, sf, dir) = two_file_db("statuses", dep, main);
-    assert_no_unused_import_warning(&db, sf, "Status");
-    let _ = std::fs::remove_dir_all(dir);
-}
+"#, not_flagged: ["Status"], flagged: [];
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Bug 2.4 — `dynamic Contract`
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn dynamic_contract_does_not_warn_unused_import() {
-    // WHY: the `AstType::Dynamic` branch in `ast_type_to_type` returned
-    // `Type::Dynamic { contract }` without inserting `contract` into
-    // referenced_names. An import used only as `dynamic Foo` in a type
-    // annotation was thus incorrectly flagged as unused.
-    let dep = r#"
+    a_dynamic_contract_counts_as_a_use: "contracts", r#"
 export shape Damageable {
     takeDamage(lend self, amount: Int) -> Nothing
 }
-"#;
-    let main = r#"
+"#, r#"
 import { Damageable } from `contracts`
 function attackAll(targets: Array<dynamic Damageable>) -> Nothing {
     for (t in targets) {
@@ -282,81 +203,41 @@ function attackAll(targets: Array<dynamic Damageable>) -> Nothing {
     }
 }
 function entrypoint() -> Nothing { }
-"#;
-    let (db, sf, dir) = two_file_db("contracts", dep, main);
-    assert_no_unused_import_warning(&db, sf, "Damageable");
-    let _ = std::fs::remove_dir_all(dir);
-}
+"#, not_flagged: ["Damageable"], flagged: [];
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Bug 2.5 — generic type position (`Container<Int>`)
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn concrete_shape_as_field_type_does_not_warn_unused_import() {
-    // WHY: `check_module` previously skipped `Item::ShapeDecl` entirely, so an
-    // import used exclusively as a field type annotation in another shape was never
-    // walked by the check pass and thus not recorded in referenced_names. The fix
-    // adds a ShapeDecl walk in check_module that calls ast_type_to_type on each
-    // field type (non-generic shapes only — generic shapes have TypeParam
-    // placeholders that are not in scope at module level).
-    //
-    // Cross-file generic shape imports (`shape Container<T>`) are not yet supported
-    // by the import resolver (GenericShapeTable is file-local only). The Bug 2.5
-    // insert (check.rs `generic_shape_table.contains` branch) is present for
-    // future-proofing when that infrastructure ships.
-    let dep = r#"export options Priority { high: `High`, low: `Low` }"#;
-    let main = r#"
-import { Priority } from `priorities`
-shape Task {
-    name: String
-    priority: Priority
+    a_concrete_field_of_a_generic_shape_counts_as_a_use: "statuses", r#"export options Status { ok: `Ok`, err: `Err` }"#, r#"
+import { Status } from `statuses`
+shape Wrapper<T> {
+    value: T
+    status: Status
 }
 function entrypoint() -> Nothing { }
-"#;
-    let (db, sf, dir) = two_file_db("priorities", dep, main);
-    assert_no_unused_import_warning(&db, sf, "Priority");
-    let _ = std::fs::remove_dir_all(dir);
-}
+"#, not_flagged: ["Status"], flagged: [];
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Control test — genuinely-unused import STILL warns
-// ─────────────────────────────────────────────────────────────────────────────
+    a_union_alias_member_shape_counts_as_a_use: "pgh_events", r#"
+export shape SouthSideEvent { name: String }
+export shape StripeDistrictEvent { name: String }
+"#, r#"
+import { SouthSideEvent } from `pgh_events`
+import { StripeDistrictEvent } from `pgh_events`
+shape PghEvent = SouthSideEvent | StripeDistrictEvent
+function entrypoint() -> Nothing { }
+"#, not_flagged: ["SouthSideEvent", "StripeDistrictEvent"], flagged: [];
 
-#[test]
-fn genuinely_unused_import_still_warns() {
-    // WHY: the six inserts above must not over-suppress. An import that is truly
-    // never referenced anywhere must still produce an UnusedImport warning.
-    // This test guards against accidentally blanket-suppressing the diagnostic.
-    let dep = r#"export options Status { active: `Active`, inactive: `Inactive` }"#;
-    let main = r#"
-import { Status } from `statuses`
-function entrypoint() -> Nothing {
-    print(`hello`)
-}
-"#;
-    let (db, sf, dir) = two_file_db("statuses", dep, main);
-    assert_has_unused_import_warning(&db, sf, "Status");
-    let _ = std::fs::remove_dir_all(dir);
-}
+    a_union_alias_member_options_counts_as_a_use: "results", r#"
+export shape Scored { points: Int }
+export options Grade { high: `High`, low: `Low` }
+"#, r#"
+import { Scored } from `results`
+import { Grade } from `results`
+shape Assessment = Scored | Grade
+function entrypoint() -> Nothing { }
+"#, not_flagged: ["Scored", "Grade"], flagged: [];
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Step 7 adversarial — dual-used name does not mask a sibling unused import
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn dual_pattern_use_does_not_mask_sibling_unused_import() {
-    // WHY: an import used via TWO distinct patterns (extends + field type) must
-    // not cause a double-insert that corrupts the referenced_names set and
-    // accidentally suppresses a warning for a genuinely-unused sibling import.
-    // Concretely: `Entity` is used via `extends Entity` AND as a field type;
-    // `UnusedThing` is imported but never referenced. After the fix, `Entity`
-    // must NOT be flagged, and `UnusedThing` MUST still be flagged.
-    let dep = r#"
+    a_name_used_twice_does_not_mask_a_sibling_unused_import: "world", r#"
 export shape Entity { name: String health: Int }
 export options Rarity { common: `Common`, rare: `Rare` }
-"#;
-    let main = r#"
+"#, r#"
 import { Entity } from `world`
 import { Rarity } from `world`
 shape Warrior extends Entity {
@@ -364,181 +245,5 @@ shape Warrior extends Entity {
     baseEntity: Entity
 }
 function entrypoint() -> Nothing { }
-"#;
-    let (db, sf, dir) = two_file_db("world", dep, main);
-    // Entity is used (extends + field type): no warning.
-    assert_no_unused_import_warning(&db, sf, "Entity");
-    // Rarity is never referenced: must still warn.
-    assert_has_unused_import_warning(&db, sf, "Rarity");
-    let _ = std::fs::remove_dir_all(dir);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Round-2 regression (i) — module-level const with imported type annotation and
-// initializer: import tracked, no new diagnostic vs HEAD baseline.
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn module_const_imported_type_tracked_no_new_diagnostic() {
-    // WHY: the round-1 ConstDecl arm called infer_expr + ast_type_to_type which
-    // are diagnostic-emitting paths. For a const with a valid type and initializer
-    // that references an imported options type, this must (a) NOT flag the imported
-    // type as unused, and (b) emit NO new diagnostic that was absent before the fix.
-    // The diagnostic-free walkers (collect_referenced_names_in_*) satisfy both.
-    let dep = r#"export options Priority { high: `High`, low: `Low` }"#;
-    let main = r#"
-import { Priority } from `priorities`
-export const DEFAULT_PRIORITY: Priority = Priority.low
-function entrypoint() -> Nothing { }
-"#;
-    let (db, sf, dir) = two_file_db("priorities", dep, main);
-    let output = ynz_typeck::check_query(&db, sf);
-    // The imported type must not be flagged as unused.
-    assert_no_unused_import_warning(&db, sf, "Priority");
-    // No diagnostic of any kind must be newly introduced by the Phase 0 fix.
-    let unexpected: Vec<_> = output
-        .diagnostics
-        .iter()
-        .filter(|d| {
-            !matches!(
-                &d.kind,
-                Some(ynz_diagnostics::DiagnosticKind::UnusedImport { .. })
-            )
-        })
-        .collect();
-    assert!(
-        unexpected.is_empty(),
-        "Phase 0 const walk introduced unexpected diagnostics: {:#?}",
-        unexpected
-    );
-    let _ = std::fs::remove_dir_all(dir);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Round-2 regression (ii) — concrete imported type used only as a field inside
-// a generic shape is not flagged unused, and no spurious TypeParam diagnostic.
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn generic_shape_concrete_field_import_tracked_no_type_param_diagnostic() {
-    // WHY: the round-1 ShapeDecl arm guarded the field walk with
-    // `if s.generics.is_empty()`, which skipped the ENTIRE field loop for generic
-    // shapes. A concrete imported type used only as a field inside a generic shape
-    // (e.g. `shape Box<T> { value: T, meta: ImportedMeta }`) was never tracked and
-    // was incorrectly flagged as unused. The fix uses collect_referenced_names_in_ast_type
-    // with a type_params set that skips bare `T` while still recording `ImportedMeta`.
-    //
-    // This test also guards that NO "T is not a known type" diagnostic appears,
-    // proving the TypeParam-skip in the diagnostic-free walker works correctly.
-    let dep = r#"export options Status { ok: `Ok`, err: `Err` }"#;
-    let main = r#"
-import { Status } from `statuses`
-shape Wrapper<T> {
-    value: T
-    status: Status
-}
-function entrypoint() -> Nothing { }
-"#;
-    let (db, sf, dir) = two_file_db("statuses", dep, main);
-    let output = ynz_typeck::check_query(&db, sf);
-    // The concrete imported type used as a field in the generic shape must not warn.
-    assert_no_unused_import_warning(&db, sf, "Status");
-    // No "T is not a known type" (NotDefined) diagnostic may appear — that would
-    // mean the TypeParam-skip in the walker failed.
-    let not_defined_diags: Vec<_> = output
-        .diagnostics
-        .iter()
-        .filter(|d| matches!(&d.kind, Some(ynz_diagnostics::DiagnosticKind::NotDefined)))
-        .collect();
-    assert!(
-        not_defined_diags.is_empty(),
-        "Unexpected NotDefined diagnostics (TypeParam-skip failed): {:#?}",
-        not_defined_diags
-    );
-    let _ = std::fs::remove_dir_all(dir);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Union type alias RHS — imported type used ONLY as a union member
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn union_alias_rhs_member_does_not_warn_unused_import() {
-    // WHY: `check_module`'s ShapeDecl arm walks field types and the `extends`
-    // parent but never walked `alias_ty` (the resolved union RHS). An import used
-    // only as a union member — `shape PghEvent = SouthSideEvent | StripeDistrictEvent`
-    // where both are imported and appear nowhere else — was counted as unused because
-    // the check pass never sees the alias_ty contents through any other code path.
-    // The shape body is pre-resolved in shapes.rs before the check pass runs, so
-    // without explicitly walking alias_ty those member names are invisible to
-    // referenced_names.
-    let dep = r#"
-export shape SouthSideEvent { name: String }
-export shape StripeDistrictEvent { name: String }
-"#;
-    let main = r#"
-import { SouthSideEvent } from `pgh_events`
-import { StripeDistrictEvent } from `pgh_events`
-shape PghEvent = SouthSideEvent | StripeDistrictEvent
-function entrypoint() -> Nothing { }
-"#;
-    let (db, sf, dir) = two_file_db("pgh_events", dep, main);
-    assert_no_unused_import_warning(&db, sf, "SouthSideEvent");
-    assert_no_unused_import_warning(&db, sf, "StripeDistrictEvent");
-    let _ = std::fs::remove_dir_all(dir);
-}
-
-#[test]
-fn union_alias_rhs_with_options_member_does_not_warn_unused_import() {
-    // WHY: same root cause as above — alias_ty not walked — but with an `options`
-    // type as a union member (Type::Options rather than Type::Shape). Confirms the
-    // fix handles both shape and options variants in the resolved Type::Union.
-    let dep = r#"
-export shape Scored { points: Int }
-export options Grade { high: `High`, low: `Low` }
-"#;
-    let main = r#"
-import { Scored } from `results`
-import { Grade } from `results`
-shape Assessment = Scored | Grade
-function entrypoint() -> Nothing { }
-"#;
-    let (db, sf, dir) = two_file_db("results", dep, main);
-    assert_no_unused_import_warning(&db, sf, "Scored");
-    assert_no_unused_import_warning(&db, sf, "Grade");
-    let _ = std::fs::remove_dir_all(dir);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Round-2 regression (iii) — const with undefined type: no new diagnostic vs HEAD.
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn module_const_undefined_type_emits_no_new_diagnostic_vs_head() {
-    // WHY: the round-1 ConstDecl arm called ast_type_to_type which emits a
-    // NotDefined diagnostic for `const X: NonexistentType = 5`. That turned on
-    // type-checking for module-level consts that HEAD never checked — a verdict
-    // change that violates the Safety invariant ("no change to type-checking
-    // verdicts"). The diagnostic-free walker never calls ast_type_to_type, so
-    // `const X: NonexistentType = 5` emits ZERO diagnostics from this path,
-    // matching HEAD's behavior.
-    //
-    // This test has NO imports, so no UnusedImport warnings appear. It asserts
-    // the total diagnostic count is 0, proving the const walk adds nothing.
-    let main = r#"
-export const MAGIC: UndefinedType = 42
-function entrypoint() -> Nothing { }
-"#;
-    // Single-file db: the dep file is a no-op placeholder.
-    let (db, sf, dir) = two_file_db("placeholder", "function placeholder() -> Nothing {}", main);
-    let output = ynz_typeck::check_query(&db, sf);
-    // Phase 0's diagnostic-free walker must not introduce any diagnostic for this
-    // const — matching HEAD's zero-diagnostic behavior for module-level consts.
-    assert!(
-        output.diagnostics.is_empty(),
-        "Phase 0 const walk emitted unexpected diagnostics for a const with undefined type \
-         (verdict change detected — HEAD emits 0, this path emits >0): {:#?}",
-        output.diagnostics
-    );
-    let _ = std::fs::remove_dir_all(dir);
+"#, not_flagged: ["Entity"], flagged: ["Rarity"];
 }

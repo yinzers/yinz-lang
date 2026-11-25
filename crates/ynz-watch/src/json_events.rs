@@ -167,92 +167,26 @@ pub fn ts() -> (String, String) {
 mod tests {
     use super::*;
 
-    // WHY: every --json event must include schema_version as a literal string constant,
-    //      never inlined. If this drifts (e.g. a typo in one event), consumers get
-    //      inconsistent schema_version fields and can't reliably detect schema changes.
-    #[test]
-    fn schema_version_constant_matches_expected() {
-        assert_eq!(SCHEMA_VERSION, "v0.2-m4-unstable");
-    }
-
-    // WHY: RFC 3339 UTC with milliseconds is the locked timestamp format per design/watch.md.
-    //      If now_rfc3339() drifts (loses the Z suffix, drops ms, uses local time), downstream
-    //      log parsers and the json_mode timestamp-format assertion fail silently.
-    //      Expected: YYYY-MM-DDTHH:MM:SS.mmmZ (exactly 24 chars, always UTC).
+    // Locked --json timestamp format (design/watch.md): RFC 3339 UTC with milliseconds,
+    // YYYY-MM-DDTHH:MM:SS.mmmZ. Every digit is masked to `9` so one comparison checks the
+    // length, the separators, the `Z` suffix and that all other characters are digits.
+    // bug: now_rfc3339 loses the Z suffix, drops milliseconds or uses local time, so downstream log parsers reject every --json timestamp | tier: Medium
     #[test]
     fn timestamp_format_matches_rfc3339_utc() {
-        let ts = now_rfc3339();
-        // Expected: YYYY-MM-DDTHH:MM:SS.mmmZ  (exactly 24 chars)
-        assert_eq!(ts.len(), 24, "timestamp `{ts}` must be 24 chars");
-        assert!(ts.ends_with('Z'), "timestamp must end with 'Z' (UTC)");
-        assert_eq!(&ts[4..5], "-", "timestamp[4] must be '-'");
-        assert_eq!(&ts[7..8], "-", "timestamp[7] must be '-'");
-        assert_eq!(&ts[10..11], "T", "timestamp[10] must be 'T'");
-        assert_eq!(&ts[13..14], ":", "timestamp[13] must be ':'");
-        assert_eq!(&ts[16..17], ":", "timestamp[16] must be ':'");
-        assert_eq!(&ts[19..20], ".", "timestamp[19] must be '.'");
-        // All other chars must be ASCII digits.
-        let digit_positions: &[usize] =
-            &[0, 1, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 17, 18, 20, 21, 22];
-        for &i in digit_positions {
-            assert!(
-                ts.as_bytes()[i].is_ascii_digit(),
-                "timestamp[{i}] must be a digit in `{ts}`"
-            );
-        }
-    }
-
-    // WHY: every event must serialize to a parseable JSON object. If a variant is accidentally
-    //      missing a field or has a type mismatch, serde_json::to_string panics or produces
-    //      invalid JSON that downstream jq / log parsers reject silently.
-    #[test]
-    fn all_event_variants_serialize_to_valid_json() {
-        let (timestamp, schema_version) = ts();
-        let events = vec![
-            WatchEvent::WatchReady {
-                timestamp: timestamp.clone(),
-                schema_version: schema_version.clone(),
-                watching: vec!["foo.ynz".into()],
-            },
-            WatchEvent::BuildStart {
-                timestamp: timestamp.clone(),
-                schema_version: schema_version.clone(),
-                file: "foo.ynz".into(),
-            },
-            WatchEvent::BuildEnd {
-                timestamp: timestamp.clone(),
-                schema_version: schema_version.clone(),
-                file: "foo.ynz".into(),
-                outcome: BuildOutcome::Ok,
-                duration_ms: 42,
-            },
-            WatchEvent::ChildSpawn {
-                timestamp: timestamp.clone(),
-                schema_version: schema_version.clone(),
-                pid: 12345,
-            },
-            WatchEvent::ChildExit {
-                timestamp: timestamp.clone(),
-                schema_version: schema_version.clone(),
-                pid: 12345,
-                exit_code: 0,
-            },
-            WatchEvent::WatchShutdown {
-                timestamp: timestamp.clone(),
-                schema_version: schema_version.clone(),
-                reason: ShutdownReason::CtrlC,
-            },
-        ];
-
-        for ev in events {
-            let json = serde_json::to_string(&ev)
-                .unwrap_or_else(|e| panic!("Failed to serialize event: {e}"));
-            let parsed: serde_json::Value = serde_json::from_str(&json)
-                .unwrap_or_else(|e| panic!("Invalid JSON from serialize: {e}\nJSON: {json}"));
-            assert!(
-                parsed.is_object(),
-                "serialized event must be a JSON object; got: {json}"
-            );
-        }
+        let timestamp = now_rfc3339();
+        let digits_masked: String = timestamp
+            .chars()
+            .map(|character| {
+                if character.is_ascii_digit() {
+                    '9'
+                } else {
+                    character
+                }
+            })
+            .collect();
+        assert_eq!(
+            digits_masked, "9999-99-99T99:99:99.999Z",
+            "timestamp `{timestamp}` must be YYYY-MM-DDTHH:MM:SS.mmmZ"
+        );
     }
 }

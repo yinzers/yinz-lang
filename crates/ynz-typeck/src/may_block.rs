@@ -1658,471 +1658,178 @@ mod tests {
         ynz_parser::parse_query(&db, sf).module.clone()
     }
 
-    fn suspends_set(src: &str) -> HashSet<String> {
-        let module = parse_module(src);
-        analyze(&module, &HashSet::new(), &HashSet::new()).suspends
+    fn names(listed: &[&str]) -> HashSet<String> {
+        listed.iter().map(|name| (*name).to_string()).collect()
     }
 
-    #[test]
-    fn pure_cpu_fn_not_suspends() {
-        let suspends = suspends_set(
-            r#"
-function entrypoint() -> Nothing {
-    print("hello")
-}
-"#,
-        );
-        assert!(
-            !suspends.contains("entrypoint"),
-            "pure CPU fn must NOT be suspends"
-        );
+    /// One named test per case so the runner names the failing case. Each case lists the functions
+    /// that must suspend and the ones that must not.
+    macro_rules! suspends_case {
+        ($test_name:ident, source: $source:expr, suspends: [$($suspending:expr),*], not_suspends: [$($not_suspending:expr),*]) => {
+            // bug: analyze mis-classifies which functions suspend, so a suspending function compiles as straight-line code (a runtime panic inside the async runtime) or a plain one gets a state machine | tier: High
+            #[test]
+            fn $test_name() {
+                let module = parse_module($source);
+                let suspends = analyze(&module, &HashSet::new(), &HashSet::new()).suspends;
+                $(assert!(suspends.contains($suspending), "{} must suspend; got {suspends:?}", $suspending);)*
+                $(assert!(!suspends.contains($not_suspending), "{} must NOT suspend; got {suspends:?}", $not_suspending);)*
+            }
+        };
     }
 
-    #[test]
-    fn direct_sleep_async_call_suspends() {
-        let suspends = suspends_set(
-            r#"
-function pause() -> Nothing {
-    wait sleep(100)
-}
-function entrypoint() -> Nothing { }
-"#,
-        );
-        assert!(
-            suspends.contains("pause"),
-            "direct sleep caller must be suspends"
-        );
-        assert!(
-            !suspends.contains("entrypoint"),
-            "unrelated fn must NOT be suspends"
-        );
+    // Case bug: a direct `wait sleep` is not a seed.
+    suspends_case!(
+        a_direct_sleep_suspends,
+        source: "function pause() -> Nothing {\n    wait sleep(100)\n}\nfunction entrypoint() -> Nothing { }\n",
+        suspends: ["pause"],
+        not_suspends: ["entrypoint"]
+    );
+    // Case bug: suspension stops at the first caller instead of reaching the whole chain.
+    suspends_case!(
+        suspension_reaches_every_transitive_caller,
+        source: "function inner() -> Nothing {\n    wait sleep(50)\n}\nfunction outer() -> Nothing {\n    inner()\n}\nfunction entrypoint() -> Nothing {\n    outer()\n}\n",
+        suspends: ["inner", "outer", "entrypoint"],
+        not_suspends: []
+    );
+    // Case bug: `background` propagates suspension to the launcher, which only fires and forgets.
+    suspends_case!(
+        a_background_launch_does_not_make_the_launcher_suspend,
+        source: "function worker() -> Nothing {\n    wait sleep(100)\n}\nfunction launcher() -> Nothing {\n    background worker()\n}\nfunction entrypoint() -> Nothing { }\n",
+        suspends: ["worker"],
+        not_suspends: ["launcher", "entrypoint"]
+    );
+    // Case bug: a call cycle with no blocking call is classified as suspending, or the fixpoint loops.
+    suspends_case!(
+        a_cycle_without_a_blocking_call_does_not_suspend,
+        source: "function a() -> Nothing { b() }\nfunction b() -> Nothing { a() }\nfunction entrypoint() -> Nothing { }\n",
+        suspends: [],
+        not_suspends: ["a", "b"]
+    );
+    // Case bug: a cycle member that blocks does not carry its cycle partner.
+    suspends_case!(
+        a_cycle_with_one_blocking_member_suspends_both,
+        source: "function a() -> Nothing { b() }\nfunction b() -> Nothing { wait sleep(10); a() }\nfunction entrypoint() -> Nothing { }\n",
+        suspends: ["a", "b"],
+        not_suspends: ["entrypoint"]
+    );
+    // Case bug: a `wait` nested in an `if` is not seen.
+    suspends_case!(
+        a_wait_nested_in_an_if_still_suspends,
+        source: "function maybePause(flag: Boolean) -> Nothing {\n    if (flag) {\n        wait sleep(50)\n    }\n}\nfunction caller() -> Nothing {\n    maybePause(true)\n}\nfunction entrypoint() -> Nothing { }\n",
+        suspends: ["maybePause", "caller"],
+        not_suspends: ["entrypoint"]
+    );
+    // Case bug: a user function that happens to be named `sleep` is taken for the intrinsic (the
+    // old name-collision class).
+    suspends_case!(
+        a_user_function_named_sleep_is_not_the_intrinsic,
+        source: "function sleep(ms: Int) -> Nothing {\n    print(`this is a user fn, not the intrinsic`)\n}\nfunction entrypoint() -> Nothing {\n    sleep(100)\n}\n",
+        suspends: [],
+        not_suspends: ["sleep", "entrypoint"]
+    );
+
+    /// Cross-module cases: `imported` names every imported function; `imported_suspending` the
+    /// subset known to suspend.
+    macro_rules! imported_suspension_case {
+        ($test_name:ident, imported: [$($imported:expr),*], imported_suspending: [$($imported_suspending:expr),*], caller_suspends: $caller_suspends:expr) => {
+            // bug: a cross-module call mis-seeds the caller: a suspending import leaves it straight-line (runtime panic from a state machine run inside the async runtime), or a known-plain import poisons it or reports an unresolvable edge | tier: High
+            #[test]
+            fn $test_name() {
+                let module = parse_module("function entrypoint() -> Nothing {\n    remoteOp()\n}\n");
+                let result = analyze(
+                    &module,
+                    &names(&[$($imported),*]),
+                    &names(&[$($imported_suspending),*]),
+                );
+                assert_eq!(result.suspends.contains("entrypoint"), $caller_suspends, "got {:?}", result.suspends);
+                assert!(result.unresolvable.is_empty(), "got {:#?}", result.unresolvable);
+            }
+        };
     }
 
-    #[test]
-    fn transitive_outer_inner_sleep_async_all_suspends() {
-        let suspends = suspends_set(
-            r#"
-function inner() -> Nothing {
-    wait sleep(50)
-}
-function outer() -> Nothing {
-    inner()
-}
-function entrypoint() -> Nothing {
-    outer()
-}
-"#,
-        );
-        // All three are in the transitive chain.
-        assert!(
-            suspends.contains("inner"),
-            "inner (direct) must be suspends"
-        );
-        assert!(
-            suspends.contains("outer"),
-            "outer (transitive) must be suspends"
-        );
-        assert!(
-            suspends.contains("entrypoint"),
-            "entrypoint (transitive) must be suspends"
-        );
+    // Case bug: a known-suspending import does not seed its caller.
+    imported_suspension_case!(
+        an_imported_suspending_function_seeds_its_caller,
+        imported: ["remoteOp"],
+        imported_suspending: ["remoteOp"],
+        caller_suspends: true
+    );
+    // Case bug: a known-plain import is treated as unresolvable or as suspending.
+    imported_suspension_case!(
+        an_imported_plain_function_leaves_its_caller_plain,
+        imported: ["remoteOp"],
+        imported_suspending: [],
+        caller_suspends: false
+    );
+
+    /// Cases of the worth-it proxy: `works` names the functions that do real work (a loop or
+    /// recursion, or a call to one); every other function in the source must not.
+    macro_rules! real_work_case {
+        ($test_name:ident, source: $source:expr, imported: [$($imported:expr),*], imported_real_work: [$($imported_real_work:expr),*], works: [$($works:expr),*], idle: [$($idle:expr),*]) => {
+            // bug: does_real_work_set mis-sizes a function: a trivial leaf is promoted to a spawned task (overhead for no gain) or a looping or recursive one is left sequential (the lost speed-up) | tier: Medium
+            #[test]
+            fn $test_name() {
+                let module = parse_module($source);
+                let work = does_real_work_set(
+                    &module,
+                    &names(&[$($imported),*]),
+                    &names(&[$($imported_real_work),*]),
+                );
+                $(assert!(work.contains($works), "{} must do real work; got {work:?}", $works);)*
+                $(assert!(!work.contains($idle), "{} must NOT do real work; got {work:?}", $idle);)*
+            }
+        };
     }
 
-    #[test]
-    fn background_decouples_propagation() {
-        // A function whose ONLY path to `sleep` is through `background`
-        // does not itself suspend — it fires and forgets.
-        let suspends = suspends_set(
-            r#"
-function worker() -> Nothing {
-    wait sleep(100)
-}
-function launcher() -> Nothing {
-    background worker()
-}
-function entrypoint() -> Nothing { }
-"#,
-        );
-        assert!(
-            suspends.contains("worker"),
-            "worker (direct) must be suspends"
-        );
-        assert!(
-            !suspends.contains("launcher"),
-            "launcher (background-only) must NOT be suspends"
-        );
-        assert!(!suspends.contains("entrypoint"));
-    }
-
-    #[test]
-    fn cyclic_call_graph_converges() {
-        // Mutual recursion: a() calls b(), b() calls a(). Neither reaches `sleep`.
-        let suspends = suspends_set(
-            r#"
-function a() -> Nothing { b() }
-function b() -> Nothing { a() }
-function entrypoint() -> Nothing { }
-"#,
-        );
-        assert!(
-            !suspends.contains("a"),
-            "a (cycle, no may-block) must NOT be suspends"
-        );
-        assert!(
-            !suspends.contains("b"),
-            "b (cycle, no may-block) must NOT be suspends"
-        );
-
-        // Mutual recursion where one reaches `sleep` — both should be suspends.
-        let suspends2 = suspends_set(
-            r#"
-function a() -> Nothing { b() }
-function b() -> Nothing { wait sleep(10); a() }
-function entrypoint() -> Nothing { }
-"#,
-        );
-        assert!(suspends2.contains("b"), "b (direct) must be suspends");
-        assert!(
-            suspends2.contains("a"),
-            "a (cycle-member via b) must be suspends"
-        );
-    }
-
-    #[test]
-    fn imported_non_suspending_fn_produces_no_unresolvable_and_no_suspension() {
-        // WHY: an imported fn with known-non-suspending status (in imported_fn_names but
-        // NOT in imported_suspending_names) must be treated as a non-suspending leaf.
-        // No CrossModule unresolvable edge, and the caller must NOT be in suspends_set.
-        // Guards regressions where non-suspending cross-module calls incorrectly poison
-        // the caller's suspension analysis (false-positive state machine classification).
-        let module = parse_module(
-            r#"
-function entrypoint() -> Nothing {
-    remoteOp()
-}
-"#,
-        );
-        let imported: HashSet<String> = ["remoteOp"].iter().map(|s| s.to_string()).collect();
-        let result = analyze(&module, &imported, &HashSet::new());
-        assert!(
-            result.unresolvable.is_empty(),
-            "known-non-suspending imported callee must NOT produce any unresolvable edge; got: {:#?}",
-            result.unresolvable
-        );
-        assert!(
-            !result.suspends.contains("entrypoint"),
-            "caller of non-suspending imported fn must NOT be in suspends_set; got: {:?}",
-            result.suspends
-        );
-    }
-
-    #[test]
-    fn imported_suspending_fn_seeds_caller_suspension() {
-        // WHY: an imported fn with known-suspending status (in BOTH imported_fn_names
-        // AND imported_suspending_names) must seed the caller as suspending — same effect
-        // as a direct sleep call. Guards regressions where cross-module suspension fails
-        // to propagate (caller left non-suspending, compiles as straight-line code, panics
-        // at runtime trying to run a state machine outer wrapper from inside a Tokio runtime).
-        let module = parse_module(
-            r#"
-function entrypoint() -> Nothing {
-    slowOp()
-}
-"#,
-        );
-        let imported: HashSet<String> = ["slowOp"].iter().map(|s| s.to_string()).collect();
-        let imported_suspending: HashSet<String> =
-            ["slowOp"].iter().map(|s| s.to_string()).collect();
-        let result = analyze(&module, &imported, &imported_suspending);
-        assert!(
-            result.suspends.contains("entrypoint"),
-            "caller of imported suspending fn must be in suspends_set; got: {:?}",
-            result.suspends
-        );
-        assert!(
-            result.unresolvable.is_empty(),
-            "known-suspending imported fn must NOT produce an unresolvable edge; got: {:#?}",
-            result.unresolvable
-        );
-    }
-
-    #[test]
-    fn background_args_evaluated_in_calling_context() {
-        // Even though the background call is a graph cut, its ARGUMENTS are evaluated
-        // in the calling context. If an argument itself calls a suspending fn, the
-        // caller IS suspends (the arg evaluation happens before the background launch).
-        let suspends = suspends_set(
-            r#"
-function worker(n: Int) -> Nothing {
-    wait sleep(n)
-}
-function compute() -> Int {
-    return 5
-}
-function launcher() -> Nothing {
-    background worker(compute())
-}
-function entrypoint() -> Nothing { }
-"#,
-        );
-        // compute() is pure CPU; worker() suspends; launcher() backgrounds worker —
-        // but compute() in the arg is intra-context. launcher() itself does NOT suspend
-        // because compute() is pure.
-        assert!(suspends.contains("worker"), "worker must be suspends");
-        assert!(
-            !suspends.contains("compute"),
-            "compute must NOT be suspends (pure CPU)"
-        );
-        assert!(
-            !suspends.contains("launcher"),
-            "launcher must NOT be suspends (background-only path)"
-        );
-    }
-
-    #[test]
-    fn wait_inside_if_is_still_transitive() {
-        // A function with `wait` nested inside an `if` is still suspends.
-        let suspends = suspends_set(
-            r#"
-function maybePause(flag: Boolean) -> Nothing {
-    if (flag) {
-        wait sleep(50)
-    }
-}
-function caller() -> Nothing {
-    maybePause(true)
-}
-function entrypoint() -> Nothing { }
-"#,
-        );
-        assert!(
-            suspends.contains("maybePause"),
-            "wait inside if must still be suspends"
-        );
-        assert!(
-            suspends.contains("caller"),
-            "transitive via maybePause must be suspends"
-        );
-    }
-
-    #[test]
-    fn test_fallible_async_seeds_suspends() {
-        let suspends = suspends_set(
-            r#"
-function fetchResult() -> Int {
-    return 0
-}
-function entrypoint() -> Nothing {
-    wait __testFallibleAsync(true)
-}
-"#,
-        );
-        assert!(
-            suspends.contains("entrypoint"),
-            "__testFallibleAsync must seed suspends"
-        );
-    }
-
-    #[test]
-    fn user_fn_named_sleep_is_not_suspends_without_intrinsic_call() {
-        // WHY: guards against the name-collision class where a user function named
-        // exactly `sleep` would false-positive into the seed set because the
-        // old implementation pushed intrinsic names into `direct` and the seed step
-        // scanned `direct` for intrinsic names. With `calls_may_block_intrinsic: bool`,
-        // only a real intrinsic CALL sets the flag — a function whose NAME matches an
-        // intrinsic but whose body calls nothing does not.
-        let suspends = suspends_set(
-            r#"
-function sleep(ms: Int) -> Nothing {
-    print(`this is a user fn, not the intrinsic`)
-}
-function entrypoint() -> Nothing {
-    sleep(100)
-}
-"#,
-        );
-        assert!(
-            !suspends.contains("sleep"),
-            "user fn named sleep without an intrinsic call must NOT be suspends"
-        );
-        assert!(
-            !suspends.contains("entrypoint"),
-            "caller of user-fn-named-sleep without intrinsic must NOT be suspends"
-        );
-    }
-
-    fn real_work_set(src: &str) -> HashSet<String> {
-        let module = parse_module(src);
-        does_real_work_set(&module, &HashSet::new(), &HashSet::new())
-    }
-
-    #[test]
-    fn leaf_arithmetic_fn_does_no_real_work() {
-        // WHY: a trivial leaf with no loop and no recursion is NOT worth spawning —
-        // the worth-it proxy must classify it as does-no-real-work so the promotion
-        // query never parallelizes calls to it.
-        let work = real_work_set(
-            r#"
-function add(x: Int) -> Int { return x + 1 }
-function entrypoint() -> Nothing { print("hi") }
-"#,
-        );
-        assert!(
-            !work.contains("add"),
-            "leaf arithmetic fn must NOT do real work"
-        );
-        assert!(!work.contains("entrypoint"));
-    }
-
-    #[test]
-    fn loop_containing_fn_does_real_work() {
-        // WHY: a `while`/`for` loop is the worth-it proxy's primary signal.
-        let work = real_work_set(
-            r#"
-function sumTo(n: Int) -> Int {
-    let total = 0
-    let i = 0
-    while (i < n) {
-        total = total + i
-        i = i + 1
-    }
-    return total
-}
-function entrypoint() -> Nothing { print("hi") }
-"#,
-        );
-        assert!(
-            work.contains("sumTo"),
-            "loop-containing fn must do real work"
-        );
-    }
-
-    #[test]
-    fn self_recursive_fn_does_real_work() {
-        // WHY: self-recursion (fib-style) is unbounded-at-compile-time work — the
-        // headline CPU-parallel callee shape.
-        let work = real_work_set(
-            r#"
-function fib(n: Int) -> Int {
-    if (n < 2) { return n }
-    let a = fib(n - 1)
-    let b = fib(n - 2)
-    return a + b
-}
-function entrypoint() -> Nothing { print("hi") }
-"#,
-        );
-        assert!(work.contains("fib"), "self-recursive fn must do real work");
-    }
-
-    #[test]
-    fn mutual_recursion_does_real_work() {
-        // WHY: a mutual cycle (isEven/isOdd) is recursion too — both members do work.
-        let work = real_work_set(
-            r#"
-function isEven(n: Int) -> bool {
-    if (n == 0) { return true }
-    return isOdd(n - 1)
-}
-function isOdd(n: Int) -> bool {
-    if (n == 0) { return false }
-    return isEven(n - 1)
-}
-function entrypoint() -> Nothing { print("hi") }
-"#,
-        );
-        assert!(
-            work.contains("isEven"),
-            "mutual-cycle member must do real work"
-        );
-        assert!(
-            work.contains("isOdd"),
-            "mutual-cycle member must do real work"
-        );
-    }
-
-    #[test]
-    fn real_work_propagates_transitively_up_callers() {
-        // WHY: a caller of a real-work function does real work too (the work happens
-        // inside the call) — needed so a thin wrapper around `fib` is still worth it.
-        let work = real_work_set(
-            r#"
-function fib(n: Int) -> Int {
-    if (n < 2) { return n }
-    return fib(n - 1) + fib(n - 2)
-}
-function wrapper(n: Int) -> Int { return fib(n) }
-function entrypoint() -> Nothing { print("hi") }
-"#,
-        );
-        assert!(work.contains("fib"));
-        assert!(
-            work.contains("wrapper"),
-            "caller of real-work fn must do real work"
-        );
-    }
-
-    #[test]
-    fn imported_real_work_seeds_local_caller() {
-        // WHY: cross-module worth-it propagation — a local fn that calls an imported
-        // real-work callee does real work, exactly like the suspends seed path.
-        let module = parse_module(
-            r#"
-function entrypoint() -> Nothing {
-    heavyImported()
-}
-"#,
-        );
-        let imported: HashSet<String> = ["heavyImported"].iter().map(|s| s.to_string()).collect();
-        let imported_real_work: HashSet<String> =
-            ["heavyImported"].iter().map(|s| s.to_string()).collect();
-        let work = does_real_work_set(&module, &imported, &imported_real_work);
-        assert!(
-            work.contains("entrypoint"),
-            "caller of imported real-work fn must do real work; got: {work:?}"
-        );
-    }
-
-    #[test]
-    fn imported_trivial_callee_does_not_seed_real_work() {
-        // WHY: an imported callee NOT in the real-work set is a trivial leaf — the
-        // caller must not be marked.
-        let module = parse_module(
-            r#"
-function entrypoint() -> Nothing {
-    trivialImported()
-}
-"#,
-        );
-        let imported: HashSet<String> = ["trivialImported"].iter().map(|s| s.to_string()).collect();
-        let work = does_real_work_set(&module, &imported, &HashSet::new());
-        assert!(
-            !work.contains("entrypoint"),
-            "caller of imported trivial fn must NOT do real work; got: {work:?}"
-        );
-    }
-
-    #[test]
-    fn does_real_work_is_deterministic_across_runs() {
-        // WHY: the fixpoint must be order-independent (no nondeterministic builds).
-        let src = r#"
-function fib(n: Int) -> Int {
-    if (n < 2) { return n }
-    return fib(n - 1) + fib(n - 2)
-}
-function sumTo(n: Int) -> Int {
-    let t = 0
-    let i = 0
-    while (i < n) { t = t + i; i = i + 1 }
-    return t
-}
-function leaf(x: Int) -> Int { return x }
-function entrypoint() -> Nothing { print("hi") }
-"#;
-        let a = real_work_set(src);
-        let b = real_work_set(src);
-        assert_eq!(a, b, "does_real_work_set must be deterministic across runs");
-        assert!(a.contains("fib") && a.contains("sumTo"));
-        assert!(!a.contains("leaf") && !a.contains("entrypoint"));
-    }
+    // Six cases, each a different classifier input of one fixpoint (leaf, loop, self-recursion plus
+    // a caller of it, mutual recursion, a real-work import, a trivial import); over the Medium guide of three, justified in the
+    // lane report.
+    // Case bug: a leaf with no loop and no recursion is worth spawning.
+    real_work_case!(
+        a_leaf_does_no_real_work,
+        source: "function add(x: Int) -> Int { return x + 1 }\nfunction entrypoint() -> Nothing { print(\"hi\") }\n",
+        imported: [], imported_real_work: [],
+        works: [],
+        idle: ["add", "entrypoint"]
+    );
+    // Case bug: a loop is not the worth-it signal.
+    real_work_case!(
+        a_loop_does_real_work,
+        source: "function sumTo(n: Int) -> Int {\n    let total = 0\n    let i = 0\n    while (i < n) {\n        total = total + i\n        i = i + 1\n    }\n    return total\n}\nfunction entrypoint() -> Nothing { print(\"hi\") }\n",
+        imported: [], imported_real_work: [],
+        works: ["sumTo"],
+        idle: ["entrypoint"]
+    );
+    // Case bug: self-recursion is missed, or a thin wrapper of a recursive function is not worth spawning.
+    real_work_case!(
+        self_recursion_and_its_callers_do_real_work,
+        source: "function fib(n: Int) -> Int {\n    if (n < 2) { return n }\n    return fib(n - 1) + fib(n - 2)\n}\nfunction wrapper(n: Int) -> Int { return fib(n) }\nfunction entrypoint() -> Nothing { print(\"hi\") }\n",
+        imported: [], imported_real_work: [],
+        works: ["fib", "wrapper"],
+        idle: ["entrypoint"]
+    );
+    // Case bug: a mutual cycle (isEven/isOdd) is not seen as recursion.
+    real_work_case!(
+        mutual_recursion_does_real_work,
+        source: "function isEven(n: Int) -> bool {\n    if (n == 0) { return true }\n    return isOdd(n - 1)\n}\nfunction isOdd(n: Int) -> bool {\n    if (n == 0) { return false }\n    return isEven(n - 1)\n}\nfunction entrypoint() -> Nothing { print(\"hi\") }\n",
+        imported: [], imported_real_work: [],
+        works: ["isEven", "isOdd"],
+        idle: ["entrypoint"]
+    );
+    // Case bug: a caller of an imported real-work function is not worth spawning.
+    real_work_case!(
+        an_imported_real_work_callee_seeds_its_caller,
+        source: "function entrypoint() -> Nothing {\n    heavyImported()\n}\n",
+        imported: ["heavyImported"], imported_real_work: ["heavyImported"],
+        works: ["entrypoint"],
+        idle: []
+    );
+    // Case bug: a caller of an imported callee that is not in the real-work set is marked (every import seeds).
+    real_work_case!(
+        an_imported_trivial_callee_does_not_seed_its_caller,
+        source: "function entrypoint() -> Nothing {\n    trivialImported()\n}\n",
+        imported: ["trivialImported"], imported_real_work: [],
+        works: [],
+        idle: ["entrypoint"]
+    );
 }

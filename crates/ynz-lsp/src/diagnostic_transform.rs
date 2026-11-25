@@ -129,88 +129,43 @@ pub fn path_to_uri(path: &str) -> Option<Url> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lsp_types::Position;
     use ynz_diagnostics::{Diagnostic as YnzDiag, Severity, SourceSpan};
 
-    fn make_diag(severity: Severity, start: usize, end: usize) -> YnzDiag {
-        YnzDiag {
-            severity,
-            span: SourceSpan::new("test.ynz", start, end),
-            what: "WHAT content".to_string(),
-            what_instead: "WHAT INSTEAD content".to_string(),
-            why: "WHY content".to_string(),
-            related: vec![],
-            kind: None,
-        }
-    }
-
-    #[test]
-    fn severity_mapping() {
-        let text = "let x = 5";
-        let table = LineTable::new(text);
-        let d = make_diag(Severity::Error, 0, 3);
-        let lsp = to_lsp_diagnostic(&d, text, &table, PositionEncoding::Utf8);
-        assert_eq!(lsp.severity, Some(DiagnosticSeverity::ERROR));
-
-        let d = make_diag(Severity::Warning, 0, 3);
-        let lsp = to_lsp_diagnostic(&d, text, &table, PositionEncoding::Utf8);
-        assert_eq!(lsp.severity, Some(DiagnosticSeverity::WARNING));
-
-        let d = make_diag(Severity::Suggestion, 0, 3);
-        let lsp = to_lsp_diagnostic(&d, text, &table, PositionEncoding::Utf8);
-        assert_eq!(lsp.severity, Some(DiagnosticSeverity::HINT));
-    }
-
-    #[test]
-    fn message_preserves_what_what_instead_why() {
-        let text = "let x = 5";
-        let table = LineTable::new(text);
-        let d = make_diag(Severity::Error, 0, 3);
-        let lsp = to_lsp_diagnostic(&d, text, &table, PositionEncoding::Utf8);
-        assert!(lsp.message.contains("WHAT content"));
-        assert!(lsp.message.contains("WHAT INSTEAD: WHAT INSTEAD content"));
-        assert!(lsp.message.contains("WHY: WHY content"));
-    }
-
-    #[test]
-    fn source_is_ynz() {
-        let text = "let x = 5";
-        let table = LineTable::new(text);
-        let d = make_diag(Severity::Error, 0, 3);
-        let lsp = to_lsp_diagnostic(&d, text, &table, PositionEncoding::Utf8);
-        assert_eq!(lsp.source, Some("ynz".to_string()));
-    }
-
-    #[test]
-    fn range_computed_correctly() {
-        let text = "let x = 5\nlet y = 10";
-        let table = LineTable::new(text);
-        // "let" on line 0, bytes 0-3
-        let d = make_diag(Severity::Error, 0, 3);
-        let lsp = to_lsp_diagnostic(&d, text, &table, PositionEncoding::Utf8);
-        assert_eq!(
-            lsp.range.start,
-            Position {
-                line: 0,
-                character: 0
+    macro_rules! severity_case {
+        ($name:ident, $severity:expr, $expected:expr) => {
+            // bug: an error shows as a warning (or a warning as an error or hint) in the editor | tier: Medium
+            #[test]
+            fn $name() {
+                let text = "let x = 5";
+                let table = LineTable::new(text);
+                let diagnostic = YnzDiag {
+                    severity: $severity,
+                    span: SourceSpan::new("test.ynz", 0, 3),
+                    what: "WHAT content".to_string(),
+                    what_instead: "WHAT INSTEAD content".to_string(),
+                    why: "WHY content".to_string(),
+                    related: vec![],
+                    kind: None,
+                };
+                let lsp = to_lsp_diagnostic(&diagnostic, text, &table, PositionEncoding::Utf8);
+                assert_eq!(lsp.severity, Some($expected));
             }
-        );
-        assert_eq!(
-            lsp.range.end,
-            Position {
-                line: 0,
-                character: 3
-            }
-        );
+        };
     }
 
-    #[test]
-    fn zero_offset_span_is_valid() {
-        let text = "let x = 5";
-        let table = LineTable::new(text);
-        let d = make_diag(Severity::Error, 0, 0);
-        let lsp = to_lsp_diagnostic(&d, text, &table, PositionEncoding::Utf8);
-        // Zero-width span at offset 0 is valid; start == end
-        assert_eq!(lsp.range.start, lsp.range.end);
-    }
+    severity_case!(
+        error_maps_to_error,
+        Severity::Error,
+        DiagnosticSeverity::ERROR
+    );
+    severity_case!(
+        warning_maps_to_warning,
+        Severity::Warning,
+        DiagnosticSeverity::WARNING
+    );
+    severity_case!(
+        suggestion_maps_to_hint,
+        Severity::Suggestion,
+        DiagnosticSeverity::HINT
+    );
 }

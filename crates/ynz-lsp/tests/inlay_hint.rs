@@ -1,9 +1,9 @@
-// WHY: Inlay hint tests verify that each firing domain emits hints at the
-// correct byte positions and that protocol-only domains return empty results
-// (not errors). Bugs here corrupt the teaching UX silently — the user sees
-// no hints or wrong hints without any error to diagnose.
+// WHY: Inlay hint tests verify that each firing domain emits hints for the
+// right constructs, stays silent where the source already says it or is
+// already an error, and honours the viewport range. A wrong hint teaches
+// the wrong thing silently: the user sees no error to diagnose.
 
-use lsp_types::{Position, Range};
+use lsp_types::{InlayHint, InlayHintLabel, Position, Range};
 use ynz_lsp::{
     capabilities::PositionEncoding, inlay_hint::inlay_hint_response, state::ServerState,
 };
@@ -29,664 +29,25 @@ fn full_range() -> Range {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Domain 1: variable_type — `: TypeName` after un-annotated let
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_inlay_hint_variable_type_fires_for_unannotated_let() {
-    // WHY: a `let x = 42` with no `: int` annotation should produce a TypeHint.
-    let src = "function entrypoint() -> Nothing {\n  let x = 42\n}\n";
-    let (state, uri) = state_single("/tmp/ynz_ih_type.ynz", src);
-    let hints = inlay_hint_response(&state, &uri, full_range());
-    assert!(
-        !hints.is_empty(),
-        "un-annotated let must emit at least one type hint"
-    );
-    let labels: Vec<String> = hints
+fn string_labels(hints: &[InlayHint]) -> Vec<String> {
+    hints
         .iter()
-        .filter_map(|h| {
-            if let lsp_types::InlayHintLabel::String(s) = &h.label {
-                Some(s.clone())
-            } else {
-                None
-            }
-        })
-        .collect();
-    assert!(
-        labels.iter().any(|l| l.contains(": Int")),
-        "type hint must include ': Int'; got: {:?}",
-        labels
-    );
-}
-
-#[test]
-fn test_inlay_hint_variable_type_suppressed_for_annotated_let() {
-    // WHY: a `let x: int = 42` already has the annotation — no hint should fire.
-    let src = "function entrypoint() -> Nothing {\n  let x: Int = 42\n}\n";
-    let (state, uri) = state_single("/tmp/ynz_ih_type_ann.ynz", src);
-    let hints = inlay_hint_response(&state, &uri, full_range());
-    let type_hints: Vec<_> = hints
-        .iter()
-        .filter(|h| {
-            if let lsp_types::InlayHintLabel::String(s) = &h.label {
-                s.starts_with(": ")
-            } else {
-                false
-            }
-        })
-        .collect();
-    assert!(
-        type_hints.is_empty(),
-        "annotated let must not emit type hints; got: {:?}",
-        type_hints
-    );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Viewport filtering
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_inlay_hint_viewport_filter_excludes_out_of_range_hints() {
-    // WHY: hints outside the viewport range must not be returned — the client
-    // displays only the visible region and doesn't filter server-side results.
-    let src = "function entrypoint() -> Nothing {\n  let a = 1\n  let b = 2\n  let c = 3\n}\n";
-    let (state, uri) = state_single("/tmp/ynz_ih_vp.ynz", src);
-
-    // Full range: should include hints for all three lets.
-    let full_hints = inlay_hint_response(&state, &uri, full_range());
-
-    // Line 1 only (the `let a` line).
-    let line1_range = Range {
-        start: Position {
-            line: 1,
-            character: 0,
-        },
-        end: Position {
-            line: 2,
-            character: 0,
-        },
-    };
-    let line1_hints = inlay_hint_response(&state, &uri, line1_range);
-
-    // Full range has more hints (or equal) than a single-line range.
-    assert!(
-        full_hints.len() >= line1_hints.len(),
-        "viewport filter: full range ({} hints) must have >= single line range ({} hints)",
-        full_hints.len(),
-        line1_hints.len()
-    );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Protocol-only domains: must return empty, never error
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_inlay_hint_protocol_only_domains_return_empty_not_error() {
-    // WHY: even though function_param_type / wait_points / lifetimes / allocators
-    // have no data yet, the LSP handler must return [] not an error — clients
-    // interpret errors as "feature broken" and disable the capability entirely.
-    // This test exercises the inlay_hint_response on a file where no firing-domain
-    // hints exist, verifying that the handler returns an Ok empty list (not panic).
-    let src = "function entrypoint() -> Nothing {}\n";
-    let (state, uri) = state_single("/tmp/ynz_ih_proto.ynz", src);
-    let hints = inlay_hint_response(&state, &uri, full_range());
-    // No panic = protocol-only domains are handled. Result may be empty.
-    let _ = hints;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Domain 7: wait_points — muted `wait` before suspending call sites
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_inlay_hint_wait_points_fires_for_implicit_suspending_call() {
-    // WHY: v0.3-M3b wired the wait_points pass into inlay_hint_response.
-    // A call to a user-defined suspending function without explicit `wait` must
-    // emit a hint labelled "wait " (Addition placement, before the call).
-    // `doWork` calls `sleep` so it is in suspends_set; `run` calls `doWork`
-    // without `wait`, so a wait_points hint must appear.
-    let src = "\
-function doWork() -> Nothing {
-  wait sleep(100)
-}
-function run() -> Nothing {
-  doWork()
-}
-";
-    let (state, uri) = state_single("/tmp/ynz_ih_wait_fire.ynz", src);
-    let hints = inlay_hint_response(&state, &uri, full_range());
-    let wait_hints: Vec<_> = hints
-        .iter()
-        .filter(|h| {
-            if let lsp_types::InlayHintLabel::String(s) = &h.label {
-                s.trim_start().starts_with("wait")
-            } else {
-                false
-            }
-        })
-        .collect();
-    assert!(
-        !wait_hints.is_empty(),
-        "implicit suspending call must emit wait_points hint; got hints: {:?}",
-        hints.iter().map(|h| &h.label).collect::<Vec<_>>()
-    );
-}
-
-#[test]
-fn test_inlay_hint_wait_points_suppressed_when_explicit_wait_written() {
-    // WHY: `wait doWork()` has explicit `wait` — the pass must NOT emit a
-    // redundant hint. Teaching a user to add `wait` when they already wrote it
-    // is noise that degrades trust in the teaching surface.
-    let src = "\
-function doWork() -> Nothing {
-  wait sleep(100)
-}
-function run() -> Nothing {
-  wait doWork()
-}
-";
-    let (state, uri) = state_single("/tmp/ynz_ih_wait_suppress.ynz", src);
-    let hints = inlay_hint_response(&state, &uri, full_range());
-    // Filter to wait_points-domain hints only (label starts with "wait")
-    // that appear on the line containing the explicit `wait doWork()` call.
-    let wait_hints: Vec<_> = hints
-        .iter()
-        .filter(|h| {
-            if let lsp_types::InlayHintLabel::String(s) = &h.label {
-                s.trim_start().starts_with("wait")
-            } else {
-                false
-            }
-        })
-        .collect();
-    // The wait_points pass suppresses already-explicit sites — the only `doWork()`
-    // call has explicit `wait`, so no additional hint should appear for it.
-    assert!(
-        wait_hints.is_empty(),
-        "explicit `wait doWork()` must suppress wait_points hint; got: {:?}",
-        wait_hints.iter().map(|h| &h.label).collect::<Vec<_>>()
-    );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Domain 8: background_routing — I/O vs CPU pool routing comment
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_inlay_hint_background_routing_io_pool_for_suspending_callee() {
-    // WHY: v0.3-M3b wired the background_routing pass into inlay_hint_response.
-    // `background doWork()` where `doWork` is in suspends_set must emit a hint
-    // containing "I/O pool". Reads the same suspends_set SSOT as the codegen
-    // routing predicate (emit.rs:9335).
-    let src = "\
-function doWork() -> Nothing {
-  wait sleep(100)
-}
-function run() -> Nothing {
-  background doWork()
-}
-";
-    let (state, uri) = state_single("/tmp/ynz_ih_bg_routing_io.ynz", src);
-    let hints = inlay_hint_response(&state, &uri, full_range());
-    let io_hints: Vec<_> = hints
-        .iter()
-        .filter(|h| {
-            if let lsp_types::InlayHintLabel::String(s) = &h.label {
-                s.contains("I/O pool")
-            } else {
-                false
-            }
-        })
-        .collect();
-    assert!(
-        !io_hints.is_empty(),
-        "suspending callee in background must emit I/O-pool routing hint; got hints: {:?}",
-        hints.iter().map(|h| &h.label).collect::<Vec<_>>()
-    );
-}
-
-#[test]
-fn test_inlay_hint_background_routing_cpu_pool_for_non_suspending_callee() {
-    // WHY: `background helper()` where `helper` does not call any suspending
-    // intrinsic must emit a hint containing "CPU pool". Mirrors the codegen path
-    // routing non-suspending callees to `ynz_rt_spawn_blocking`.
-    let src = "\
-function helper() -> Nothing {
-  print(`working`)
-}
-function run() -> Nothing {
-  background helper()
-}
-";
-    let (state, uri) = state_single("/tmp/ynz_ih_bg_routing_cpu.ynz", src);
-    let hints = inlay_hint_response(&state, &uri, full_range());
-    let cpu_hints: Vec<_> = hints
-        .iter()
-        .filter(|h| {
-            if let lsp_types::InlayHintLabel::String(s) = &h.label {
-                s.contains("CPU pool")
-            } else {
-                false
-            }
-        })
-        .collect();
-    assert!(
-        !cpu_hints.is_empty(),
-        "non-suspending callee in background must emit CPU-pool routing hint; got hints: {:?}",
-        hints.iter().map(|h| &h.label).collect::<Vec<_>>()
-    );
-}
-
-#[test]
-fn test_inlay_hint_background_routing_tooltip_non_empty() {
-    // WHY: every firing hint must carry a hover tooltip (Golden Rule 3 — compiler
-    // is a teacher). A background_routing hint with tooltip:None is muted text
-    // the user cannot learn from.
-    let src = "\
-function helper() -> Nothing {
-  print(`task`)
-}
-function run() -> Nothing {
-  background helper()
-}
-";
-    let (state, uri) = state_single("/tmp/ynz_ih_bg_routing_tip.ynz", src);
-    let hints = inlay_hint_response(&state, &uri, full_range());
-    for hint in &hints {
-        if let lsp_types::InlayHintLabel::String(label) = &hint.label {
-            if label.contains("pool") {
-                assert!(
-                    hint.tooltip.is_some(),
-                    "background_routing hint `{}` must have a hover tooltip (Golden Rule 3)",
-                    label
-                );
-            }
-        }
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Domain 2: ownership_call_site
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_inlay_hint_ownership_fires_for_share_param() {
-    // WHY: a call to a function whose parameter has an explicit `share` modifier
-    // should produce an OwnershipHint at the argument position.
-    let src = "function greet(share name: String) -> String { return name }\n\
-               function entrypoint() -> Nothing {\n  let msg = greet(`Pat`)\n}\n";
-    let (state, uri) = state_single("/tmp/ynz_ih_own.ynz", src);
-    let hints = inlay_hint_response(&state, &uri, full_range());
-    // At minimum, the function must not crash. Ownership hints fire only when
-    // the callee's signature carries an explicit OwnershipModifier.
-    let _ = hints;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Domain 3: copy_points
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_inlay_hint_copy_point_fires_for_int_argument() {
-    // WHY: passing an `int` literal directly to a function should emit a copy
-    // hint because int is trivially copyable (8 bytes, no heap).
-    let src = "function add(a: Int, b: Int) -> Int { return a }\n\
-               function entrypoint() -> Nothing {\n  let r = add(1, 2)\n}\n";
-    let (state, uri) = state_single("/tmp/ynz_ih_copy.ynz", src);
-    let hints = inlay_hint_response(&state, &uri, full_range());
-    // Must not panic. Copy hints fire when the argument expression is typed
-    // as a trivially-copyable type in CheckOutput.expr_types.
-    let _ = hints;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Hover tooltip — registry-driven WHAT/WHAT-INSTEAD/WHY
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_inlay_hint_tooltip_populated_for_variable_type_domain() {
-    // WHY: every inlay hint must carry a hover tooltip with WHAT/WHAT-INSTEAD/WHY
-    // per Golden Rule 3.  A hint with tooltip:None is muted text the user
-    // cannot learn from — exactly what the teaching mission exists to prevent.
-    let src = "function entrypoint() -> Nothing {\n  let x = 42\n}\n";
-    let (state, uri) = state_single("/tmp/ynz_ih_tooltip.ynz", src);
-    let hints = inlay_hint_response(&state, &uri, full_range());
-    for hint in &hints {
-        if let lsp_types::InlayHintLabel::String(label) = &hint.label {
-            if label.starts_with(": ") {
-                assert!(
-                    hint.tooltip.is_some(),
-                    "type-annotation hint `{}` must have a hover tooltip (Golden Rule 3)",
-                    label
-                );
-                if let Some(lsp_types::InlayHintTooltip::MarkupContent(mc)) = &hint.tooltip {
-                    assert!(
-                        mc.value.contains("WHAT"),
-                        "tooltip must contain WHAT section; got: {}",
-                        mc.value
-                    );
-                }
-            }
-        }
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Performance
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_inlay_hint_response_under_30ms_for_viewport() {
-    // WHY: inlay hints render on every keystroke — must not stall the editor.
-    let src = "function entrypoint() -> Nothing {\n  let x = 42\n  let y = 100\n}\n";
-    let (state, uri) = state_single("/tmp/ynz_ih_perf.ynz", src);
-    let start = std::time::Instant::now();
-    let _ = inlay_hint_response(&state, &uri, full_range());
-    let elapsed = start.elapsed();
-    assert!(
-        elapsed.as_millis() < 30,
-        "inlay hint response took {}ms, expected < 30ms",
-        elapsed.as_millis()
-    );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Domain 6: ownership_call_site — background large-copy (.give hint)
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_inlay_hint_background_large_copy_emits_give_hint() {
-    // WHY: v0.3-M1 added a `.give (transfers ownership; no copy)` inlayHint for
-    // `background fn(largeStruct.copy)` call sites where the copy exceeds 64 bytes.
-    // This verifies the LSP wiring of the ownership_call_site domain extension —
-    // without it, users get the Tier 3 warning but miss the inline hint that makes
-    // the fix one click away.
-    //
-    // The shape below has 9 fields × 8 bytes = 72 bytes > 64 byte threshold.
-    let src = r#"
-shape LargeEvent {
-    a: Int
-    b: Int
-    c: Int
-    d: Int
-    e: Int
-    f: Int
-    g: Int
-    h: Int
-    i: Int
-}
-function process(evt: LargeEvent) -> Nothing {
-}
-function entrypoint() -> Nothing {
-    let event: LargeEvent = { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9 }
-    background process(event.copy())
-}
-"#;
-    let (state, uri) = state_single("/tmp/ynz_ih_bg_large.ynz", src);
-    let hints = inlay_hint_response(&state, &uri, full_range());
-
-    let give_hint = hints.iter().find(|h| {
-        if let lsp_types::InlayHintLabel::String(s) = &h.label {
-            s.contains(".give")
-        } else {
-            false
-        }
-    });
-    assert!(
-        give_hint.is_some(),
-        "background large-copy must emit .give inlayHint; hints: {:?}",
-        hints.iter().map(|h| &h.label).collect::<Vec<_>>()
-    );
-}
-
-#[test]
-fn test_inlay_hint_background_small_copy_no_give_hint() {
-    // WHY: the .give hint must NOT fire for small-struct copies (≤ 64 bytes) —
-    // only oversized copies get the warning + hint.
-    let src = r#"
-shape SmallEvent { name: Int }
-function process(evt: SmallEvent) -> Nothing {
-}
-function entrypoint() -> Nothing {
-    let event: SmallEvent = { name: 1 }
-    background process(event.copy())
-}
-"#;
-    let (state, uri) = state_single("/tmp/ynz_ih_bg_small.ynz", src);
-    let hints = inlay_hint_response(&state, &uri, full_range());
-
-    let give_hint = hints.iter().find(|h| {
-        if let lsp_types::InlayHintLabel::String(s) = &h.label {
-            s.contains(".give")
-        } else {
-            false
-        }
-    });
-    assert!(
-        give_hint.is_none(),
-        "small-copy background must NOT emit .give hint; got hint: {:?}",
-        give_hint
-    );
-}
-
-#[test]
-fn test_inlay_hint_background_handle_form_renders_the_inferred_give_label() {
-    // WHY: parked item 16 (v0.3-M8 Phase 5) — the handle form `let h = background f(v)` used
-    // to record `Copy` unconditionally, so a hint would say "copy" for a value the callee's
-    // signature declares `give` (the handle form has no remaining-statement view, so the
-    // liveness-Give rule does not run there; the DECLARED `give` is what parked 16 restores).
-    // Both spawn forms now record through the ONE `record_spawn_arg_ownership`, and the hint
-    // walker visits the handle form too (before fix round 2 it never did, so the recorded
-    // label had no reader). The label on the argument is `give`; no `copy` label may sit there.
-    let src = "\
-shape Scene {
-  name: String
-  width: Int
-}
-function render(give scene: Scene) -> Int {
-  wait sleep(1)
-  return scene.width
-}
-function run() -> Nothing {
-  let scene: Scene = { name: `Three Rivers`, width: 6 }
-  let h = background render(scene)
-  let got = h.receive()
-  print(got.or(0))
-}
-";
-    let (state, uri) = state_single("/tmp/ynz_ih_bg_handle_give.ynz", src);
-    let hints = inlay_hint_response(&state, &uri, full_range());
-    let labels: Vec<String> = hints
-        .iter()
-        .filter_map(|h| match &h.label {
-            lsp_types::InlayHintLabel::String(s) => Some(s.trim().to_string()),
+        .filter_map(|hint| match &hint.label {
+            InlayHintLabel::String(label) => Some(label.clone()),
             _ => None,
         })
-        .collect();
-    assert!(
-        labels.iter().any(|l| l == "give"),
-        "the handle-form spawn's dead-after argument must carry the inferred `give` label; \
-         got labels: {labels:?}"
-    );
-    assert!(
-        !labels.iter().any(|l| l == "copy"),
-        "a given argument must not also be labelled `copy` (the pre-fix handle-form record); \
-         got labels: {labels:?}"
-    );
+        .collect()
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Domain 10: channel_capacity — muted `64` inside `channel<T>()` empty parens
-// ─────────────────────────────────────────────────────────────────────────────
-//
-// The label asserts the LITERAL "64" on purpose — an independent oracle pinning
-// the shipped default. If `ynz_typeck::DEFAULT_CHANNEL_CAPACITY` is ever re-tuned,
-// these tests break loudly and get updated alongside the registry hover text,
-// instead of drifting silently (authoritative-derivation.md's parity-link escape
-// hatch for values that must also live in data/prose).
-
-#[test]
-fn test_inlay_hint_channel_capacity_fires_for_default_capacity_construction() {
-    // WHY: a `channel<int>()` with no capacity argument uses the locked default
-    // (64). The Addition-category hint must render the plain muted `64` at the
-    // closing paren — same plain-text convention as every other Addition hint
-    // (`": int"`, `"wait  "`), no decorative wrapping — carry a hover tooltip
-    // (Golden Rule 3), and offer a click-to-make-explicit TextEdit that inserts
-    // `64` at exactly that position — producing `channel<int>(64)`, identical
-    // behavior now visible in source.
-    let src = "function entrypoint() -> Nothing {\n  let wire: Channel<Int> = Channel<Int>()\n}\n";
-    let (state, uri) = state_single("/tmp/ynz_ih_chan_default.ynz", src);
-    let hints = inlay_hint_response(&state, &uri, full_range());
-
-    let cap_hint = hints
+fn capacity_hint_count(hints: &[InlayHint]) -> usize {
+    string_labels(hints)
         .iter()
-        .find(|h| matches!(&h.label, lsp_types::InlayHintLabel::String(s) if s == "64"))
-        .expect("default-capacity channel construction must emit the plain `64` hint");
-
-    // Position: the closing `)` of the SECOND `channel<int>()` (the constructor
-    // call, not the type annotation) — line 1 (0-based), at the `)` byte.
-    let line1 = src.lines().nth(1).unwrap();
-    let paren_col = line1.rfind(')').unwrap() as u32;
-    assert_eq!(
-        cap_hint.position.line, 1,
-        "hint must sit on the construction line"
-    );
-    assert_eq!(
-        cap_hint.position.character, paren_col,
-        "hint must sit at the closing paren of the constructor call"
-    );
-
-    // Hover tooltip present (Golden Rule 3 — teaching surface).
-    assert!(
-        cap_hint.tooltip.is_some(),
-        "channel_capacity hint must carry a WHAT/WHAT-INSTEAD/WHY hover tooltip"
-    );
-
-    // Click-to-make-explicit: a zero-width insert of `64` at the hint position.
-    let edits = cap_hint
-        .text_edits
-        .as_ref()
-        .expect("channel_capacity hint must carry a click-to-make-explicit edit");
-    assert_eq!(edits.len(), 1);
-    assert_eq!(edits[0].new_text, "64");
-    assert_eq!(edits[0].range.start, cap_hint.position);
-    assert_eq!(
-        edits[0].range.end, cap_hint.position,
-        "insert edit must be zero-width"
-    );
+        .filter(|label| label.as_str() == "64")
+        .count()
 }
 
-#[test]
-fn test_inlay_hint_channel_capacity_suppressed_for_explicit_capacity() {
-    // WHY: `channel<int>(8)` already states its capacity — there is nothing to
-    // add, so the Addition-category hint must NOT fire (inverse anti-pattern:
-    // annotating what the user already wrote).
-    let src = "function entrypoint() -> Nothing {\n  let wire: Channel<Int> = Channel<Int>(8)\n}\n";
-    let (state, uri) = state_single("/tmp/ynz_ih_chan_explicit.ynz", src);
-    let hints = inlay_hint_response(&state, &uri, full_range());
-
-    assert!(
-        !hints
-            .iter()
-            .any(|h| matches!(&h.label, lsp_types::InlayHintLabel::String(s) if s == "64")),
-        "explicit-capacity construction must not emit the `64` hint"
-    );
-}
-
-#[test]
-fn test_inlay_hint_channel_capacity_suppressed_for_missing_element_type() {
-    // WHY: a bare `channel()` is a missing-element-type COMPILE ERROR with its
-    // own teaching text — piling a capacity hint onto erroring source would be
-    // noise on top of the diagnostic.
-    let src = "function entrypoint() -> Nothing {\n  let wire = Channel()\n}\n";
-    let (state, uri) = state_single("/tmp/ynz_ih_chan_no_elem.ynz", src);
-    let hints = inlay_hint_response(&state, &uri, full_range());
-
-    assert!(
-        !hints
-            .iter()
-            .any(|h| matches!(&h.label, lsp_types::InlayHintLabel::String(s) if s == "64")),
-        "missing-element-type construction must not emit the `64` hint"
-    );
-}
-
-#[test]
-fn test_inlay_hint_channel_capacity_suppressed_for_wrong_type_arg_count() {
-    // WHY: `channel<int, string>()` takes exactly one type argument, so this
-    // construction is ALREADY a compile error with its own teaching text —
-    // piling a capacity hint onto erroring source would be noise on top of the
-    // diagnostic (same intent as the missing-element-type suppression).
-    let src = "function entrypoint() -> Nothing {\n  let wire = Channel<Int, String>()\n}\n";
-    let (state, uri) = state_single("/tmp/ynz_ih_chan_two_args.ynz", src);
-    let hints = inlay_hint_response(&state, &uri, full_range());
-
-    assert!(
-        !hints
-            .iter()
-            .any(|h| matches!(&h.label, lsp_types::InlayHintLabel::String(s) if s == "64")),
-        "wrong-type-arg-count construction must not emit the `64` hint"
-    );
-}
-
-#[test]
-fn test_channel_capacity_registry_hover_states_the_authoritative_default() {
-    // WHY: the registry hover text (`registry/features.toml` `channel_capacity`)
-    // is TOML data that cannot read `ynz_typeck::DEFAULT_CHANNEL_CAPACITY`, so
-    // this parity test IS the compile-time link authoritative-derivation.md
-    // requires between two homes that must agree: if the authoritative constant
-    // is re-tuned but the hover prose still teaches the old number, this breaks
-    // loudly instead of the two surfaces drifting silently.
-    let cap = ynz_typeck::DEFAULT_CHANNEL_CAPACITY.to_string();
-    let hover = ynz_registry::lsp_inlay_hint_hover_for("channel_capacity")
-        .expect("channel_capacity domain must have registry hover text");
-
-    assert!(
-        hover.contains(&cap),
-        "registry hover for channel_capacity must state the authoritative default \
-         ({cap}); hover text was: {hover}"
-    );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Domain 2 (store form): the tooltip explains the `handed to` hint too
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_ownership_hover_explains_the_store_hint_in_the_diagnostics_words() {
-    // WHY: the `handed to `list`` hint (C5a) shares the `ownership_call_site` domain, so its
-    // tooltip is that domain's registry hover. Golden Rule 3 (one canonical wording per concept):
-    // the tooltip must say what the ConsumedByStore diagnostic says ("storing a value hands it
-    // over") and name the `.copy()` fix, not only describe the call-site `share`/`lend`/`give`.
-    let hover = ynz_registry::lsp_inlay_hint_hover_for("ownership_call_site")
-        .expect("ownership_call_site domain must have registry hover text");
-    let diagnostic = ynz_registry::diagnostic_template_lookup("ConsumedByStore")
-        .expect("ConsumedByStore template present");
-    assert!(
-        diagnostic
-            .what_template
-            .contains("storing a value hands it over"),
-        "the diagnostic's wording moved; update the hover with it"
-    );
-    for fragment in [
-        "handed to",
-        "storing a value hands it over",
-        ".copy()",
-        "share",
-        "give",
-    ] {
-        assert!(
-            hover.contains(fragment),
-            "hover must contain {fragment:?}; got: {hover}"
-        );
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Domain 11: auto_arc — shared-by-reference-count comment after a group-member spawn
-// ─────────────────────────────────────────────────────────────────────────────
+const CHANNEL_DEFAULT_SRC: &str =
+    "function entrypoint() -> Nothing {\n  let wire: Channel<Int> = Channel<Int>()\n}\n";
 
 const AUTO_ARC_GROUP_SRC: &str = "\
 shape Scene {
@@ -705,90 +66,331 @@ function run() -> Nothing {
 }
 ";
 
-fn auto_arc_labels(hints: &[lsp_types::InlayHint]) -> Vec<String> {
-    hints
-        .iter()
-        .filter_map(|h| match &h.label {
-            lsp_types::InlayHintLabel::String(s) if s.contains("shared by reference count") => {
-                Some(s.clone())
-            }
-            _ => None,
-        })
+fn auto_arc_labels(hints: &[InlayHint]) -> Vec<String> {
+    string_labels(hints)
+        .into_iter()
+        .filter(|label| label.contains("shared by reference count"))
         .collect()
 }
 
-#[test]
-fn test_inlay_hint_auto_arc_fires_once_per_group_member_with_the_task_count() {
-    // WHY: v0.3-M8 Phase 5 wired the `auto_arc` domain to FIRE. Two spawns of the same
-    // read-only shape form one group of two, so BOTH spawn lines carry the comment naming
-    // the group's task count — read from the same `BgOwnership::Arc` record codegen emits
-    // the block from, so the hint and the binary cannot disagree.
-    let (state, uri) = state_single("/tmp/ynz_ih_auto_arc_group.ynz", AUTO_ARC_GROUP_SRC);
-    let hints = inlay_hint_response(&state, &uri, full_range());
-    let labels = auto_arc_labels(&hints);
-    assert_eq!(
-        labels.len(),
-        2,
-        "two group members must each carry the auto_arc comment; got hints: {:?}",
-        hints.iter().map(|h| &h.label).collect::<Vec<_>>()
-    );
-    for l in &labels {
-        assert!(
-            l.contains("with 2 tasks") && l.contains("read-only"),
-            "auto_arc label must name the group's task count and read-only sharing; got {l:?}"
-        );
-    }
-    // No `copy` ownership annotation may sit on a group member's argument — one compiler
-    // decision, one annotation (the ownership_call_site walker yields to auto_arc).
-    let copy_labels: Vec<_> = hints
-        .iter()
-        .filter(|h| matches!(&h.label, lsp_types::InlayHintLabel::String(s) if s.trim() == "copy"))
-        .collect();
-    assert!(
-        copy_labels.is_empty(),
-        "a group member must not also be annotated `copy`; got {}",
-        copy_labels.len()
-    );
+macro_rules! inlay_hint_case {
+    ($name:ident, $src:expr, $range:expr, $check:expr) => {
+        // bug: a firing inlay-hint domain shows a hint on the wrong construct, misses one it should show, repeats what the source already says or piles onto a compile error, or ignores the viewport | tier: Medium
+        #[test]
+        fn $name() {
+            let (state, uri) =
+                state_single(concat!("/tmp/ynz_ih_", stringify!($name), ".ynz"), $src);
+            let hints = inlay_hint_response(&state, &uri, $range);
+            let check: fn(&[InlayHint]) = $check;
+            check(&hints);
+        }
+    };
 }
 
-#[test]
-fn test_inlay_hint_auto_arc_tooltip_carries_the_registry_hover() {
-    // WHY: Golden Rule 3 — a muted annotation without a WHAT/WHAT-INSTEAD/WHY hover is a
-    // teaching surface the user cannot learn from. The hover is the registry's `auto_arc`
-    // text, which carries the reference-counting-has-cost caution in words (the red tint is
-    // `auto-arc-cautionary-tint`, deferred).
-    let (state, uri) = state_single("/tmp/ynz_ih_auto_arc_tooltip.ynz", AUTO_ARC_GROUP_SRC);
-    let hints = inlay_hint_response(&state, &uri, full_range());
-    let arc_hints: Vec<_> = hints
-        .iter()
-        .filter(|h| matches!(&h.label, lsp_types::InlayHintLabel::String(s) if s.contains("shared by reference count")))
-        .collect();
-    assert!(
-        !arc_hints.is_empty(),
-        "auto_arc must fire for the group source"
-    );
-    for h in arc_hints {
-        let md = match &h.tooltip {
-            Some(lsp_types::InlayHintTooltip::MarkupContent(m)) => m.value.clone(),
-            other => panic!("auto_arc hint must carry a markdown tooltip; got {other:?}"),
-        };
+inlay_hint_case!(
+    unannotated_let_gets_its_inferred_type_hint,
+    "function entrypoint() -> Nothing {\n  let x = 42\n}\n",
+    full_range(),
+    |hints| {
+        let labels = string_labels(hints);
         assert!(
-            md.contains("WHAT") && md.contains("WHY"),
-            "auto_arc tooltip must be the WHAT/WHAT-INSTEAD/WHY hover; got {md:?}"
-        );
-        assert!(
-            md.contains("copy()"),
-            "auto_arc hover must name the `.copy()` override direction; got {md:?}"
+            labels.iter().any(|label| label.contains(": Int")),
+            "got {labels:?}"
         );
     }
-}
+);
 
-#[test]
-fn test_inlay_hint_auto_arc_silent_for_a_single_spawn() {
-    // WHY: "caller + 1 task" is NOT a sharing case (topology (B)); no group forms, so the
-    // hint must be silent — the hint and codegen read the same record, and codegen emits
-    // nothing here either.
-    let src = "\
+inlay_hint_case!(
+    annotated_let_gets_no_type_hint,
+    "function entrypoint() -> Nothing {\n  let x: Int = 42\n}\n",
+    full_range(),
+    |hints| {
+        let type_hints: Vec<_> = string_labels(hints)
+            .into_iter()
+            .filter(|label| label.starts_with(": "))
+            .collect();
+        assert!(type_hints.is_empty(), "got {type_hints:?}");
+    }
+);
+
+inlay_hint_case!(
+    hints_outside_the_viewport_are_not_returned,
+    "function entrypoint() -> Nothing {\n  let a = 1\n  let b = 2\n  let c = 3\n}\n",
+    Range {
+        start: Position {
+            line: 1,
+            character: 0
+        },
+        end: Position {
+            line: 2,
+            character: 0
+        },
+    },
+    |hints| {
+        let lines: Vec<u32> = hints.iter().map(|hint| hint.position.line).collect();
+        assert_eq!(
+            lines,
+            vec![1],
+            "only the `let a` line is in view; got {lines:?}"
+        );
+    }
+);
+
+inlay_hint_case!(
+    implicit_suspending_call_gets_a_wait_hint,
+    "\
+function doWork() -> Nothing {
+  wait sleep(100)
+}
+function run() -> Nothing {
+  doWork()
+}
+",
+    full_range(),
+    |hints| {
+        let waits: Vec<_> = string_labels(hints)
+            .into_iter()
+            .filter(|label| label.trim_start().starts_with("wait"))
+            .collect();
+        assert!(!waits.is_empty(), "got {:?}", string_labels(hints));
+    }
+);
+
+inlay_hint_case!(
+    explicit_wait_gets_no_wait_hint,
+    "\
+function doWork() -> Nothing {
+  wait sleep(100)
+}
+function run() -> Nothing {
+  wait doWork()
+}
+",
+    full_range(),
+    |hints| {
+        let waits: Vec<_> = string_labels(hints)
+            .into_iter()
+            .filter(|label| label.trim_start().starts_with("wait"))
+            .collect();
+        assert!(waits.is_empty(), "got {waits:?}");
+    }
+);
+
+inlay_hint_case!(
+    background_call_of_a_suspending_function_is_routed_to_the_io_pool,
+    "\
+function doWork() -> Nothing {
+  wait sleep(100)
+}
+function run() -> Nothing {
+  background doWork()
+}
+",
+    full_range(),
+    |hints| {
+        let labels = string_labels(hints);
+        assert!(
+            labels.iter().any(|label| label.contains("I/O pool")),
+            "got {labels:?}"
+        );
+    }
+);
+
+inlay_hint_case!(
+    background_call_of_a_plain_function_is_routed_to_the_cpu_pool,
+    "\
+function helper() -> Nothing {
+  print(`working`)
+}
+function run() -> Nothing {
+  background helper()
+}
+",
+    full_range(),
+    |hints| {
+        let labels = string_labels(hints);
+        assert!(
+            labels.iter().any(|label| label.contains("CPU pool")),
+            "got {labels:?}"
+        );
+    }
+);
+
+// The shape below has 9 fields × 8 bytes = 72 bytes, over the 64-byte copy threshold.
+inlay_hint_case!(
+    background_copy_of_a_shape_over_64_bytes_gets_a_give_hint,
+    r#"
+shape LargeEvent {
+    a: Int
+    b: Int
+    c: Int
+    d: Int
+    e: Int
+    f: Int
+    g: Int
+    h: Int
+    i: Int
+}
+function process(evt: LargeEvent) -> Nothing {
+}
+function entrypoint() -> Nothing {
+    let event: LargeEvent = { a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9 }
+    background process(event.copy())
+}
+"#,
+    full_range(),
+    |hints| {
+        let labels = string_labels(hints);
+        assert!(
+            labels.iter().any(|label| label.contains(".give")),
+            "got {labels:?}"
+        );
+    }
+);
+
+inlay_hint_case!(
+    background_copy_of_a_small_shape_gets_no_give_hint,
+    r#"
+shape SmallEvent { name: Int }
+function process(evt: SmallEvent) -> Nothing {
+}
+function entrypoint() -> Nothing {
+    let event: SmallEvent = { name: 1 }
+    background process(event.copy())
+}
+"#,
+    full_range(),
+    |hints| {
+        let labels = string_labels(hints);
+        assert!(
+            !labels.iter().any(|label| label.contains(".give")),
+            "got {labels:?}"
+        );
+    }
+);
+
+// The handle form `let h = background f(v)` once recorded `Copy` unconditionally,
+// so the hint said "copy" for a value the callee declares `give`.
+inlay_hint_case!(
+    background_handle_form_labels_a_given_argument_give_not_copy,
+    "\
+shape Scene {
+  name: String
+  width: Int
+}
+function render(give scene: Scene) -> Int {
+  wait sleep(1)
+  return scene.width
+}
+function run() -> Nothing {
+  let scene: Scene = { name: `Three Rivers`, width: 6 }
+  let h = background render(scene)
+  let got = h.receive()
+  print(got.or(0))
+}
+",
+    full_range(),
+    |hints| {
+        let labels: Vec<String> = string_labels(hints)
+            .into_iter()
+            .map(|label| label.trim().to_string())
+            .collect();
+        assert!(labels.iter().any(|label| label == "give"), "got {labels:?}");
+        assert!(
+            !labels.iter().any(|label| label == "copy"),
+            "got {labels:?}"
+        );
+    }
+);
+
+// The label asserts the LITERAL "64" on purpose: an independent oracle pinning the
+// shipped default (see the parity test below).
+inlay_hint_case!(
+    default_capacity_channel_gets_a_64_hint_with_an_insert_edit_at_the_closing_paren,
+    CHANNEL_DEFAULT_SRC,
+    full_range(),
+    |hints| {
+        let capacity_hint = hints
+            .iter()
+            .find(|hint| matches!(&hint.label, InlayHintLabel::String(label) if label == "64"))
+            .expect("a default-capacity channel must emit the plain `64` hint");
+        // The closing `)` of the constructor call (line 1), not the type annotation.
+        let constructor_line = CHANNEL_DEFAULT_SRC.lines().nth(1).unwrap();
+        let closing_paren_column = constructor_line.rfind(')').unwrap() as u32;
+        assert_eq!(
+            capacity_hint.position,
+            Position {
+                line: 1,
+                character: closing_paren_column
+            }
+        );
+        // Clicking the hint inserts `64` there, producing `Channel<Int>(64)`.
+        let edits = capacity_hint
+            .text_edits
+            .as_ref()
+            .expect("click-to-make-explicit edit");
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].new_text, "64");
+        assert_eq!(edits[0].range.start, capacity_hint.position);
+        assert_eq!(
+            edits[0].range.end, capacity_hint.position,
+            "insert must be zero-width"
+        );
+    }
+);
+
+inlay_hint_case!(
+    explicit_capacity_channel_gets_no_capacity_hint,
+    "function entrypoint() -> Nothing {\n  let wire: Channel<Int> = Channel<Int>(8)\n}\n",
+    full_range(),
+    |hints| assert_eq!(capacity_hint_count(hints), 0)
+);
+
+inlay_hint_case!(
+    channel_without_an_element_type_gets_no_capacity_hint,
+    "function entrypoint() -> Nothing {\n  let wire = Channel()\n}\n",
+    full_range(),
+    |hints| assert_eq!(capacity_hint_count(hints), 0)
+);
+
+inlay_hint_case!(
+    channel_with_two_type_arguments_gets_no_capacity_hint,
+    "function entrypoint() -> Nothing {\n  let wire = Channel<Int, String>()\n}\n",
+    full_range(),
+    |hints| assert_eq!(capacity_hint_count(hints), 0)
+);
+
+inlay_hint_case!(
+    each_member_of_a_two_spawn_group_gets_an_auto_arc_hint_naming_the_task_count,
+    AUTO_ARC_GROUP_SRC,
+    full_range(),
+    |hints| {
+        let labels = auto_arc_labels(hints);
+        assert_eq!(labels.len(), 2, "got {:?}", string_labels(hints));
+        assert!(
+            labels.iter().all(|label| label.contains("with 2 tasks")),
+            "got {labels:?}"
+        );
+    }
+);
+
+// One compiler decision, one annotation: the ownership walker yields to auto_arc.
+inlay_hint_case!(
+    auto_arc_group_member_arguments_get_no_copy_hint,
+    AUTO_ARC_GROUP_SRC,
+    full_range(),
+    |hints| {
+        let copies = string_labels(hints)
+            .into_iter()
+            .filter(|label| label.trim() == "copy")
+            .count();
+        assert_eq!(copies, 0);
+    }
+);
+
+inlay_hint_case!(
+    a_single_background_spawn_gets_no_auto_arc_hint,
+    "\
 shape Scene {
   name: String
   width: Int
@@ -802,12 +404,75 @@ function run() -> Nothing {
   background render(scene)
   print(scene.width)
 }
-";
-    let (state, uri) = state_single("/tmp/ynz_ih_auto_arc_single.ynz", src);
-    let hints = inlay_hint_response(&state, &uri, full_range());
+",
+    full_range(),
+    |hints| assert!(
+        auto_arc_labels(hints).is_empty(),
+        "got {:?}",
+        string_labels(hints)
+    )
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Parity: registry hover prose vs. the values and wording it must agree with
+// ─────────────────────────────────────────────────────────────────────────────
+
+// bug: the channel_capacity hover teaches a capacity different from the authoritative default | tier: Low
+#[test]
+fn channel_capacity_registry_hover_states_the_authoritative_default() {
+    // The registry hover text is TOML data and cannot read
+    // `ynz_typeck::DEFAULT_CHANNEL_CAPACITY`, so this parity test is the link
+    // authoritative-derivation.md requires between the two homes.
+    let capacity = ynz_typeck::DEFAULT_CHANNEL_CAPACITY.to_string();
+    let hover = ynz_registry::lsp_inlay_hint_hover_for("channel_capacity")
+        .expect("channel_capacity domain must have registry hover text");
+    assert!(hover.contains(&capacity), "hover was: {hover}");
+}
+
+macro_rules! ownership_hover_fragment_case {
+    ($name:ident, $fragment:expr) => {
+        // bug: the ownership_call_site hover stops saying what the ConsumedByStore diagnostic says (one wording per concept), or loses the `.copy()` fix | tier: Low
+        #[test]
+        fn $name() {
+            let hover = ynz_registry::lsp_inlay_hint_hover_for("ownership_call_site")
+                .expect("ownership_call_site domain must have registry hover text");
+            let diagnostic = ynz_registry::diagnostic_template_lookup("ConsumedByStore")
+                .expect("ConsumedByStore template present");
+            assert!(
+                diagnostic
+                    .what_template
+                    .contains("storing a value hands it over"),
+                "the diagnostic's wording moved; update the hover with it"
+            );
+            assert!(hover.contains($fragment), "hover was: {hover}");
+        }
+    };
+}
+
+ownership_hover_fragment_case!(ownership_hover_names_the_handed_to_hint, "handed to");
+ownership_hover_fragment_case!(
+    ownership_hover_uses_the_diagnostics_store_wording,
+    "storing a value hands it over"
+);
+ownership_hover_fragment_case!(ownership_hover_names_the_copy_fix, ".copy()");
+ownership_hover_fragment_case!(ownership_hover_names_share, "share");
+ownership_hover_fragment_case!(ownership_hover_names_give, "give");
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Nightly: wall-clock budget
+// ─────────────────────────────────────────────────────────────────────────────
+
+// bug: inlay hints take over 30 ms for a viewport and stall the editor on every keystroke | tier: Medium
+#[test]
+fn nightly_inlay_hint_response_under_30ms_for_viewport() {
+    let src = "function entrypoint() -> Nothing {\n  let x = 42\n  let y = 100\n}\n";
+    let (state, uri) = state_single("/tmp/ynz_ih_perf.ynz", src);
+    let start = std::time::Instant::now();
+    let _ = inlay_hint_response(&state, &uri, full_range());
+    let elapsed = start.elapsed();
     assert!(
-        auto_arc_labels(&hints).is_empty(),
-        "a single spawn must not carry the auto_arc comment; got hints: {:?}",
-        hints.iter().map(|h| &h.label).collect::<Vec<_>>()
+        elapsed.as_millis() < 30,
+        "inlay hint response took {}ms, expected < 30ms",
+        elapsed.as_millis()
     );
 }

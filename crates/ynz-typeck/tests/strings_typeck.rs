@@ -1,24 +1,18 @@
-// WHY: String method typechecking (M7 P3b) must enforce: (1) each string method
-// returns the correct type; (2) InterpolatedString accepts primitive types;
-// (3) InterpolatedString rejects shapes without a standalone `toString`;
-// (4) unknown string methods produce a diagnostic with the available-methods list;
-// (5) string bracket access returns Maybe<String>.
-// Regressions here would silently break codegen which lowers string operations.
-//
-// test-ratchet: M7 P3b adds string method dispatch and interpolation typechecking.
+// String method typecheck (M7 P3b): each string method returns the type the program annotates,
+// interpolation accepts primitives and shapes with a standalone `toString` and rejects the rest,
+// an unknown method is an error, and bracket access is `Maybe<String>`. One table of named
+// cases: a case is either clean (no diagnostic) or exactly N errors.
 
 use ynz_parser::{CompilerDb, SourceFile};
-use ynz_typeck::{check_query, CheckOutput};
+use ynz_typeck::check_query;
 
-const FILE: &str = "test.ynz";
-
-fn check(source: &str) -> CheckOutput {
+fn check(source: &str) -> ynz_typeck::CheckOutput {
     let db = CompilerDb::default();
-    let sf = SourceFile::new(&db, FILE.to_string(), source.to_string());
+    let sf = SourceFile::new(&db, "test.ynz".to_string(), source.to_string());
     (*check_query(&db, sf)).clone()
 }
 
-fn check_no_diags(source: &str) -> CheckOutput {
+fn assert_clean(source: &str) {
     let out = check(source);
     assert_eq!(
         out.diagnostics.len(),
@@ -26,10 +20,9 @@ fn check_no_diags(source: &str) -> CheckOutput {
         "Expected no diagnostics, got: {:#?}",
         out.diagnostics
     );
-    out
 }
 
-fn check_diag_count(source: &str, expected: usize) -> CheckOutput {
+fn assert_error_count(source: &str, expected: usize) {
     let out = check(source);
     let error_count = out
         .diagnostics
@@ -41,264 +34,151 @@ fn check_diag_count(source: &str, expected: usize) -> CheckOutput {
         "Expected {expected} error(s), got: {:#?}",
         out.diagnostics
     );
-    out
 }
 
-fn check_has_diag(source: &str, fragment: &str) {
-    let out = check(source);
-    let found = out.diagnostics.iter().any(|d| {
-        d.what.contains(fragment) || d.what_instead.contains(fragment) || d.why.contains(fragment)
-    });
-    assert!(
-        found,
-        "Expected a diagnostic containing {:?}, got: {:#?}",
-        fragment, out.diagnostics
-    );
+macro_rules! string_cases {
+    ($($case:ident: $source:expr => $expected:tt;)+) => {
+        $(
+            // bug: typeck gives a string method, interpolation or bracket access the wrong type (a valid program refused, or a shape without toString / an unknown method accepted for codegen to lower) | tier: High
+            #[test]
+            fn $case() {
+                string_case!($source, $expected);
+            }
+        )+
+    };
 }
 
-// ── 1. Zero-arg string methods return correct types ──────────────────────────
+macro_rules! string_case {
+    ($source:expr, clean) => {
+        assert_clean($source)
+    };
+    ($source:expr, $errors:literal) => {
+        assert_error_count($source, $errors)
+    };
+}
 
-#[test]
-fn m7_string_to_upper_case_returns_string() {
-    // WHY: .toUpperCase() must return string; if the return type were wrong, any
-    // downstream assignment or use would produce a spurious type mismatch.
-    check_no_diags(
+string_cases! {
+    string_to_upper_case_returns_string:
         r#"function entrypoint() -> Nothing {
     let s = `hello`
     let t: String = s.toUpperCase()
-}"#,
-    );
-}
-
-#[test]
-fn m7_string_to_lower_case_returns_string() {
-    // WHY: same as toUpperCase — lowercase transform returns string.
-    check_no_diags(
+}"#
+        => clean;
+    string_to_lower_case_returns_string:
         r#"function entrypoint() -> Nothing {
     let s = `HELLO`
     let t: String = s.toLowerCase()
-}"#,
-    );
-}
-
-#[test]
-fn m7_string_trim_returns_string() {
-    // WHY: .trim() is a zero-arg string method returning string. Regression
-    // here would break any code that chains or assigns the trimmed value.
-    check_no_diags(
+}"#
+        => clean;
+    string_trim_returns_string:
         r#"function entrypoint() -> Nothing {
     let s = `  hello  `
     let t: String = s.trim()
-}"#,
-    );
-}
-
-#[test]
-fn m7_string_count_returns_int() {
-    // WHY: .count() returns the code-point count as int. Used in loop bounds.
-    check_no_diags(
+}"#
+        => clean;
+    string_count_returns_int:
         r#"function entrypoint() -> Nothing {
     let s = `hello`
     let n: Int = s.count()
-}"#,
-    );
-}
-
-#[test]
-fn m7_string_byte_count_returns_int() {
-    // WHY: .byteCount() returns int. Distinct from .count() (code-point count)
-    // and .graphemeCount() (grapheme cluster count). Must not be confused.
-    check_no_diags(
+}"#
+        => clean;
+    string_byte_count_returns_int:
         r#"function entrypoint() -> Nothing {
     let s = `café`
     let n: Int = s.byteCount()
-}"#,
-    );
-}
-
-#[test]
-fn m7_string_grapheme_count_returns_int() {
-    // WHY: .graphemeCount() returns int for grapheme-cluster-aware length.
-    check_no_diags(
+}"#
+        => clean;
+    string_grapheme_count_returns_int:
         r#"function entrypoint() -> Nothing {
     let s = `café`
     let n: Int = s.graphemeCount()
-}"#,
-    );
-}
-
-// ── 2. One-arg string predicate methods return bool ──────────────────────────
-
-#[test]
-fn m7_string_contains_returns_bool() {
-    // WHY: .contains(substr) returns bool. If it returns something else,
-    // conditional expressions using it would get a type mismatch.
-    check_no_diags(
+}"#
+        => clean;
+    string_contains_returns_bool:
         r#"function entrypoint() -> Nothing {
     let s = `hello world`
     let b: Boolean = s.contains(`world`)
-}"#,
-    );
-}
-
-#[test]
-fn m7_string_starts_with_returns_bool() {
-    // WHY: .startsWith(prefix) returns bool.
-    check_no_diags(
+}"#
+        => clean;
+    string_starts_with_returns_bool:
         r#"function entrypoint() -> Nothing {
     let s = `hello`
     let b: Boolean = s.startsWith(`he`)
-}"#,
-    );
-}
-
-#[test]
-fn m7_string_ends_with_returns_bool() {
-    // WHY: .endsWith(suffix) returns bool.
-    check_no_diags(
+}"#
+        => clean;
+    string_ends_with_returns_bool:
         r#"function entrypoint() -> Nothing {
     let s = `hello`
     let b: Boolean = s.endsWith(`lo`)
-}"#,
-    );
-}
-
-// ── 3. Indexed access methods return maybe types ─────────────────────────────
-
-#[test]
-fn m7_string_index_of_returns_maybe_int() {
-    // WHY: .indexOf() returns Maybe<Int> because the substring may not be found.
-    // If it returned plain int, callers would skip the none-check and crash.
-    check_no_diags(
+}"#
+        => clean;
+    string_index_of_returns_maybe_int:
         r#"function entrypoint() -> Nothing {
     let s = `hello`
     let idx: Maybe<Int> = s.indexOf(`ll`)
-}"#,
-    );
-}
-
-#[test]
-fn m7_string_byte_at_returns_maybe_int() {
-    // WHY: .byteAt(n) returns Maybe<Int> — out-of-bounds returns none.
-    check_no_diags(
+}"#
+        => clean;
+    string_byte_at_returns_maybe_int:
         r#"function entrypoint() -> Nothing {
     let s = `hello`
     let b: Maybe<Int> = s.byteAt(2)
-}"#,
-    );
-}
-
-#[test]
-fn m7_string_grapheme_at_returns_maybe_string() {
-    // WHY: .graphemeAt(n) returns Maybe<String> — grapheme-cluster-aware access.
-    check_no_diags(
+}"#
+        => clean;
+    string_grapheme_at_returns_maybe_string:
         r#"function entrypoint() -> Nothing {
     let s = `café`
     let g: Maybe<String> = s.graphemeAt(0)
-}"#,
-    );
-}
-
-#[test]
-fn m7_string_get_returns_maybe_string() {
-    // WHY: .get(n) returns Maybe<String> (one code point). This is also what
-    // bracket access s[n] desugars to, so the type must be consistent.
-    check_no_diags(
+}"#
+        => clean;
+    string_get_returns_maybe_string:
         r#"function entrypoint() -> Nothing {
     let s = `hello`
     let c: Maybe<String> = s.get(0)
-}"#,
-    );
-}
-
-// ── 4. Multi-arg string methods return correct types ─────────────────────────
-
-#[test]
-fn m7_string_substring_returns_string() {
-    // WHY: .substring(start, end) returns a new string slice.
-    check_no_diags(
+}"#
+        => clean;
+    string_substring_returns_string:
         r#"function entrypoint() -> Nothing {
     let s = `hello world`
     let sub: String = s.substring(0, 5)
-}"#,
-    );
-}
-
-#[test]
-fn m7_string_split_returns_array_of_string() {
-    // WHY: .split(sep) returns Array<String>. If the element type were wrong,
-    // any for-loop or map over the split result would produce spurious errors.
-    check_no_diags(
+}"#
+        => clean;
+    string_split_returns_array_of_string:
         r#"function entrypoint() -> Nothing {
     let s = `a,b,c`
     let parts: Array<String> = s.split(`,`)
-}"#,
-    );
-}
-
-#[test]
-fn m7_string_replace_returns_string() {
-    // WHY: .replace(old, new) returns the modified string.
-    check_no_diags(
+}"#
+        => clean;
+    string_replace_returns_string:
         r#"function entrypoint() -> Nothing {
     let s = `hello world`
     let r: String = s.replace(`world`, `yinz`)
-}"#,
-    );
-}
-
-// ── 5. Interpolated string typechecking ─────────────────────────────────────
-
-#[test]
-fn m7_interpolated_string_with_int_is_clean() {
-    // WHY: Int is a primitive type — always stringifiable. Must not produce
-    // a diagnostic. If it did, every `print(`count is ${n}`)` would fail.
-    check_no_diags(
+}"#
+        => clean;
+    interpolated_string_with_int_is_clean:
         r#"function entrypoint() -> Nothing {
     let n = 42
     let s = `count is ${n}`
-}"#,
-    );
-}
-
-#[test]
-fn m7_interpolated_string_with_bool_is_clean() {
-    // WHY: bool is primitive — always stringifiable.
-    check_no_diags(
+}"#
+        => clean;
+    interpolated_string_with_bool_is_clean:
         r#"function entrypoint() -> Nothing {
     let b = true
     let s = `active: ${b}`
-}"#,
-    );
-}
-
-#[test]
-fn m7_interpolated_string_with_float_is_clean() {
-    // WHY: Float is primitive — always stringifiable.
-    check_no_diags(
+}"#
+        => clean;
+    interpolated_string_with_float_is_clean:
         r#"function entrypoint() -> Nothing {
     let f: Float = 3.14
     let s = `pi is ${f}`
-}"#,
-    );
-}
-
-#[test]
-fn m7_interpolated_string_with_string_is_clean() {
-    // WHY: String inside interpolation is trivially stringifiable.
-    check_no_diags(
+}"#
+        => clean;
+    interpolated_string_with_string_is_clean:
         r#"function entrypoint() -> Nothing {
     let name = `world`
     let s = `hello ${name}`
-}"#,
-    );
-}
-
-#[test]
-fn m7_interpolated_string_with_shape_with_to_string_is_clean() {
-    // WHY: a shape with a standalone toString function must be accepted in
-    // interpolation. If it's rejected, user shapes would be un-usable in templates.
-    check_no_diags(
+}"#
+        => clean;
+    interpolated_string_with_shape_with_to_string_is_clean:
         r#"shape Player {
     name: String
 }
@@ -310,16 +190,9 @@ function toString(share self: Player) -> String {
 function entrypoint() -> Nothing {
     let p: Player = { name: `Patrick` }
     let s = `player: ${p}`
-}"#,
-    );
-}
-
-#[test]
-fn m7_interpolated_string_with_shape_without_to_string_produces_error() {
-    // WHY: a shape without toString must be rejected in interpolation with a
-    // clear "add a toString function" message. Without this check, codegen
-    // would try to call a non-existent function at runtime.
-    check_diag_count(
+}"#
+        => clean;
+    interpolated_string_with_shape_without_to_string_produces_error:
         r#"shape Enemy {
     name: String
 }
@@ -327,91 +200,30 @@ fn m7_interpolated_string_with_shape_without_to_string_produces_error() {
 function entrypoint() -> Nothing {
     let e: Enemy = { name: `Goblin` }
     let s = `enemy: ${e}`
-}"#,
-        1,
-    );
-}
-
-#[test]
-fn m7_interpolated_string_error_message_mentions_to_string() {
-    // WHY: the diagnostic message must guide the user to add the toString
-    // function — without this, they have no hint on how to fix the error.
-    check_has_diag(
-        r#"shape Enemy {
-    name: String
-}
-
-function entrypoint() -> Nothing {
-    let e: Enemy = { name: `Goblin` }
-    let s = `enemy: ${e}`
-}"#,
-        "toString",
-    );
-}
-
-// ── 6. Unknown string method produces diagnostic ─────────────────────────────
-
-#[test]
-fn m7_string_unknown_method_produces_error() {
-    // WHY: calling a non-existent method on string must produce a compile error.
-    // Without this, the codegen would try to emit a call to a non-existent function.
-    check_diag_count(
+}"#
+        => 1;
+    string_unknown_method_produces_error:
         r#"function entrypoint() -> Nothing {
     let s = `hello`
     let x = s.nonExistent()
-}"#,
-        1,
-    );
-}
-
-#[test]
-fn m7_string_unknown_method_mentions_available_methods() {
-    // WHY: the error message must list available string methods so the user
-    // can find the right one. Without this, they'd have to read the spec.
-    check_has_diag(
-        r#"function entrypoint() -> Nothing {
-    let s = `hello`
-    let x = s.nonExistent()
-}"#,
-        "contains",
-    );
-}
-
-// ── 7. Bracket access desugars to .get() → Maybe<String> ────────────────────
-
-#[test]
-fn m7_string_bracket_access_returns_maybe_string() {
-    // WHY: s[n] desugars to s.get(n) which returns Maybe<String>. If this
-    // were not checked, the type would be wrong for any downstream use.
-    check_no_diags(
+}"#
+        => 1;
+    string_bracket_access_returns_maybe_string:
         r#"function entrypoint() -> Nothing {
     let s = `hello`
     let c: Maybe<String> = s[0]
-}"#,
-    );
-}
-
-// ── 8. Existing M6 string conversions still work ─────────────────────────────
-
-#[test]
-fn m7_string_to_int_still_works() {
-    // WHY: .toInt() was added in M6 and must still typecheck correctly alongside
-    // the new M7 string methods. Non-regression guard.
-    check_no_diags(
+}"#
+        => clean;
+    string_to_int_still_works:
         r#"function entrypoint() -> Nothing {
     let s = `42`
     let n: Maybe<Int> = s.toInt()
-}"#,
-    );
-}
-
-#[test]
-fn m7_string_to_float_still_works() {
-    // WHY: .toFloat() was added in M6 — same non-regression guard.
-    check_no_diags(
+}"#
+        => clean;
+    string_to_float_still_works:
         r#"function entrypoint() -> Nothing {
     let s = `3.14`
     let f: Maybe<Float> = s.toFloat()
-}"#,
-    );
+}"#
+        => clean;
 }

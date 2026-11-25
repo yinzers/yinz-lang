@@ -48,9 +48,23 @@ fn assert_moves(program: &str, expectations: &[(&str, usize, bool)]) {
     }
 }
 
-macro_rules! move_cases {
+macro_rules! high_move_cases {
     ($($case:ident: $program:expr, [$($expectation:expr),+ $(,)?], $bug:literal;)+) => {
         $(
+            // bug: typeck's string-move record marks a store a move while another holder can still read the string (double free or use-after-free) | tier: High
+            #[doc = $bug]
+            #[test]
+            fn $case() {
+                assert_moves(&format!("{PRELUDE}{}", $program), &[$($expectation),+]);
+            }
+        )+
+    };
+}
+
+macro_rules! medium_move_cases {
+    ($($case:ident: $program:expr, [$($expectation:expr),+ $(,)?], $bug:literal;)+) => {
+        $(
+            // bug: typeck's string-move record misses a last use or fresh string, so the store copies where Rust moves (extra allocation) | tier: Medium
             #[doc = $bug]
             #[test]
             fn $case() {
@@ -62,12 +76,7 @@ macro_rules! move_cases {
 
 const PRELUDE: &str = "shape Bag {\n  items: Array<String>\n  label: String\n}\n";
 
-move_cases! {
-    the_last_read_of_a_local_is_a_move:
-        "function entrypoint() -> Nothing {\n  let n: Int = 1\n  let keep: String = `a-${n}`\n  let other: String = keep\n  print(other)\n}\n",
-        [("keep", 2, true), ("other", 2, true)],
-        "a last read taken by copy where Rust moves (cost), or a binding whose only read is the last one treated as live (High)";
-
+high_move_cases! {
     a_read_followed_by_another_read_is_not_a_move:
         "function entrypoint() -> Nothing {\n  let n: Int = 1\n  let keep: String = `a-${n}`\n  let other: String = keep\n  print(keep)\n}\n",
         [("keep", 2, false), ("keep", 3, true)],
@@ -83,25 +92,10 @@ move_cases! {
         [("keep", 2, false)],
         "the loop's second pass stores the string it already moved on the first (High)";
 
-    a_binding_declared_in_the_loop_is_a_move_each_pass:
-        "function entrypoint() -> Nothing {\n  let n: Int = 1\n  let bag: Bag = { items: [`x`], label: `y` }\n  for (i in range(0, 3)) {\n    let each: String = `a-${n}`\n    bag.items.add(each)\n  }\n}\n",
-        [("each", 2, true)],
-        "a per-pass local treated as live across passes, copying where Rust moves (cost)";
-
     a_read_in_a_branch_followed_by_a_read_is_not_a_move:
         "function entrypoint() -> Nothing {\n  let n: Int = 1\n  let keep: String = `a-${n}`\n  let bag: Bag = { items: [`x`], label: `y` }\n  if (n == 1) {\n    bag.items.add(keep)\n  }\n  print(keep)\n}\n",
         [("keep", 2, false), ("keep", 3, true)],
         "a branch moves a string the code after the branch still reads (High)";
-
-    a_read_in_a_branch_with_no_later_read_is_a_move:
-        "function entrypoint() -> Nothing {\n  let n: Int = 1\n  let keep: String = `a-${n}`\n  let bag: Bag = { items: [`x`], label: `y` }\n  if (n == 1) {\n    bag.items.add(keep)\n  }\n}\n",
-        [("keep", 2, true)],
-        "a conditional last use copied where Rust moves (cost)";
-
-    a_returned_local_moves_even_when_code_after_the_return_reads_it:
-        "function build(n: Int) -> String {\n  let keep: String = `a-${n}`\n  if (n == 1) {\n    return keep\n  }\n  return keep\n}\nfunction entrypoint() -> Nothing {\n  print(build(1))\n}\n",
-        [("keep", 2, true), ("keep", 3, true)],
-        "a `return` that leaves the function treated as followed by the code after it, so every return copies (cost)";
 
     a_parameter_is_never_a_move:
         "function pass(text: String) -> String {\n  return text\n}\nfunction entrypoint() -> Nothing {\n  print(pass(`x`))\n}\n",
@@ -112,17 +106,6 @@ move_cases! {
         "function entrypoint() -> Nothing {\n  let n: Int = 1\n  let keep: String = `a-${n}`\n  if (n == 1) {\n    let keep: String = `b-${n}`\n    let inner: String = keep\n    print(inner)\n  }\n  print(keep)\n}\n",
         [("keep", 2, false), ("keep", 3, true), ("keep", 4, true)],
         "the inner `keep`'s last read counted as a read of the outer one (or the reverse), moving a live string (High)";
-
-    fresh_strings_are_moves:
-        "function make(n: Int) -> String {\n  return `m-${n}`\n}\nfunction entrypoint() -> Nothing {\n  let n: Int = 1\n  let a: String = `a-${n}`\n  let b: String = n.toString()\n  let c: String = a.toUpperCase()\n  let d: String = make(n)\n  let e: String = a.copy()\n  print(`${a}${b}${c}${d}${e}`)\n}\n",
-        [
-            ("`a-${n}`", 1, true),
-            ("n.toString()", 1, true),
-            ("a.toUpperCase()", 1, true),
-            ("make(n)", 1, true),
-            ("a.copy()", 1, true),
-        ],
-        "a fresh string copied at its store, or an `Int` toString (a heap string since C3a) treated as borrowed (cost)";
 
     a_builtin_method_is_not_a_function_call_of_the_same_name:
         "function or(first: String, second: String) -> String {\n  return second\n}\nfunction entrypoint() -> Nothing {\n  let names: Array<String> = [`a`]\n  let got: String = names[0].or(`none`)\n  print(got)\n}\n",
@@ -144,16 +127,6 @@ move_cases! {
         [("keep", 2, false), ("keep", 3, true)],
         "a multi-case `if` arm moves a string the code after the `if` still reads (High)";
 
-    a_read_in_each_of_two_arms_is_a_move_in_both:
-        "function entrypoint() -> Nothing {\n  let n: Int = 1\n  let keep: String = `a-${n}`\n  let bag: Bag = { items: [`x`], label: `y` }\n  if (n) {\n    1 => {\n      bag.items.add(keep)\n    }\n    else => {\n      bag.items.add(keep)\n    }\n  }\n}\n",
-        [("keep", 2, true), ("keep", 3, true)],
-        "an arm's last use treated as live because a sibling arm, which never runs after it, reads the same binding (cost)";
-
-    a_binding_moved_into_another_and_then_reassigned_is_a_move:
-        "function entrypoint() -> Nothing {\n  let n: Int = 1\n  let first: String = `a-${n}`\n  let second: String = first\n  first = `b-${n}`\n  print(second)\n}\n",
-        [("first", 2, true)],
-        "`let b = a; a = x`: the read of `a` copied although the assignment overwrites `a`, so no later read of the old value exists (cost)";
-
     a_binding_moved_into_another_and_read_after_reassignment_is_not_a_move:
         "function entrypoint() -> Nothing {\n  let n: Int = 1\n  let first: String = `a-${n}`\n  let second: String = first\n  first = `b-${n}`\n  print(first)\n  print(second)\n}\n",
         [("first", 2, false), ("first", 4, true)],
@@ -164,18 +137,87 @@ move_cases! {
         [("each", 2, false), ("each", 3, true)],
         "a per-pass binding moved at its first read and read again later in the same pass (High)";
 
+    a_literal_is_not_a_move:
+        "function entrypoint() -> Nothing {\n  let literal: String = `plain`\n  print(literal)\n}\n",
+        [("`plain`", 1, false)],
+        "a literal, an element, an `.or()` result or a static `Boolean` name stored without a copy: a later release frees static or shared bytes (High)";
+
+    an_array_literal_element_is_not_a_move:
+        "function entrypoint() -> Nothing {\n  let names: Array<String> = [`a`]\n  print(names[0].or(`none`))\n}\n",
+        [("`a`", 1, false)],
+        "a literal, an element, an `.or()` result or a static `Boolean` name stored without a copy: a later release frees static or shared bytes (High)";
+
+    an_or_result_of_an_element_is_not_a_move:
+        "function entrypoint() -> Nothing {\n  let names: Array<String> = [`a`]\n  let element: String = names[0].or(`none`)\n  print(element)\n}\n",
+        [("names[0].or(`none`)", 1, false)],
+        "a literal, an element, an `.or()` result or a static `Boolean` name stored without a copy: a later release frees static or shared bytes (High)";
+
+    a_static_boolean_name_is_not_a_move:
+        "function entrypoint() -> Nothing {\n  let flag: Boolean = true\n  let shown: String = flag.toString()\n  print(shown)\n}\n",
+        [("flag.toString()", 1, false)],
+        "a literal, an element, an `.or()` result or a static `Boolean` name stored without a copy: a later release frees static or shared bytes (High)";
+}
+
+// Medium cases: eight distinct last-use / fresh-form boundaries of one unit (record of movable
+// reads), each a different construct, kept as named cases of this one table.
+medium_move_cases! {
+    the_last_read_of_a_local_is_a_move:
+        "function entrypoint() -> Nothing {\n  let n: Int = 1\n  let keep: String = `a-${n}`\n  let other: String = keep\n  print(other)\n}\n",
+        [("keep", 2, true), ("other", 2, true)],
+        "a last read taken by copy where Rust moves (cost), or a binding whose only read is the last one treated as live (High)";
+
+    a_binding_declared_in_the_loop_is_a_move_each_pass:
+        "function entrypoint() -> Nothing {\n  let n: Int = 1\n  let bag: Bag = { items: [`x`], label: `y` }\n  for (i in range(0, 3)) {\n    let each: String = `a-${n}`\n    bag.items.add(each)\n  }\n}\n",
+        [("each", 2, true)],
+        "a per-pass local treated as live across passes, copying where Rust moves (cost)";
+
+    a_read_in_a_branch_with_no_later_read_is_a_move:
+        "function entrypoint() -> Nothing {\n  let n: Int = 1\n  let keep: String = `a-${n}`\n  let bag: Bag = { items: [`x`], label: `y` }\n  if (n == 1) {\n    bag.items.add(keep)\n  }\n}\n",
+        [("keep", 2, true)],
+        "a conditional last use copied where Rust moves (cost)";
+
+    a_returned_local_moves_even_when_code_after_the_return_reads_it:
+        "function build(n: Int) -> String {\n  let keep: String = `a-${n}`\n  if (n == 1) {\n    return keep\n  }\n  return keep\n}\nfunction entrypoint() -> Nothing {\n  print(build(1))\n}\n",
+        [("keep", 2, true), ("keep", 3, true)],
+        "a `return` that leaves the function treated as followed by the code after it, so every return copies (cost)";
+
+    a_built_interpolation_is_fresh:
+        "function entrypoint() -> Nothing {\n  let n: Int = 1\n  let a: String = `a-${n}`\n  print(a)\n}\n",
+        [("`a-${n}`", 1, true)],
+        "a fresh string copied at its store, or an `Int` toString (a heap string since C3a) treated as borrowed (cost)";
+
+    an_int_to_string_is_fresh:
+        "function make(n: Int) -> String {\n  return `m-${n}`\n}\nfunction entrypoint() -> Nothing {\n  let n: Int = 1\n  let a: String = `x`\n  let b: String = n.toString()\n  print(b)\n  print(a)\n}\n",
+        [("n.toString()", 1, true)],
+        "a fresh string copied at its store, or an `Int` toString (a heap string since C3a) treated as borrowed (cost)";
+
+    an_uppercased_string_is_fresh:
+        "function make(n: Int) -> String {\n  return `m-${n}`\n}\nfunction entrypoint() -> Nothing {\n  let n: Int = 1\n  let a: String = `x`\n  let c: String = a.toUpperCase()\n  print(c)\n  print(a)\n}\n",
+        [("a.toUpperCase()", 1, true)],
+        "a fresh string copied at its store, or an `Int` toString (a heap string since C3a) treated as borrowed (cost)";
+
+    a_function_result_is_fresh:
+        "function make(n: Int) -> String {\n  return `m-${n}`\n}\nfunction entrypoint() -> Nothing {\n  let n: Int = 1\n  let a: String = `x`\n  let d: String = make(n)\n  print(d)\n  print(a)\n}\n",
+        [("make(n)", 1, true)],
+        "a fresh string copied at its store, or an `Int` toString (a heap string since C3a) treated as borrowed (cost)";
+
+    a_copy_is_fresh:
+        "function make(n: Int) -> String {\n  return `m-${n}`\n}\nfunction entrypoint() -> Nothing {\n  let n: Int = 1\n  let a: String = `x`\n  let e: String = a.copy()\n  print(e)\n  print(a)\n}\n",
+        [("a.copy()", 1, true)],
+        "a fresh string copied at its store, or an `Int` toString (a heap string since C3a) treated as borrowed (cost)";
+
+    a_read_in_each_of_two_arms_is_a_move_in_both:
+        "function entrypoint() -> Nothing {\n  let n: Int = 1\n  let keep: String = `a-${n}`\n  let bag: Bag = { items: [`x`], label: `y` }\n  if (n) {\n    1 => {\n      bag.items.add(keep)\n    }\n    else => {\n      bag.items.add(keep)\n    }\n  }\n}\n",
+        [("keep", 2, true), ("keep", 3, true)],
+        "an arm's last use treated as live because a sibling arm, which never runs after it, reads the same binding (cost)";
+
+    a_binding_moved_into_another_and_then_reassigned_is_a_move:
+        "function entrypoint() -> Nothing {\n  let n: Int = 1\n  let first: String = `a-${n}`\n  let second: String = first\n  first = `b-${n}`\n  print(second)\n}\n",
+        [("first", 2, true)],
+        "`let b = a; a = x`: the read of `a` copied although the assignment overwrites `a`, so no later read of the old value exists (cost)";
+
     a_function_called_with_a_shape_receiver_is_fresh:
         "shape Tag {\n  name: String\n}\nfunction label(tag: Tag) -> String {\n  return `L-${tag.name}`\n}\nfunction entrypoint() -> Nothing {\n  let tag: Tag = { name: `t` }\n  let text: String = tag.label()\n  print(text)\n}\n",
         [("tag.label()", 1, true)],
         "a dot-call of a function on a shape receiver copied where Rust moves (cost)";
-
-    borrowed_strings_are_not_moves:
-        "function entrypoint() -> Nothing {\n  let n: Int = 1\n  let flag: Boolean = true\n  let names: Array<String> = [`a`]\n  let literal: String = `plain`\n  let element: String = names[0].or(`none`)\n  let shown: String = flag.toString()\n  print(`${literal}${element}${shown}${n}`)\n}\n",
-        [
-            ("`plain`", 1, false),
-            ("names[0].or(`none`)", 1, false),
-            ("flag.toString()", 1, false),
-            ("`a`", 1, false),
-        ],
-        "a literal, an element, an `.or()` result or a static `Boolean` name stored without a copy: a later release frees static or shared bytes (High)";
 }

@@ -380,8 +380,8 @@ fn skip_char_literal_or_lifetime(bytes: &[u8], quote_position: usize) -> usize {
 mod tests {
     use super::*;
 
-    // Bug it catches: a rename offset drifting after an escape earlier in the literal
-    // (`\n` is one decoded byte but two source bytes).
+    // `\n` is one decoded byte but two source bytes.
+    // bug: a rename offset drifts after an escape earlier in the literal and corrupts the Yinz text inside the string | tier: High
     #[test]
     fn renames_land_on_the_right_bytes_after_escapes() {
         let source =
@@ -394,7 +394,7 @@ mod tests {
         assert_eq!(rewrite.renames, 3);
     }
 
-    // Bug it catches: rewriting an expected-diagnostic string, which names the old spelling on purpose.
+    // bug: the codemod rewrites an expected-diagnostic string, which names the old spelling on purpose, and changes what the test asserts | tier: High
     #[test]
     fn text_that_is_not_a_whole_yinz_file_is_left_alone() {
         let source = r#"assert!(message.contains("`int` is not a type name"));"#;

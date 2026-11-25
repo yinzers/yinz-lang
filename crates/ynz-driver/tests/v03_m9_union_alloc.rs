@@ -3,9 +3,10 @@
 //! NOTHING. Only a recursive union boxes its shape variant, one heap cell per box a stored value owns (the cost of
 //! `Box<T>` in a Rust enum).
 //!
-//! Tier: High (data integrity: the layout is the contract C6's release helper reads; an
-//! allocation hiding in a hot store is a Golden Rule 6 regression). Each fixture runs its
-//! operation in a loop, so a per-operation allocation shows as a count that scales with the loop.
+//! Each fixture runs its operation in a loop, so a per-operation allocation shows as a count that
+//! scales with the loop. The Medium table counts extra work (an allocation hiding in a hot store is
+//! a Golden Rule 6 regression); the High table counts the cells a copy must make: fewer would mean
+//! the copy shares its source's boxes, and C6's release helper would free them twice.
 
 mod support;
 
@@ -21,16 +22,7 @@ fn heap_allocations(fixture: &str, expected_stdout: &str) -> u64 {
     counters.alloc
 }
 
-// Bug caught: an `errors` result whose success word cannot hold a slot re-homes the union in two
-// heap cells per call (300 calls = 600 allocations before the by-value result).
-#[test]
-fn errors_return_allocates_nothing() {
-    assert_eq!(
-        heap_allocations("v0_3_m9_union_alloc_errors.ynz", "44850\n"),
-        0,
-        "an `errors` return of a union must not allocate"
-    );
-}
+// ── helpers ────────────────────────────────────────────────────────────────────────────────
 
 /// `fixture` and its `baseline` (the same program over `int`) must allocate the same number of
 /// times: the union adds nothing. Both must print what they print and run clean.
@@ -48,213 +40,12 @@ fn assert_allocates_like_int(
     );
 }
 
-// Bug caught: a returned union re-homed in heap cells (#410's `Return` home, two cells per call).
-#[test]
-fn union_return_allocates_nothing() {
-    assert_eq!(
-        heap_allocations("v0_3_m9_union_alloc_return.ynz", "22950\n"),
-        0,
-        "a returned union must not allocate"
-    );
-}
-
-// Bug caught: a union field was a pointer to an envelope plus a payload cell, and a hidden default
-// into one (#421) took two counted cells per construction.
-#[test]
-fn union_shape_field_and_hidden_default_allocate_nothing() {
-    assert_eq!(
-        heap_allocations("v0_3_m9_union_alloc_field.ynz", "23250\n"),
-        0,
-        "a shape with a union field, and its hidden default, must not allocate"
-    );
-}
-
-// Bug caught: a `wait`-staged union argument took two counted cells per call (#410's heap home).
-#[test]
-fn union_wait_arg_allocates_like_int() {
-    assert_allocates_like_int(
-        "v0_3_m9_union_alloc_wait_arg.ynz",
-        "5150\n",
-        "v0_3_m9_union_alloc_wait_arg_int.ynz",
-        "5000\n",
-    );
-}
-
-// Bug caught: a union binding crossing a `wait` was two counted cells (`union_to_heap_cell`).
-#[test]
-fn union_crossing_binding_allocates_like_int() {
-    assert_allocates_like_int(
-        "v0_3_m9_union_alloc_crossing.ynz",
-        "33\n",
-        "v0_3_m9_union_alloc_crossing_int.ynz",
-        "33\n",
-    );
-}
-
-// Bug caught: an array element or map value was an envelope pointer plus a payload cell.
-#[test]
-fn union_container_store_allocates_like_int() {
-    assert_allocates_like_int(
-        "v0_3_m9_union_alloc_container.ynz",
-        "22950\n",
-        "v0_3_m9_union_alloc_container_int.ynz",
-        "44850\n",
-    );
-}
-
-// A recursive union cannot hold its payload inline: one heap cell per box. Each build stores an
-// `End`, a `Node` and a `Node` into `next` fields, and each store MOVES its value (the language
-// refuses a read of the source afterwards), as `Box::new(prev)` does in Rust: one cell per box
-// created, no clone. 100 builds x 3 cells.
-// Bug caught: every store deep-cloned the chain it was given (1 + 2 + 3 cells per build, 600),
-// above Rust's cost for a move (Golden Rule 6).
-#[test]
-fn recursive_union_store_allocates_one_cell_per_box() {
-    assert_eq!(
-        heap_allocations("v0_3_m9_union_alloc_recursive.ynz", "100\n"),
-        300,
-        "100 builds x 3 moved boxes must make 300 cells and nothing else"
-    );
-}
-
-// Bug caught: storing a recursive union copied the variant's bytes into ONE new cell, so the nested
-// cells of the original and the copy were the same cells and a recursive release (C6) would free
-// them twice. An explicit `.copy()` of the four-cell chain makes four cells per copy (the three
-// boxes the chain owns, then the binding's box takes the copy by move): 100 copies, 400 more than
-// the chain built alone.
-#[test]
-fn recursive_union_copy_clones_every_cell() {
-    let chain_alone = heap_allocations("v0_3_m9_union_alloc_recursive_chain.ynz", "100\n");
-    let with_copies = heap_allocations("v0_3_m9_union_alloc_recursive_copy.ynz", "300\n");
-    assert_eq!(
-        with_copies - chain_alone,
-        400,
-        "100 copies of a four-cell chain must make 400 cells; chain alone {chain_alone}, with copies {with_copies}"
-    );
-}
-
-// Bug caught: a store of a chain nobody reads again deep-cloned it (four cells) where Rust moves
-// the `Box`: the move needs only the binding's own cell, one per store.
-#[test]
-fn recursive_union_move_clones_nothing() {
-    let chain_alone = heap_allocations("v0_3_m9_union_alloc_recursive_chain.ynz", "100\n");
-    let with_moves = heap_allocations("v0_3_m9_union_alloc_recursive_move.ynz", "300\n");
-    assert_eq!(
-        with_moves - chain_alone,
-        100,
-        "100 moves of a chain must make one cell each; chain alone {chain_alone}, with moves {with_moves}"
-    );
-}
-
 /// How many more cells `fixture` allocates than `baseline`, both run clean and printing what they
 /// print.
 fn extra_cells(baseline: (&str, &str), fixture: (&str, &str)) -> u64 {
     let baseline_cells = heap_allocations(baseline.0, baseline.1);
     let fixture_cells = heap_allocations(fixture.0, fixture.1);
     fixture_cells - baseline_cells
-}
-
-// Shape byte copies of a shape that owns a recursive union (`shape_bytes_to_owned`,
-// `shape_bytes_to_heap_cell`, `maybe_payload_stable_bits`, `.copy()`, an array store). A holder
-// built with makeHolder owns four cells. Bug caught by each: a copy that shared its source's
-// boxes (a release of both frees them twice), and, after the deep-copy fix, a MOVE that still
-// cloned them (above Rust's cost).
-
-#[test]
-fn shape_move_into_a_binding_clones_nothing() {
-    assert_eq!(
-        heap_allocations("v0_3_m9_union_alloc_shape_moved_binding.ynz", "100\n"),
-        400,
-        "100 holders x 4 cells, moved into a binding with no clone"
-    );
-}
-
-#[test]
-fn shape_explicit_copy_is_deep_even_when_the_source_is_not_read_again() {
-    let extra = extra_cells(
-        ("v0_3_m9_union_alloc_shape_moved_binding.ynz", "100\n"),
-        ("v0_3_m9_union_alloc_shape_explicit_copy.ynz", "200\n"),
-    );
-    assert_eq!(
-        extra, 400,
-        "`.copy()` of a holder clones its four cells, once"
-    );
-}
-
-#[test]
-fn shape_field_store_moves_a_binding_and_copies_a_copy_once() {
-    let moved = extra_cells(
-        ("v0_3_m9_union_alloc_shape_moved_binding.ynz", "100\n"),
-        ("v0_3_m9_union_alloc_shape_moved_field.ynz", "200\n"),
-    );
-    assert_eq!(
-        moved, 100,
-        "a moved holder costs the field's own cell, nothing else"
-    );
-    let copied = extra_cells(
-        ("v0_3_m9_union_alloc_shape_moved_field.ynz", "200\n"),
-        ("v0_3_m9_union_alloc_shape_copied_field.ynz", "300\n"),
-    );
-    assert_eq!(
-        copied, 400,
-        "a copy stored in a field is cloned once (four cells), not again by the store"
-    );
-}
-
-#[test]
-fn shape_binding_of_a_field_read_is_a_view_until_the_place_is_written() {
-    let view_extra = extra_cells(
-        ("v0_3_m9_union_alloc_shape_moved_field.ynz", "200\n"),
-        ("v0_3_m9_union_alloc_shape_view_binding.ynz", "300\n"),
-    );
-    assert_eq!(
-        view_extra, 0,
-        "`let copied = outer.inner` only reads the field, so it is a view and clones nothing"
-    );
-    let copy_extra = extra_cells(
-        ("v0_3_m9_union_alloc_shape_moved_field.ynz", "200\n"),
-        ("v0_3_m9_union_alloc_shape_alias_binding.ynz", "400\n"),
-    );
-    assert_eq!(
-        copy_extra, 400,
-        "the field is written while the binding is read, so the binding clones four cells"
-    );
-}
-
-#[test]
-fn shape_array_store_moves_a_binding_and_copies_a_copy_once() {
-    let extra = extra_cells(
-        ("v0_3_m9_union_alloc_shape_moved_array.ynz", "100\n"),
-        ("v0_3_m9_union_alloc_shape_copied_array.ynz", "200\n"),
-    );
-    assert_eq!(
-        extra, 400,
-        "an array store of a copy clones four cells, once"
-    );
-}
-
-#[test]
-fn shape_returned_parameter_is_copied_once_by_the_binding() {
-    let extra = extra_cells(
-        ("v0_3_m9_union_alloc_shape_moved_binding.ynz", "100\n"),
-        ("v0_3_m9_union_alloc_shape_returned_parameter.ynz", "200\n"),
-    );
-    assert_eq!(
-        extra, 400,
-        "the alias binding of a returned parameter clones four cells; the return clones none"
-    );
-}
-
-#[test]
-fn maybe_payload_binding_of_an_element_read_is_a_view() {
-    let extra = extra_cells(
-        ("v0_3_m9_union_alloc_shape_maybe_read_once.ynz", "1\n"),
-        ("v0_3_m9_union_alloc_shape_maybe_read.ynz", "100\n"),
-    );
-    assert_eq!(
-        extra, 0,
-        "99 more reads of a `maybe<Holder>` element that is not written are views: no cells"
-    );
 }
 
 /// A walk of a `chain_length`-link chain must add no cells to the build that made the chain.
@@ -273,62 +64,245 @@ fn assert_walk_allocates_nothing(chain_length: u32, walk_output: &str) {
     );
 }
 
-// Bug caught: `let rest = head.next` copied the whole remaining chain at every step of a recursive
-// walk (N(N+1)/2 cells per walk: 55 at N=10, 5050 at N=100), where a Rust borrow costs none
-// (Golden Rule 6). The binding only reads a field of a `share` parameter, so it is a view and the
-// walks (`sum` and `depth`) allocate nothing: the same cells as only building the chain.
-#[test]
-fn recursive_walk_over_a_field_read_allocates_nothing_at_10_links() {
-    assert_walk_allocates_nothing(10, "45\n10\n");
+// ── High: a copy makes every cell it owes ──────────────────────────────────────────────────
+
+/// One named test per copy form of the `union box copy depth` run unit; each asserts the exact cells
+/// the copy makes (fewer would mean it shares its source's boxes).
+macro_rules! union_copy_depth_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a copy of a value that owns recursive-union boxes shares them with its source (or a view outlives the place it reads), so a release frees them twice or reads freed memory | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
 }
 
-#[test]
-fn recursive_walk_over_a_field_read_allocates_nothing_at_100_links() {
-    assert_walk_allocates_nothing(100, "4950\n100\n");
+union_copy_depth_high_case! {
+    // case: storing a recursive union copied the variant's bytes into ONE new cell, so the nested cells of the original and the copy were the same cells and a recursive release (C6) would free them twice. An explicit `.copy()` of the four-cell chain makes four cells per copy (the three boxes the chain owns, then the binding's box takes the copy by move): 100 copies, 400 more than the chain built alone.
+    recursive_union_copy_clones_every_cell => {
+        let chain_alone = heap_allocations("v0_3_m9_union_alloc_recursive_chain.ynz", "100\n");
+        let with_copies = heap_allocations("v0_3_m9_union_alloc_recursive_copy.ynz", "300\n");
+        assert_eq!(
+            with_copies - chain_alone,
+            400,
+            "100 copies of a four-cell chain must make 400 cells; chain alone {chain_alone}, with copies {with_copies}"
+        );
+    }
+    // case: a shape that owns a recursive union is copied by `.copy()` even when the source is not read again: the copy shared its source's boxes (a release of both frees them twice)
+    shape_explicit_copy_is_deep_even_when_the_source_is_not_read_again => {
+        let extra = extra_cells(
+            ("v0_3_m9_union_alloc_shape_moved_binding.ynz", "100\n"),
+            ("v0_3_m9_union_alloc_shape_explicit_copy.ynz", "200\n"),
+        );
+        assert_eq!(
+            extra, 400,
+            "`.copy()` of a holder clones its four cells, once"
+        );
+    }
+    // case: a copy stored in a shape field is cloned once (four cells) and not again by the store; fewer cells means the field shares the copy's boxes
+    shape_field_store_of_a_copy_clones_it_once => {
+        let copied = extra_cells(
+            ("v0_3_m9_union_alloc_shape_moved_field.ynz", "200\n"),
+            ("v0_3_m9_union_alloc_shape_copied_field.ynz", "300\n"),
+        );
+        assert_eq!(
+            copied, 400,
+            "a copy stored in a field is cloned once (four cells), not again by the store"
+        );
+    }
+    // case: `let alias = outer.inner` while the field is written afterwards must clone: a view over a place that is written points at freed boxes
+    shape_binding_of_a_field_read_copies_when_the_place_is_written => {
+        let copy_extra = extra_cells(
+            ("v0_3_m9_union_alloc_shape_moved_field.ynz", "200\n"),
+            ("v0_3_m9_union_alloc_shape_alias_binding.ynz", "400\n"),
+        );
+        assert_eq!(
+            copy_extra, 400,
+            "the field is written while the binding is read, so the binding clones four cells"
+        );
+    }
+    // case: an array store of a copy clones its four cells once; fewer means the element shares the copy's boxes
+    shape_array_store_of_a_copy_clones_it_once => {
+        let extra = extra_cells(
+            ("v0_3_m9_union_alloc_shape_moved_array.ynz", "100\n"),
+            ("v0_3_m9_union_alloc_shape_copied_array.ynz", "200\n"),
+        );
+        assert_eq!(
+            extra, 400,
+            "an array store of a copy clones four cells, once"
+        );
+    }
+    // case: the alias binding of a returned parameter clones four cells (the return clones none); fewer means the binding shares the caller's boxes
+    shape_returned_parameter_is_copied_once_by_the_binding => {
+        let extra = extra_cells(
+            ("v0_3_m9_union_alloc_shape_moved_binding.ynz", "100\n"),
+            ("v0_3_m9_union_alloc_shape_returned_parameter.ynz", "200\n"),
+        );
+        assert_eq!(
+            extra, 400,
+            "the alias binding of a returned parameter clones four cells; the return clones none"
+        );
+    }
+    // case: an element view kept pointing at an element the array replaced while the binding was still read (a release, C6, would free the boxes under it). The write breaks (b), so the binding copies: per round a new holder (4 cells) plus the copy (4 cells)
+    maybe_payload_binding_copies_when_the_element_is_replaced => {
+        let extra = extra_cells(
+            (
+                "v0_3_m9_union_alloc_shape_maybe_read_written_once.ynz",
+                "1\n",
+            ),
+            ("v0_3_m9_union_alloc_shape_maybe_read_written.ynz", "100\n"),
+        );
+        assert_eq!(
+            extra,
+            99 * 8,
+            "99 more rounds: a new holder and a four-cell copy each"
+        );
+    }
 }
 
-// Bug caught: `let b = a.g` with `a` itself a view copied the tail again, O(n) cells per read of a
-// chain of aliases where a Rust borrow of a borrow costs none (Golden Rule 6). `held` and `chain`
-// are both views of the `share` parameter, so reading the 100-link chain adds no cells.
-#[test]
-fn a_read_through_a_view_allocates_nothing() {
-    let extra = extra_cells(
-        ("v0_3_m9_union_view_chain_build.ynz", "built\n"),
-        ("v0_3_m9_union_view_chain_walk.ynz", "4950\n"),
-    );
-    assert_eq!(
-        extra, 0,
-        "reading the chain through two views adds no cells"
-    );
+// ── Medium: a store, return, move or view costs no more than the contract allows ────────────
+
+/// One named test per store, return, move or view form of the `union by-value cost` run unit; each
+/// asserts an exact allocation count (more would be extra work, Golden Rule 6).
+macro_rules! union_by_value_cost_medium_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: moving, returning or viewing a union allocates cells a Rust enum move or borrow would not (an extra heap cell per operation), correct output | tier: Medium
+        #[test]
+        fn $case_name() $case_body
+    )+ };
 }
 
-// Bug caught: a function with a suspension point never viewed, so a view read AFTER a `wait`
-// copied the whole chain although it does not cross the suspension. The binding's crossing set
-// decides, not "the function is a state machine".
-#[test]
-fn a_view_that_does_not_cross_a_suspension_allocates_nothing() {
-    let extra = extra_cells(
-        ("v0_3_m9_union_view_suspension_build.ynz", "done\n"),
-        ("v0_3_m9_union_view_suspension_nap.ynz", "4950\n"),
-    );
-    assert_eq!(extra, 0, "reading the chain after the nap adds no cells");
-}
-
-// Bug caught: an element view kept pointing at an element the array replaced while the binding was
-// still read (a release, C6, would free the boxes under it). The write breaks (b), so the binding
-// copies: per round a new holder (4 cells) plus the copy (4 cells).
-#[test]
-fn maybe_payload_binding_copies_when_the_element_is_replaced() {
-    let extra = extra_cells(
-        (
-            "v0_3_m9_union_alloc_shape_maybe_read_written_once.ynz",
-            "1\n",
-        ),
-        ("v0_3_m9_union_alloc_shape_maybe_read_written.ynz", "100\n"),
-    );
-    assert_eq!(
-        extra,
-        99 * 8,
-        "99 more rounds: a new holder and a four-cell copy each"
-    );
+union_by_value_cost_medium_case! {
+    // case: an `errors` result whose success word cannot hold a slot re-homed the union in two heap cells per call (300 calls = 600 allocations before the by-value result)
+    errors_return_allocates_nothing => {
+        assert_eq!(
+            heap_allocations("v0_3_m9_union_alloc_errors.ynz", "44850\n"),
+            0,
+            "an `errors` return of a union must not allocate"
+        );
+    }
+    // case: a returned union re-homed in heap cells (#410's `Return` home, two cells per call)
+    union_return_allocates_nothing => {
+        assert_eq!(
+            heap_allocations("v0_3_m9_union_alloc_return.ynz", "22950\n"),
+            0,
+            "a returned union must not allocate"
+        );
+    }
+    // case: a union field was a pointer to an envelope plus a payload cell, and a hidden default into one (#421) took two counted cells per construction
+    union_shape_field_and_hidden_default_allocate_nothing => {
+        assert_eq!(
+            heap_allocations("v0_3_m9_union_alloc_field.ynz", "23250\n"),
+            0,
+            "a shape with a union field, and its hidden default, must not allocate"
+        );
+    }
+    // case: a `wait`-staged union argument took two counted cells per call (#410's heap home)
+    union_wait_arg_allocates_like_int => {
+        assert_allocates_like_int(
+            "v0_3_m9_union_alloc_wait_arg.ynz",
+            "5150\n",
+            "v0_3_m9_union_alloc_wait_arg_int.ynz",
+            "5000\n",
+        );
+    }
+    // case: a union binding crossing a `wait` was two counted cells (`union_to_heap_cell`)
+    union_crossing_binding_allocates_like_int => {
+        assert_allocates_like_int(
+            "v0_3_m9_union_alloc_crossing.ynz",
+            "33\n",
+            "v0_3_m9_union_alloc_crossing_int.ynz",
+            "33\n",
+        );
+    }
+    // case: an array element or map value was an envelope pointer plus a payload cell
+    union_container_store_allocates_like_int => {
+        assert_allocates_like_int(
+            "v0_3_m9_union_alloc_container.ynz",
+            "22950\n",
+            "v0_3_m9_union_alloc_container_int.ynz",
+            "44850\n",
+        );
+    }
+    // case: a recursive union cannot hold its payload inline: one heap cell per box. Each build stores an `End`, a `Node` and a `Node` into `next` fields, and each store MOVES its value (the language refuses a read of the source afterwards), as `Box::new(prev)` does in Rust: one cell per box created, no clone. 100 builds x 3 cells; every store deep-cloned the chain it was given (1 + 2 + 3 cells per build, 600), above Rust's cost for a move
+    recursive_union_store_allocates_one_cell_per_box => {
+        assert_eq!(
+            heap_allocations("v0_3_m9_union_alloc_recursive.ynz", "100\n"),
+            300,
+            "100 builds x 3 moved boxes must make 300 cells and nothing else"
+        );
+    }
+    // case: a store of a chain nobody reads again deep-cloned it (four cells) where Rust moves the `Box`: the move needs only the binding's own cell, one per store
+    recursive_union_move_clones_nothing => {
+        let chain_alone = heap_allocations("v0_3_m9_union_alloc_recursive_chain.ynz", "100\n");
+        let with_moves = heap_allocations("v0_3_m9_union_alloc_recursive_move.ynz", "300\n");
+        assert_eq!(
+            with_moves - chain_alone,
+            100,
+            "100 moves of a chain must make one cell each; chain alone {chain_alone}, with moves {with_moves}"
+        );
+    }
+    // case: a shape that owns a recursive union (a holder owns four cells) moved into a binding cloned its boxes (above Rust's cost for a move)
+    shape_move_into_a_binding_clones_nothing => {
+        assert_eq!(
+            heap_allocations("v0_3_m9_union_alloc_shape_moved_binding.ynz", "100\n"),
+            400,
+            "100 holders x 4 cells, moved into a binding with no clone"
+        );
+    }
+    // case: a moved holder stored in a shape field cloned its boxes; it must cost the field's own cell only
+    shape_field_store_of_a_moved_binding_costs_one_cell => {
+        let moved = extra_cells(
+            ("v0_3_m9_union_alloc_shape_moved_binding.ynz", "100\n"),
+            ("v0_3_m9_union_alloc_shape_moved_field.ynz", "200\n"),
+        );
+        assert_eq!(
+            moved, 100,
+            "a moved holder costs the field's own cell, nothing else"
+        );
+    }
+    // case: `let copied = outer.inner` only reads the field, so it is a view and must clone nothing
+    shape_binding_of_a_field_read_is_a_view_until_the_place_is_written => {
+        let view_extra = extra_cells(
+            ("v0_3_m9_union_alloc_shape_moved_field.ynz", "200\n"),
+            ("v0_3_m9_union_alloc_shape_view_binding.ynz", "300\n"),
+        );
+        assert_eq!(
+            view_extra, 0,
+            "`let copied = outer.inner` only reads the field, so it is a view and clones nothing"
+        );
+    }
+    // case: 99 more reads of a `maybe<Holder>` element that is not written are views: no cells
+    maybe_payload_binding_of_an_element_read_is_a_view => {
+        let extra = extra_cells(
+            ("v0_3_m9_union_alloc_shape_maybe_read_once.ynz", "1\n"),
+            ("v0_3_m9_union_alloc_shape_maybe_read.ynz", "100\n"),
+        );
+        assert_eq!(
+            extra, 0,
+            "99 more reads of a `maybe<Holder>` element that is not written are views: no cells"
+        );
+    }
+    // case: `let rest = head.next` copied the whole remaining chain at every step of a recursive walk (N(N+1)/2 cells per walk: 55 at N=10), where a Rust borrow costs none (Golden Rule 6). The binding only reads a field of a `share` parameter, so it is a view and the walks (`sum` and `depth`) allocate nothing: the same cells as only building the chain
+    recursive_walk_over_a_field_read_allocates_nothing => {
+        assert_walk_allocates_nothing(10, "45\n10\n");
+    }
+    // case: `let b = a.g` with `a` itself a view copied the tail again, O(n) cells per read of a chain of aliases where a Rust borrow of a borrow costs none: `held` and `chain` are both views of the `share` parameter, so reading the 100-link chain adds no cells
+    a_read_through_a_view_allocates_nothing => {
+        let extra = extra_cells(
+            ("v0_3_m9_union_view_chain_build.ynz", "built\n"),
+            ("v0_3_m9_union_view_chain_walk.ynz", "4950\n"),
+        );
+        assert_eq!(
+            extra, 0,
+            "reading the chain through two views adds no cells"
+        );
+    }
+    // case: a function with a suspension point never viewed, so a view read AFTER a `wait` copied the whole chain although it does not cross the suspension. The binding's crossing set decides, not "the function is a state machine"
+    a_view_that_does_not_cross_a_suspension_allocates_nothing => {
+        let extra = extra_cells(
+            ("v0_3_m9_union_view_suspension_build.ynz", "done\n"),
+            ("v0_3_m9_union_view_suspension_nap.ynz", "4950\n"),
+        );
+        assert_eq!(extra, 0, "reading the chain after the nap adds no cells");
+    }
 }

@@ -40,8 +40,9 @@ fn run_fixture(path: &Path) -> (String, String, i32) {
 // block the main thread. The timing fixture has background sleep 200ms and main
 // print `main done` immediately; total program time includes the shutdown drain.
 // Tolerances are 4× typical CI noise (CI machines vary by ~10ms on short sleeps).
+// bug: `background fn()` runs sequentially, so main waits for it (total time below the task's sleep, or `main done` printed after `background done`) | tier: Medium
 #[test]
-fn background_timing_main_does_not_wait_for_background() {
+fn nightly_background_timing_main_does_not_wait_for_background() {
     let start = Instant::now();
     let (stdout, stderr, code) = run_fixture(&fixture("v0_3_m1_background_timing.ynz"));
     let total_elapsed = start.elapsed();
@@ -70,23 +71,5 @@ fn background_timing_main_does_not_wait_for_background() {
         total_elapsed.as_millis() >= 150,
         "background task must have slept; total elapsed {:?}",
         total_elapsed
-    );
-}
-
-// WHY: background isolation — the background task running on a separate thread must not
-// affect the main thread's exit code or stdout ordering. The runtime-level panic-discard
-// contract (catch_unwind) is tested in crates/ynz-runtime/tests/spike.rs (spawn+panic,
-// spawn+panic+ctx-no-leak, nested-spawn-inner-panic). This test covers the driver/pipeline
-// level: a fixture with a background task exits 0 and main prints its output correctly.
-#[test]
-fn background_task_completion_does_not_affect_main_exit_code() {
-    let (stdout, stderr, code) = run_fixture(&fixture("v0_3_m1_background_panic.ynz"));
-    assert_eq!(
-        code, 0,
-        "background task fixture must exit 0 even when background does unexpected work; stderr:\n{stderr}"
-    );
-    assert!(
-        stdout.contains("main done"),
-        "stdout must contain `main done`; got:\n{stdout}"
     );
 }

@@ -581,6 +581,7 @@ mod tests {
     /// R8 substrate proof: the completion value is extracted BEFORE the frame is freed, the
     /// wide-value copy lands in the handle-owned buffer, and `.receive()` after completion
     /// yields Ready then Closed (bounded — never a hang).
+    // bug: ynz_handle_recv_poll returns a wrong completion value (read after the frame is freed), or hangs instead of reporting Closed on a second receive | tier: High
     #[test]
     fn handle_collects_completion_then_closes() {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -627,6 +628,7 @@ mod tests {
 
     /// Never-received handle: the task completes, the handle is dropped without a receive —
     /// no hang, no double-free; the frame was freed by the task's own drop ladder.
+    // bug: freeing a handle whose completion was never received leaks the completion buffer, double frees the task frame or hangs (the Miri and ASan checkers catch it; the test asserts nothing itself) | tier: High
     #[test]
     fn never_received_handle_is_bounded_and_freed() {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -663,6 +665,7 @@ mod tests {
     /// exactly the stamp a NEW handle born at the reused address would carry. A broken salt
     /// (key ignoring the generation) fails this test: the second send would re-poll the
     /// dead generation's stale entry and deliver its 111 instead of the live 222.
+    // bug: ynz_handle_send_poll keys a suspended send by handle address alone, so a new handle at a reused address resurrects the dead handle's stale value | tier: High
     #[test]
     fn handle_send_same_address_different_generation_never_collides() {
         /// Resume fn that always returns Pending (a child parked at a suspension point).
@@ -749,6 +752,7 @@ mod tests {
     /// Handle free before completion aborts the child at its next suspension point
     /// (cancel-via-drop, runtime level) — and the frame is freed exactly once by the
     /// embedded drop ladder.
+    // bug: ynz_handle_free on a parked child leaks its frame or frees it twice instead of aborting the child once (the Miri and ASan checkers catch it; the test asserts nothing itself) | tier: High
     #[test]
     fn free_before_completion_aborts_child() {
         /// Resume fn that always returns Pending (a child parked at a suspension point).
@@ -834,77 +838,6 @@ mod tests {
     }
     unsafe fn handle_order_probe_drop(_data: *const ()) {}
 
-    /// v0.3-M6 P2-7 (Phase 4b) RED→GREEN, ordering half: the caller's waker must be
-    /// recorded in the handle's `recv_waiters` BEFORE `poll_recv` runs — same invariant
-    /// as `channel::tests::recv_poll_registers_waiter_before_polling`, at the handle
-    /// seam. Register-first is what makes a panic anywhere after the record safe: the
-    /// catch_unwind's Pending then rides on an already-recorded waker.
-    #[test]
-    fn handle_recv_poll_registers_waiter_before_polling() {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .expect("rt");
-        let _guard = rt.enter();
-        unsafe {
-            let frame = crate::ynz_alloc_zeroed(64);
-            let h = ynz_rt_spawn_handle(
-                resume_ready,
-                frame,
-                64,
-                -1,
-                std::ptr::null(),
-                0,
-                RET_KIND_EC_WORD,
-                std::ptr::null_mut(),
-                std::ptr::null(),
-                std::ptr::null(),
-            );
-            // The child is scheduled but NOT yet driven — the outbox is empty, so the
-            // parent's first poll takes the Pending path (the registration under test).
-            let probe = HandleOrderProbe {
-                shared: crate::sync::Arc::as_ptr(&(*(h as *const YnzTaskHandle)).shared),
-                registered_before_poll: AtomicBool::new(false),
-                mpsc_clone_seen: AtomicBool::new(false),
-                panic_at_mpsc_clone: AtomicBool::new(false),
-                wakes: AtomicUsize::new(0),
-            };
-            let probe_waker = Waker::from_raw(std::task::RawWaker::new(
-                &probe as *const HandleOrderProbe as *const (),
-                &HANDLE_ORDER_PROBE_VTABLE,
-            ));
-            let mut cx = Context::from_waker(&probe_waker);
-            let cx_ptr = &mut cx as *mut Context<'_> as *mut u8;
-            let (mut e, mut o) = (0i64, 0i64);
-            assert_eq!(
-                ynz_handle_recv_poll(h, &mut e, &mut o, cx_ptr),
-                CHANNEL_PENDING
-            );
-            assert!(
-                probe.mpsc_clone_seen.load(Ordering::SeqCst),
-                "probe never observed the mpsc slot registration — vacuous run"
-            );
-            assert!(
-                probe.registered_before_poll.load(Ordering::SeqCst),
-                "the waker must be recorded as a receive-waiter BEFORE poll_recv runs; \
-                 poll-then-nothing leaves the panic path returning Pending with an \
-                 unregistered waker and the task hangs permanently (P2-7)"
-            );
-
-            // Semantic follow-through: the child's completion must wake the recorded waiter.
-            rt.block_on(async { tokio::task::yield_now().await });
-            assert!(
-                probe.wakes.load(Ordering::SeqCst) > 0,
-                "completion delivery must wake the suspended receiver"
-            );
-            assert_eq!(
-                ynz_handle_recv_poll(h, &mut e, &mut o, cx_ptr),
-                CHANNEL_READY
-            );
-            assert_eq!((e, o), (0, 99));
-            ynz_handle_free(h);
-        }
-    }
-
     /// v0.3-M6 P2-7 (Phase 4b) RED→GREEN, behavioral half — the literal
     /// panic-then-Pending hang: a panic fires inside `ynz_handle_recv_poll`'s body AT the
     /// mpsc slot registration (so the slot ends the call EMPTY — the panic-fires-before-
@@ -915,8 +848,10 @@ mod tests {
     /// the panic fires, and the completion delivery's drain-all wakes it; the re-poll
     /// then collects the completion value — through the panic-poisoned (and
     /// `lock_or_recover`-recovered) outbox mutex.
-    #[test]
-    fn completion_wakes_receiver_after_panic_before_slot_registration() {
+    ///
+    /// Shared body of the two cases below: `inject_panic` arms the clone hook's panic (the
+    /// panic-path case); unarmed, the same program takes `poll_recv`'s plain `Poll::Pending` arm.
+    fn assert_completion_wakes_receiver(inject_panic: bool) {
         let rt = tokio::runtime::Builder::new_current_thread()
             .build()
             .expect("rt");
@@ -939,7 +874,7 @@ mod tests {
                 shared: crate::sync::Arc::as_ptr(&(*(h as *const YnzTaskHandle)).shared),
                 registered_before_poll: AtomicBool::new(false),
                 mpsc_clone_seen: AtomicBool::new(false),
-                panic_at_mpsc_clone: AtomicBool::new(true),
+                panic_at_mpsc_clone: AtomicBool::new(inject_panic),
                 wakes: AtomicUsize::new(0),
             };
             let probe_waker = Waker::from_raw(std::task::RawWaker::new(
@@ -950,16 +885,22 @@ mod tests {
             let cx_ptr = &mut cx as *mut Context<'_> as *mut u8;
             let (mut e, mut o) = (0i64, 0i64);
             // The child hasn't run yet (current_thread runtime, nothing driven): the
-            // outbox is empty, poll_recv takes the Pending path, and the armed probe
-            // panics at the slot registration → the panic path returns Pending.
+            // outbox is empty, poll_recv takes the Pending path (and, armed, the probe
+            // panics at the slot registration → the panic path returns Pending).
             assert_eq!(
                 ynz_handle_recv_poll(h, &mut e, &mut o, cx_ptr),
                 CHANNEL_PENDING,
-                "the panic path must surface as Pending (never a crash across the C ABI)"
+                "an empty outbox must surface as Pending (a panic never crashes across the C ABI)"
             );
             assert!(
                 probe.mpsc_clone_seen.load(Ordering::SeqCst),
                 "probe never reached the mpsc slot registration — vacuous run"
+            );
+            assert!(
+                probe.registered_before_poll.load(Ordering::SeqCst),
+                "the waker must be recorded as a receive-waiter BEFORE poll_recv runs; \
+                 poll-then-nothing leaves the panic path returning Pending with an \
+                 unregistered waker and the task hangs permanently (P2-7)"
             );
 
             // The child now completes and delivers. Pre-fix: nobody to wake → hang.
@@ -982,5 +923,17 @@ mod tests {
             assert_eq!((e, o), (0, 99));
             ynz_handle_free(h);
         }
+    }
+
+    // bug: a panic inside ynz_handle_recv_poll before the waker slot is registered leaves the receiver unwoken, so the task hangs when the child completes (waker not recorded before polling) | tier: High
+    #[test]
+    fn completion_wakes_receiver_after_panic_before_slot_registration() {
+        assert_completion_wakes_receiver(true);
+    }
+
+    // bug: ynz_handle_recv_poll on an empty outbox does not return Pending with the waker recorded before polling, or the child's completion does not wake it, so the receiving task hangs or reads a wrong value | tier: High
+    #[test]
+    fn completion_wakes_receiver_that_polled_an_empty_outbox() {
+        assert_completion_wakes_receiver(false);
     }
 }

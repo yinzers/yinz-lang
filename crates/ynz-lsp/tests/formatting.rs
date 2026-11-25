@@ -1,7 +1,6 @@
 // WHY: Formatting tests verify that format-on-save is idempotent (no edit when
 // already canonical), degrades gracefully on parse errors (empty edit + message),
-// and that range formatting covers the requested line range without corrupting
-// the rest of the file.
+// and that range formatting never panics on a rejected range.
 
 use lsp_types::{notification::Notification as _, Position, Range};
 use ynz_lsp::{
@@ -10,6 +9,9 @@ use ynz_lsp::{
     state::ServerState,
 };
 
+const DIRTY_SOURCE: &str = "function entrypoint() -> Nothing {\n  let x   =  42\n}\n";
+const BROKEN_SOURCE: &str = "function broken( -> Nothing {}\n"; // missing param closing paren
+
 fn state_single(path: &str, src: &str) -> (ServerState, lsp_types::Url) {
     let mut state = ServerState::new(PositionEncoding::Utf8);
     let uri = lsp_types::Url::from_file_path(path).expect("valid path");
@@ -17,229 +19,144 @@ fn state_single(path: &str, src: &str) -> (ServerState, lsp_types::Url) {
     (state, uri)
 }
 
-/// Returns (sender, receiver) so tests can drain and inspect notifications.
-fn spy_sender() -> (
-    crossbeam_channel::Sender<lsp_server::Message>,
-    crossbeam_channel::Receiver<lsp_server::Message>,
-) {
-    crossbeam_channel::unbounded()
+fn whole_file_range(end_line: u32) -> Range {
+    Range {
+        start: Position {
+            line: 0,
+            character: 0,
+        },
+        end: Position {
+            line: end_line,
+            character: 0,
+        },
+    }
 }
 
-fn mock_sender() -> crossbeam_channel::Sender<lsp_server::Message> {
-    spy_sender().0
+/// Method names of every notification the handler sent to the client.
+fn notification_methods(
+    receiver: &crossbeam_channel::Receiver<lsp_server::Message>,
+) -> Vec<String> {
+    receiver
+        .try_iter()
+        .filter_map(|message| match message {
+            lsp_server::Message::Notification(notification) => Some(notification.method),
+            _ => None,
+        })
+        .collect()
 }
 
-/// Drain the spy channel and return all `window/showMessage` notification method names.
-fn drain_notifications(rx: &crossbeam_channel::Receiver<lsp_server::Message>) -> Vec<String> {
-    let mut methods = Vec::new();
-    while let Ok(msg) = rx.try_recv() {
-        if let lsp_server::Message::Notification(n) = msg {
-            methods.push(n.method.clone());
+macro_rules! formatting_case {
+    ($name:ident, $source:expr, $expected:ident) => {
+        // bug: format-on-save returns edits for a canonical file (endless format loop), none for a dirty file, or no edits and no showMessage for a file with parse errors | tier: Medium
+        #[test]
+        fn $name() {
+            let (state, uri) =
+                state_single(concat!("/tmp/ynz_fmt_", stringify!($name), ".ynz"), $source);
+            let (sender, receiver) = crossbeam_channel::unbounded();
+            let edits = formatting_response(&state, &uri, &sender);
+            let methods = notification_methods(&receiver);
+            match stringify!($expected) {
+                "one_edit_that_formats_to_a_fixed_point" => {
+                    assert_eq!(edits.len(), 1, "a dirty file gets one edit; got {edits:?}");
+                    // A second pass over the formatted text must change nothing.
+                    let (formatted_state, formatted_uri) = state_single(
+                        concat!("/tmp/ynz_fmt_", stringify!($name), "_again.ynz"),
+                        &edits[0].new_text,
+                    );
+                    let second_pass =
+                        formatting_response(&formatted_state, &formatted_uri, &sender);
+                    assert!(second_pass.is_empty(), "format must be idempotent");
+                }
+                "no_edit" => assert!(edits.is_empty(), "got {edits:?}"),
+                "no_edit_and_a_message" => {
+                    assert!(edits.is_empty(), "got {edits:?}");
+                    assert!(
+                        methods.contains(&lsp_types::notification::ShowMessage::METHOD.to_string()),
+                        "parse-error path must emit window/showMessage; got {methods:?}"
+                    );
+                }
+                other => panic!("unknown expectation {other}"),
+            }
         }
-    }
-    methods
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Full-file formatting
-// ─────────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_formatting_unformatted_file_returns_textedit() {
-    // WHY: user saves a messily-formatted file — LSP must return a TextEdit.
-    // Use a source with inconsistent spacing that ynz-fmt will normalise.
-    let src = "function entrypoint() -> Nothing {\n  let x   =  42\n}\n";
-    let (state, uri) = state_single("/tmp/ynz_fmt_dirty.ynz", src);
-    let edits = formatting_response(&state, &uri, &mock_sender());
-    // The formatter may or may not change this specific source, but the call must not panic.
-    let _ = edits; // At minimum no crash.
-}
-
-#[test]
-fn test_formatting_canonical_file_returns_empty_vec() {
-    // WHY: calling format-on-save on an already-formatted file must return no edits.
-    // Without this, the client re-saves the file, fires didChange, re-formats,
-    // and loops forever.
-    let src = "function entrypoint() -> Nothing {\n  let x = 42\n}\n";
-    // First format to get the canonical form.
-    let formatted = ynz_fmt::format(src).expect("format must succeed");
-    let (state, uri) = state_single("/tmp/ynz_fmt_canonical.ynz", &formatted);
-    let edits = formatting_response(&state, &uri, &mock_sender());
-    assert!(
-        edits.is_empty(),
-        "canonical file must produce zero edits; got {} edits",
-        edits.len()
-    );
-}
-
-#[test]
-fn test_formatting_parse_error_file_returns_empty_vec_and_show_message() {
-    // WHY: format-on-save on a file with parse errors must BOTH return empty edits
-    // AND emit window/showMessage so the user knows WHY nothing happened (Golden
-    // Rule 3 teaching mission — silent empty is duct tape per no-duct-tape.md).
-    // This test asserts both sides of the contract.
-    let src = "function broken( -> Nothing {}\n"; // missing param closing paren
-    let (state, uri) = state_single("/tmp/ynz_fmt_broken.ynz", src);
-    let (tx, rx) = spy_sender();
-    let edits = formatting_response(&state, &uri, &tx);
-
-    assert!(edits.is_empty(), "parse-error file must produce zero edits");
-
-    let notif_methods = drain_notifications(&rx);
-    assert!(
-        notif_methods
-            .iter()
-            .any(|m| m == lsp_types::notification::ShowMessage::METHOD),
-        "parse-error path must emit window/showMessage; got notifications: {:?}",
-        notif_methods
-    );
-}
-
-#[test]
-fn test_formatting_idempotent_via_lsp_roundtrip() {
-    // WHY: format(format(x)) == format(x) must hold end-to-end through the LSP handler.
-    // Bugs in the formatter idempotency contract surface as infinite format loops.
-    let src = "function entrypoint() -> Nothing {\n  let score = 42\n  let msg = `hi`\n}\n";
-    let (state1, uri1) = state_single("/tmp/ynz_fmt_idemp1.ynz", src);
-    let edits1 = formatting_response(&state1, &uri1, &mock_sender());
-
-    // Apply the edits to produce the formatted source.
-    let formatted = if let Some(edit) = edits1.first() {
-        edit.new_text.clone()
-    } else {
-        src.to_string() // already canonical
     };
-
-    // Format the already-formatted source — must produce no further edits.
-    let (state2, uri2) = state_single("/tmp/ynz_fmt_idemp2.ynz", &formatted);
-    let edits2 = formatting_response(&state2, &uri2, &mock_sender());
-    assert!(
-        edits2.is_empty(),
-        "second format pass must produce zero edits (idempotency)"
-    );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Range formatting
-// ─────────────────────────────────────────────────────────────────────────────
+formatting_case!(
+    dirty_file_gets_one_edit_that_formats_to_a_fixed_point,
+    DIRTY_SOURCE,
+    one_edit_that_formats_to_a_fixed_point
+);
+formatting_case!(
+    canonical_file_gets_no_edit,
+    "function entrypoint() -> Nothing {\n  let x = 42\n}\n",
+    no_edit
+);
+formatting_case!(
+    file_with_parse_error_gets_no_edit_and_a_message,
+    BROKEN_SOURCE,
+    no_edit_and_a_message
+);
 
-#[test]
-fn test_range_formatting_returns_textedit_within_range() {
-    // WHY: range formatting must return a TextEdit whose range is a subset of
-    // (or equal to) the requested range — it must not modify lines outside the range.
-    let src = "function entrypoint() -> Nothing {\n  let x = 42\n}\n";
-    let (state, uri) = state_single("/tmp/ynz_fmt_range.ynz", src);
-    // Request formatting of line 1 only (the `let` line).
-    let range = Range {
-        start: Position {
-            line: 1,
-            character: 0,
-        },
-        end: Position {
-            line: 2,
-            character: 0,
-        },
+macro_rules! range_formatting_case {
+    ($name:ident, $source:expr, $range:expr, $expect_message:expr) => {
+        // bug: range formatting panics on an inverted range or returns edits for a canonical or unparseable file, or says nothing about a file it cannot format | tier: Medium
+        #[test]
+        fn $name() {
+            let (state, uri) =
+                state_single(concat!("/tmp/ynz_fmt_", stringify!($name), ".ynz"), $source);
+            let (sender, receiver) = crossbeam_channel::unbounded();
+            let edits = range_formatting_response(&state, &uri, $range, &sender);
+            assert!(edits.is_empty(), "got {edits:?}");
+            let methods = notification_methods(&receiver);
+            assert_eq!(
+                methods.contains(&"window/showMessage".to_string()),
+                $expect_message,
+                "notifications: {methods:?}"
+            );
+        }
     };
-    // Must not crash regardless of what it returns.
-    let edits = range_formatting_response(&state, &uri, range, &mock_sender());
-    for edit in &edits {
-        // Each edit must target a range within the requested range.
-        assert!(
-            edit.range.start.line >= 1 || edit.range.end.line <= 3,
-            "edit range must not extend far beyond the requested range: {:?}",
-            edit.range
-        );
-    }
 }
 
-#[test]
-fn test_range_formatting_canonical_range_returns_empty_vec() {
-    // WHY: if the selected range is already canonical, zero edits must be returned.
-    let src = "function entrypoint() -> Nothing {\n  let x = 42\n}\n";
-    let formatted = ynz_fmt::format(src).expect("format");
-    let (state, uri) = state_single("/tmp/ynz_fmt_range_canonical.ynz", &formatted);
-    let range = Range {
-        start: Position {
-            line: 0,
-            character: 0,
-        },
-        end: Position {
-            line: 2,
-            character: 0,
-        },
-    };
-    let edits = range_formatting_response(&state, &uri, range, &mock_sender());
-    assert!(edits.is_empty(), "canonical range must produce zero edits");
-}
-
-#[test]
-fn test_range_formatting_parse_error_returns_empty_vec() {
-    let src = "function broken( -> Nothing {}\n";
-    let (state, uri) = state_single("/tmp/ynz_fmt_range_broken.ynz", src);
-    let range = Range {
-        start: Position {
-            line: 0,
-            character: 0,
-        },
-        end: Position {
-            line: 1,
-            character: 0,
-        },
-    };
-    let edits = range_formatting_response(&state, &uri, range, &mock_sender());
-    assert!(
-        edits.is_empty(),
-        "parse-error range must produce zero edits"
-    );
-}
-
-#[test]
-fn test_range_formatting_inverted_range_returns_empty_vec_and_show_message() {
-    // WHY (SHOULD-FIX #5, sibling of F7): a client can send an inverted range
-    // (`range.end` before `range.start` — malformed input, or stale offsets racing a
-    // concurrent edit). `source[start_byte..end_byte]` would panic on that; the guard
-    // must reject it explicitly instead — no panic, an empty edit vec, and a visible
-    // `window/showMessage` signal, same pattern as the other out-of-bounds cases.
-    // NOTE: source must be NON-canonical (`formatted_source != source`) — a canonical
-    // source short-circuits at the "already canonical" check before ever reaching the
-    // byte-slice this guard protects, silently passing without exercising the bug.
-    let src = "function entrypoint() -> Nothing {\n  let x   =  42\n}\n";
-    let (state, uri) = state_single("/tmp/ynz_fmt_range_inverted.ynz", src);
-    let range = Range {
+range_formatting_case!(
+    canonical_range_gets_no_edit,
+    "function entrypoint() -> Nothing {\n  let x = 42\n}\n",
+    whole_file_range(2),
+    false
+);
+range_formatting_case!(
+    range_in_file_with_parse_error_gets_no_edit_and_a_message,
+    BROKEN_SOURCE,
+    whole_file_range(1),
+    true
+);
+// The source must be non-canonical: a canonical one short-circuits before the
+// byte slice that panics on an inverted range.
+range_formatting_case!(
+    inverted_range_gets_no_edit_and_a_message,
+    DIRTY_SOURCE,
+    Range {
         start: Position {
             line: 2,
-            character: 0,
+            character: 0
         },
         end: Position {
             line: 0,
-            character: 0,
+            character: 0
         },
-    };
-    let (sender, receiver) = spy_sender();
-    // Must not panic.
-    let edits = range_formatting_response(&state, &uri, range, &sender);
-    assert!(
-        edits.is_empty(),
-        "an inverted range must produce zero edits, not a panic"
-    );
-    let notifications = drain_notifications(&receiver);
-    assert!(
-        notifications.contains(&"window/showMessage".to_string()),
-        "expected a window/showMessage notification for the rejected inverted range, got: {notifications:?}"
-    );
-}
+    },
+    true
+);
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Performance
-// ─────────────────────────────────────────────────────────────────────────────
-
+// bug: format-on-save takes over 50 ms and stalls the editor | tier: Medium
 #[test]
-fn test_formatting_response_under_50ms() {
-    // WHY: format-on-save runs on every save — must not stall the editor.
-    let src = "function entrypoint() -> Nothing {\n  let x = 42\n}\n";
-    let (state, uri) = state_single("/tmp/ynz_fmt_perf.ynz", src);
+fn nightly_formatting_response_under_50ms() {
+    let (state, uri) = state_single(
+        "/tmp/ynz_fmt_perf.ynz",
+        "function entrypoint() -> Nothing {\n  let x = 42\n}\n",
+    );
+    let (sender, _receiver) = crossbeam_channel::unbounded();
     let start = std::time::Instant::now();
-    let _ = formatting_response(&state, &uri, &mock_sender());
+    let _ = formatting_response(&state, &uri, &sender);
     let elapsed = start.elapsed();
     assert!(
         elapsed.as_millis() < 50,

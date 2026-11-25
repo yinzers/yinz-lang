@@ -29,56 +29,59 @@ fn assert_stdout_lines(fixture: &str, expected: &[&str]) {
     assert_eq!(lines, expected, "{fixture} stdout");
 }
 
-#[test]
-fn bignum_n40_to_string_prints_all_forty_digits() {
-    // Tier: Medium (user flow). Bug caught: `number<40>.toString()` refused at compile time, and a
-    // bignum pointer read as a decimal128 value if it got through.
-    // 1/3 at 40 digits: "0." followed by exactly forty 3s.
-    assert_stdout_lines(
-        "bignum_to_string_n40.ynz",
-        &["0.3333333333333333333333333333333333333333"],
-    );
+/// One named test per input class (precision, receiver position, aliasing, conversion kind);
+/// each case runs one fixture and compares its stdout lines exactly.
+macro_rules! number_text_case {
+    ($test_name:ident, $fixture:literal, $expected_lines:expr) => {
+        // bug: `number<N>` toString/toFloat/toInt prints a wrong digit string, reads a bignum as a decimal128 cell, or two results share one buffer | tier: High
+        #[test]
+        fn $test_name() {
+            assert_stdout_lines($fixture, $expected_lines);
+        }
+    };
 }
 
-#[test]
-fn bignum_n50_to_string_prints_all_fifty_digits() {
-    // Tier: Medium (user flow). Bug caught: `toString` refused for any N other than 34; this is a
-    // second precision, and its last digit rounds up rather than truncating.
-    // 2/3 at 50 digits: "0." followed by exactly fifty 6s, the last rounded to 7.
-    assert_stdout_lines(
-        "bignum_to_string_n50.ynz",
-        &["0.66666666666666666666666666666666666666666666666667"],
-    );
-}
+// 1/3 at 40 digits: "0." followed by exactly forty 3s (`toString` refused for N != 34).
+number_text_case!(
+    bignum_n40_to_string_prints_all_forty_digits,
+    "bignum_to_string_n40.ynz",
+    &["0.3333333333333333333333333333333333333333"]
+);
 
-#[test]
-fn bignum_shape_field_to_string_matches_print_of_the_field() {
-    // Tier: Medium (user flow). Bug caught: `toString` on a bignum shape-field receiver refused or
-    // mis-lowered, giving a string unlike `print` of the same field.
-    let digits = "0.3333333333333333333333333333333333333333";
-    assert_stdout_lines("bignum_to_string_shape_field.ynz", &[digits, digits]);
-}
+// 2/3 at 50 digits: "0." followed by exactly fifty 6s, the last rounded up to 7.
+number_text_case!(
+    bignum_n50_to_string_rounds_the_last_digit_up,
+    "bignum_to_string_n50.ynz",
+    &["0.66666666666666666666666666666666666666666666666667"]
+);
 
-#[test]
-fn narrow_number_to_string_results_do_not_share_a_buffer() {
-    // Tier: Medium (user flow). Bug caught: both strings aliasing the runtime's thread-local
-    // format buffer (printed 2.5 twice).
-    assert_stdout_lines("number_to_string_owned.ynz", &["1.5", "2.5"]);
-}
+// `toString` on a bignum shape-field receiver matches `print` of the same field.
+number_text_case!(
+    bignum_shape_field_to_string_matches_print_of_the_field,
+    "bignum_to_string_shape_field.ynz",
+    &[
+        "0.3333333333333333333333333333333333333333",
+        "0.3333333333333333333333333333333333333333"
+    ]
+);
 
-#[test]
-fn number_conversions_read_the_right_representation_at_every_precision() {
-    // Tier: Medium (user flow). Bug caught: `toFloat`/`toInt` on `number<N>` reading a bignum
-    // string as a decimal128 cell (or the reverse) once method lookup covers every precision.
-    assert_stdout_lines(
-        "bignum_number_conversions.ynz",
-        &[
-            "0.3333333333333333", // number<40>.toFloat()
-            "0",                  // number<40>.toInt(): 0.333.. truncates to 0
-            "12345",              // number<50>.toInt()
-            "1.5",                // number<20>.toString()
-            "1.5",                // number<20>.toFloat()
-            "1",                  // number<20>.toInt()
-        ],
-    );
-}
+// Both strings aliasing the runtime's thread-local format buffer printed 2.5 twice.
+number_text_case!(
+    narrow_number_to_string_results_do_not_share_a_buffer,
+    "number_to_string_owned.ynz",
+    &["1.5", "2.5"]
+);
+
+// `toFloat`/`toInt` must read the representation of each precision.
+number_text_case!(
+    number_conversions_read_the_right_representation_at_every_precision,
+    "bignum_number_conversions.ynz",
+    &[
+        "0.3333333333333333", // number<40>.toFloat()
+        "0",                  // number<40>.toInt(): 0.333.. truncates to 0
+        "12345",              // number<50>.toInt()
+        "1.5",                // number<20>.toString()
+        "1.5",                // number<20>.toFloat()
+        "1",                  // number<20>.toInt()
+    ]
+);

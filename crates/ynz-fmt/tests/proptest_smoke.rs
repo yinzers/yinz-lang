@@ -39,6 +39,7 @@ fn sample_modules(n: usize) -> Vec<ynz_ast::nodes::Module> {
 // trait in scope (compile error); rewritten to import it and use the correct API.  A second
 // rewrite moved the strategy into tests/common/ so this gate runs against the SAME arb_module
 // as the idempotency proptest (not a cheaper fork).
+// bug: the proptest generator mostly emits empty modules, so the High round-trip proptest passes without exercising the formatter | tier: Medium
 #[test]
 fn strategy_produces_nontrivial_output() {
     // WHY: guards against a degenerate strategy that emits mostly empty modules.

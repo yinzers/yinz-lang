@@ -279,63 +279,63 @@ pub fn round_half_even(quotient: u128, remainder: u128, divisor: u128) -> u128 {
 mod tests {
     use super::*;
 
-    #[test]
-    fn encode_decode_zero() {
-        // WHY: POS_ZERO is the bit pattern used by the codegen for `number` zero literals.
-        // If encode/decode don't round-trip, every zero comparison breaks.
-        let v = decode(POS_ZERO);
-        assert_eq!(v.kind, D128Kind::Finite);
-        assert!(!v.sign);
-        assert_eq!(v.coefficient, 0);
+    /// `decode(encode_finite(sign, exponent, coefficient))` must give back the same fields
+    /// (the leading-digit-8/9 BID path is only exercised by large coefficients).
+    macro_rules! finite_round_trip_cases {
+        ($($case:ident: $sign:literal, $exponent:literal, $coefficient:expr;)+) => {
+            $(
+                // bug: decimal128 encode_finite/decode do not round-trip the sign, exponent and coefficient, so every value read back is wrong | tier: High
+                #[test]
+                fn $case() {
+                    let decoded = decode(encode_finite($sign, $exponent, $coefficient));
+                    assert_eq!(decoded.kind, D128Kind::Finite);
+                    assert_eq!(decoded.sign, $sign);
+                    assert_eq!(decoded.exponent, $exponent);
+                    assert_eq!(decoded.coefficient, $coefficient);
+                }
+            )+
+        };
     }
 
-    #[test]
-    fn encode_decode_one() {
-        let bits = encode_finite(false, 0, 1);
-        let v = decode(bits);
-        assert_eq!(v.kind, D128Kind::Finite);
-        assert!(!v.sign);
-        assert_eq!(v.exponent, 0);
-        assert_eq!(v.coefficient, 1);
+    finite_round_trip_cases! {
+        zero_round_trips: false, 0, 0;
+        negative_with_exponent_round_trips: true, -1, 15;
+        max_coefficient_round_trips: false, 0, MAX_COEFFICIENT;
     }
 
+    // bug: decimal128 decode reads the infinity bit pattern as a finite number or loses its sign | tier: High
     #[test]
-    fn encode_decode_negative() {
-        let bits = encode_finite(true, -1, 15); // -1.5
-        let v = decode(bits);
-        assert!(v.sign);
-        assert_eq!(v.exponent, -1);
-        assert_eq!(v.coefficient, 15);
+    fn infinity_decodes_as_positive_infinity() {
+        let decoded = decode(POS_INF);
+        assert_eq!(decoded.kind, D128Kind::Infinity);
+        assert!(!decoded.sign);
     }
 
+    // bug: decimal128 decode reads the quiet-NaN bit pattern as a finite number | tier: High
     #[test]
-    fn encode_decode_max_coefficient() {
-        // WHY: the leading-digit-8/9 BID path is only exercised with large coefficients.
-        let bits = encode_finite(false, 0, MAX_COEFFICIENT);
-        let v = decode(bits);
-        assert_eq!(v.coefficient, MAX_COEFFICIENT);
+    fn quiet_nan_decodes_as_quiet_nan() {
+        assert_eq!(decode(QUIET_NAN).kind, D128Kind::QuietNaN);
     }
 
-    #[test]
-    fn infinity_roundtrip() {
-        let v = decode(POS_INF);
-        assert_eq!(v.kind, D128Kind::Infinity);
-        assert!(!v.sign);
+    /// Powers of ten are the boundaries of the binary search over the POW10 table.
+    macro_rules! decimal_digits_cases {
+        ($($case:ident: $value:expr => $digits:literal;)+) => {
+            $(
+                // bug: decimal_digits miscounts the digits of a coefficient at a power-of-ten boundary, so a value is rounded to the wrong width | tier: High
+                #[test]
+                fn $case() {
+                    assert_eq!(decimal_digits($value), $digits);
+                }
+            )+
+        };
     }
 
-    #[test]
-    fn nan_roundtrip() {
-        let v = decode(QUIET_NAN);
-        assert_eq!(v.kind, D128Kind::QuietNaN);
-    }
-
-    #[test]
-    fn decimal_digits_values() {
-        assert_eq!(decimal_digits(0), 1);
-        assert_eq!(decimal_digits(9), 1);
-        assert_eq!(decimal_digits(10), 2);
-        assert_eq!(decimal_digits(99), 2);
-        assert_eq!(decimal_digits(100), 3);
-        assert_eq!(decimal_digits(MAX_COEFFICIENT), 34);
+    decimal_digits_cases! {
+        zero_has_one_digit: 0 => 1;
+        nine_has_one_digit: 9 => 1;
+        ten_has_two_digits: 10 => 2;
+        ninety_nine_has_two_digits: 99 => 2;
+        one_hundred_has_three_digits: 100 => 3;
+        max_coefficient_has_34_digits: MAX_COEFFICIENT => 34;
     }
 }

@@ -85,58 +85,32 @@ fn measure(padded: &HashSet<String>) -> (Vec<u64>, u64) {
     (offsets, target_data.get_abi_size(&struct_ty))
 }
 
-#[test]
-fn padded_shape_fields_land_on_distinct_cache_lines() {
-    // WHY: this is the exit-criteria proof "padded field offsets verified on real
-    // 64-byte cache lines" — each field starts exactly at 64·i on the REAL target's
-    // data layout, so no two fields can share a cache line (payloads are ≤ 16 bytes).
-    let padded: HashSet<String> = HashSet::from(["Tally".to_string()]);
-    let (offsets, size) = measure(&padded);
-
-    assert_eq!(
-        offsets.len(),
-        5,
-        "one element per declared field (no index shift)"
-    );
-    for (i, off) in offsets.iter().enumerate() {
-        assert_eq!(
-            *off,
-            (i as u64) * u64::from(CACHE_LINE_BYTES),
-            "padded field {i} must start at byte 64·{i}; offsets: {offsets:?}"
-        );
-    }
-    assert_eq!(
-        size,
-        5 * u64::from(CACHE_LINE_BYTES),
-        "padded struct ABI size must be 64·n so whole-struct copies and frame slots carry the padding"
-    );
+/// One named test per case so the runner names the failing case. Each case lists the byte offset
+/// of every field and the struct's ABI size on the real target's data layout.
+macro_rules! shape_layout_case {
+    ($test_name:ident, padded: $padded:expr, offsets: $offsets:expr, abi_size: $abi_size:expr) => {
+        // bug: the padding transform keys on something other than the padded set (or puts a field off its own cache line), so two hot fields share a line, or an unpadded shape grows, or frame slots are sized for a layout the shape does not have | tier: Medium
+        #[test]
+        fn $test_name() {
+            let padded: HashSet<String> = $padded;
+            let (offsets, abi_size) = measure(&padded);
+            assert_eq!(offsets, $offsets);
+            assert_eq!(abi_size, $abi_size);
+        }
+    };
 }
 
-#[test]
-fn unpadded_shape_keeps_natural_layout() {
-    // WHY: the --no-auto-parallel gating and the module-visibility decline both depend
-    // on "not in the padded set" producing the GENUINELY unpadded layout — not merely
-    // a differently-padded one. Natural layout for {i64,f64,i1,i128,ptr} on x86_64:
-    // 0, 8, 16, 32 (i128 aligns to 16), 48 — total 56 (size rounds to align 16 → 64...
-    // measured exactly below, not assumed).
-    let padded: HashSet<String> = HashSet::new();
-    let (offsets, size) = measure(&padded);
-
-    assert_eq!(offsets.len(), 5);
-    assert_eq!(offsets[0], 0, "field 0 at natural offset");
-    assert_eq!(offsets[1], 8, "f64 packs right after i64 — no padding slot");
-    assert_eq!(offsets[2], 16, "i1 at 16 — no padding slot");
-    assert_eq!(offsets[3], 32, "i128 aligns to 16 → 32, not a 64-multiple");
-    assert_eq!(offsets[4], 48, "ptr after i128 — no padding slot");
-    assert!(
-        size < 5 * u64::from(CACHE_LINE_BYTES),
-        "unpadded struct must be strictly smaller than the padded form; got {size}"
-    );
-    // At least two fields share one 64-byte line in the natural layout — the padded
-    // form is a genuine layout change, not a relabel.
-    assert_eq!(
-        offsets[0] / 64,
-        offsets[1] / 64,
-        "sanity: natural layout co-locates fields 0 and 1 on one cache line"
-    );
-}
+// Case bug: a padded shape's field i is not at byte 64 * i, so fields share a cache line.
+shape_layout_case!(
+    padded_shape_fields_land_on_distinct_cache_lines,
+    padded: HashSet::from(["Tally".to_string()]),
+    offsets: vec![0, 64, 128, 192, 256],
+    abi_size: 5 * u64::from(CACHE_LINE_BYTES)
+);
+// Case bug: a shape outside the padded set is padded anyway (or laid out with padding slots).
+shape_layout_case!(
+    unpadded_shape_keeps_natural_layout,
+    padded: HashSet::new(),
+    offsets: vec![0, 8, 16, 32, 48],
+    abi_size: 64
+);

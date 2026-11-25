@@ -144,180 +144,165 @@ mod tests {
         Position { line, character }
     }
 
-    // GIVEN text="abc\nde", utf-8
-    // WHEN byte_offset_to_position(4)
-    // THEN Position{line:1, character:0}  (newline at byte 3 ends line 0; 'd' starts line 1)
-    #[test]
-    fn lf_basic() {
-        let t = "abc\nde";
-        let tbl = LineTable::new(t);
-        assert_eq!(
-            tbl.byte_offset_to_position(t, 4, PositionEncoding::Utf8),
-            pos(1, 0)
-        );
-        assert_eq!(
-            tbl.position_to_byte_offset(t, pos(1, 0), PositionEncoding::Utf8),
-            Some(4)
-        );
-    }
-
-    // GIVEN text="ab\r\ncd", utf-8
-    // WHEN byte_offset_to_position(4)
-    // THEN Position{line:1, character:0}  (\r\n is bytes 2-3; 'c' is byte 4 = line 1 char 0)
-    #[test]
-    fn crlf_basic() {
-        let t = "ab\r\ncd";
-        let tbl = LineTable::new(t);
-        assert_eq!(
-            tbl.byte_offset_to_position(t, 4, PositionEncoding::Utf8),
-            pos(1, 0)
-        );
-        assert_eq!(
-            tbl.position_to_byte_offset(t, pos(1, 0), PositionEncoding::Utf8),
-            Some(4)
-        );
-    }
-
-    // GIVEN text="a\r\nb", utf-8
-    // WHEN byte_offset_to_position(2)
-    // THEN Position{line:0, character:2}  (offset 2 is \n — stays on line 0 char 2)
-    #[test]
-    fn crlf_boundary() {
-        let t = "a\r\nb";
-        let tbl = LineTable::new(t);
-        assert_eq!(
-            tbl.byte_offset_to_position(t, 2, PositionEncoding::Utf8),
-            pos(0, 2)
-        );
-    }
-
-    // GIVEN text="\u{FEFF}ab" (BOM-prefixed), utf-8
-    // WHEN byte_offset_to_position(3)
-    // THEN Position{line:0, character:1}
-    // — BOM is 3 bytes but counts as 1 character per LSP spec.
-    //   'a' is at byte 3 = character 1 (BOM=1, a=1; BOM takes 3 bytes but costs 1 char-slot).
-    #[test]
-    fn bom_utf8() {
-        let t = "\u{FEFF}ab";
-        let tbl = LineTable::new(t);
-        // Byte 3 ('a') → character 1 (not 3); BOM counts as 1 char
-        assert_eq!(
-            tbl.byte_offset_to_position(t, 3, PositionEncoding::Utf8),
-            pos(0, 1)
-        );
-        // Round-trip: character 1 → byte 3
-        assert_eq!(
-            tbl.position_to_byte_offset(t, pos(0, 1), PositionEncoding::Utf8),
-            Some(3)
-        );
-    }
-
-    // ✓ (U+2713, 3 UTF-8 bytes / 1 UTF-16 code unit)
-    // utf-8: byte 3 → char 3; utf-16: byte 3 → char 1
-    #[test]
-    fn three_byte_char_utf8_vs_utf16() {
-        let t = "✓✓";
-        let tbl = LineTable::new(t);
-        assert_eq!(
-            tbl.byte_offset_to_position(t, 3, PositionEncoding::Utf8),
-            pos(0, 3)
-        );
-        assert_eq!(
-            tbl.byte_offset_to_position(t, 3, PositionEncoding::Utf16),
-            pos(0, 1)
-        );
-    }
-
-    // F7: a `positionEncoding: utf-8` client sending a mid-character byte offset must
-    // be rejected (None), never returned verbatim — a mid-char offset flowing into a
-    // `&str` slice elsewhere (formatting.rs, completion.rs, semantic_tokens.rs) would
-    // otherwise panic (caught as an InternalError by the per-request isolation wrapper,
-    // but rejecting it here keeps the failure mode explicit instead of burning a
-    // request on an avoidable panic). "✓" is a 3-byte UTF-8 char at bytes 0..3;
-    // character 1 (utf-8 byte-count encoding) lands at byte 1 — the MIDDLE of that
-    // character, not a boundary.
-    #[test]
-    fn mid_char_utf8_offset_rejected() {
-        let t = "✓b";
-        let tbl = LineTable::new(t);
-        assert_eq!(
-            tbl.position_to_byte_offset(t, pos(0, 1), PositionEncoding::Utf8),
-            None,
-            "character 1 lands mid-way through the 3-byte ✓ — must be rejected, not returned as byte 1"
-        );
-        assert_eq!(
-            tbl.position_to_byte_offset(t, pos(0, 2), PositionEncoding::Utf8),
-            None,
-            "character 2 also lands mid-way through ✓ (byte 2 of 3) — must be rejected"
-        );
-        // Sanity: the real char boundaries (0 and 3) still resolve correctly.
-        assert_eq!(
-            tbl.position_to_byte_offset(t, pos(0, 0), PositionEncoding::Utf8),
-            Some(0)
-        );
-        assert_eq!(
-            tbl.position_to_byte_offset(t, pos(0, 3), PositionEncoding::Utf8),
-            Some(3)
-        );
-    }
-
-    // 😀 (U+1F600, 4 UTF-8 bytes / 2 UTF-16 code units)
-    // text = "a😀b"  bytes: 0=a, 1-4=😀, 5=b
-    // utf-8: byte 5 → char 5; utf-16: byte 5 → char 3 (1 for 'a' + 2 for surrogate pair)
-    #[test]
-    fn emoji_utf8_vs_utf16() {
-        let t = "a\u{1F600}b";
-        let tbl = LineTable::new(t);
-        assert_eq!(
-            tbl.byte_offset_to_position(t, 5, PositionEncoding::Utf8),
-            pos(0, 5)
-        );
-        assert_eq!(
-            tbl.byte_offset_to_position(t, 5, PositionEncoding::Utf16),
-            pos(0, 3)
-        );
-    }
-
-    // Round-trip: position_to_byte_offset(byte_offset_to_position(N)) == Some(N)
-    #[test]
-    fn round_trip() {
-        let texts = ["abc\nde", "ab\r\ncd", "a\r\nb", "✓✓", "a\u{1F600}b", ""];
-        for t in &texts {
-            let tbl = LineTable::new(t);
-            for offset in 0..=t.len() {
-                // Only round-trip at valid char boundaries
-                if !t.is_char_boundary(offset) {
-                    continue;
-                }
-                for enc in [PositionEncoding::Utf8, PositionEncoding::Utf16] {
-                    let pos = tbl.byte_offset_to_position(t, offset, enc);
-                    let back = tbl.position_to_byte_offset(t, pos, enc);
-                    assert_eq!(
-                        back,
-                        Some(offset),
-                        "round-trip failed: text={t:?} offset={offset} enc={enc:?}"
-                    );
-                }
+    macro_rules! byte_offset_to_position_case {
+        ($name:ident, $text:expr, $offset:expr, $encoding:expr, $expected:expr) => {
+            // bug: a byte offset maps to the wrong line or column (LF/CRLF, BOM, multi-byte characters, UTF-8 vs UTF-16), so edits and ranges land on the wrong text | tier: Medium
+            #[test]
+            fn $name() {
+                let text = $text;
+                let table = LineTable::new(text);
+                assert_eq!(
+                    table.byte_offset_to_position(text, $offset, $encoding),
+                    $expected
+                );
             }
-        }
+        };
     }
 
-    // Empty text edge cases
-    #[test]
-    fn empty_text() {
-        let t = "";
-        let tbl = LineTable::new(t);
-        assert_eq!(
-            tbl.byte_offset_to_position(t, 0, PositionEncoding::Utf8),
-            pos(0, 0)
-        );
-        assert_eq!(
-            tbl.position_to_byte_offset(t, pos(0, 0), PositionEncoding::Utf8),
-            Some(0)
-        );
-        assert_eq!(
-            tbl.position_to_byte_offset(t, pos(0, 1), PositionEncoding::Utf8),
-            None
-        );
+    byte_offset_to_position_case!(
+        lf_starts_a_new_line,
+        "abc\nde",
+        4,
+        PositionEncoding::Utf8,
+        pos(1, 0)
+    );
+    byte_offset_to_position_case!(
+        crlf_starts_a_new_line,
+        "ab\r\ncd",
+        4,
+        PositionEncoding::Utf8,
+        pos(1, 0)
+    );
+    // offset 2 is the `\n` of `\r\n`: it stays on line 0
+    byte_offset_to_position_case!(
+        crlf_newline_byte_stays_on_its_line,
+        "a\r\nb",
+        2,
+        PositionEncoding::Utf8,
+        pos(0, 2)
+    );
+    // the BOM is 3 bytes but one character: `a` at byte 3 is character 1
+    byte_offset_to_position_case!(
+        bom_counts_as_one_character,
+        "\u{FEFF}ab",
+        3,
+        PositionEncoding::Utf8,
+        pos(0, 1)
+    );
+    // U+2713 is 3 UTF-8 bytes and 1 UTF-16 code unit
+    byte_offset_to_position_case!(
+        three_byte_char_counts_bytes_in_utf8,
+        "✓✓",
+        3,
+        PositionEncoding::Utf8,
+        pos(0, 3)
+    );
+    byte_offset_to_position_case!(
+        three_byte_char_counts_one_unit_in_utf16,
+        "✓✓",
+        3,
+        PositionEncoding::Utf16,
+        pos(0, 1)
+    );
+    // U+1F600 is 4 UTF-8 bytes and a UTF-16 surrogate pair (2 units)
+    byte_offset_to_position_case!(
+        emoji_counts_bytes_in_utf8,
+        "a\u{1F600}b",
+        5,
+        PositionEncoding::Utf8,
+        pos(0, 5)
+    );
+    byte_offset_to_position_case!(
+        emoji_counts_a_surrogate_pair_in_utf16,
+        "a\u{1F600}b",
+        5,
+        PositionEncoding::Utf16,
+        pos(0, 3)
+    );
+    byte_offset_to_position_case!(
+        empty_text_has_position_zero,
+        "",
+        0,
+        PositionEncoding::Utf8,
+        pos(0, 0)
+    );
+
+    macro_rules! position_to_byte_offset_case {
+        ($name:ident, $text:expr, $position:expr, $expected:expr) => {
+            // bug: a client position inside a multi-byte character, past the end or after a BOM resolves to a wrong byte (a mid-character one would panic a later string slice) | tier: Medium
+            #[test]
+            fn $name() {
+                let text = $text;
+                let table = LineTable::new(text);
+                assert_eq!(
+                    table.position_to_byte_offset(text, $position, PositionEncoding::Utf8),
+                    $expected
+                );
+            }
+        };
     }
+
+    // `✓` is bytes 0..3: character 1 is inside it and must be rejected, not returned as byte 1
+    position_to_byte_offset_case!(
+        position_inside_a_multibyte_char_is_rejected,
+        "✓b",
+        pos(0, 1),
+        None
+    );
+    position_to_byte_offset_case!(
+        position_after_a_multibyte_char_resolves,
+        "✓b",
+        pos(0, 3),
+        Some(3)
+    );
+    position_to_byte_offset_case!(
+        position_after_a_bom_resolves,
+        "\u{FEFF}ab",
+        pos(0, 1),
+        Some(3)
+    );
+    position_to_byte_offset_case!(
+        position_past_the_end_of_empty_text_is_rejected,
+        "",
+        pos(0, 1),
+        None
+    );
+    position_to_byte_offset_case!(
+        position_on_a_crlf_second_line_resolves,
+        "ab\r\ncd",
+        pos(1, 0),
+        Some(4)
+    );
+
+    // position_to_byte_offset(byte_offset_to_position(N)) == Some(N) at every char boundary
+    macro_rules! round_trip_case {
+        ($name:ident, $text:expr) => {
+            // bug: converting a byte offset to a position and back does not return the same byte for some text shape or encoding | tier: Medium
+            #[test]
+            fn $name() {
+                let text = $text;
+                let table = LineTable::new(text);
+                let failures: Vec<String> = (0..=text.len())
+                    .filter(|offset| text.is_char_boundary(*offset))
+                    .flat_map(|offset| {
+                        [PositionEncoding::Utf8, PositionEncoding::Utf16]
+                            .map(|encoding| (offset, encoding))
+                    })
+                    .filter_map(|(offset, encoding)| {
+                        let position = table.byte_offset_to_position(text, offset, encoding);
+                        let back = table.position_to_byte_offset(text, position, encoding);
+                        (back != Some(offset))
+                            .then(|| format!("offset {offset} {encoding:?}: back {back:?}"))
+                    })
+                    .collect();
+                assert!(failures.is_empty(), "round-trip failed: {failures:?}");
+            }
+        };
+    }
+
+    round_trip_case!(lf_text_round_trips, "abc\nde");
+    round_trip_case!(crlf_text_round_trips, "ab\r\ncd");
+    round_trip_case!(three_byte_chars_round_trip, "✓✓");
+    round_trip_case!(emoji_text_round_trips, "a\u{1F600}b");
+    round_trip_case!(empty_text_round_trips, "");
 }

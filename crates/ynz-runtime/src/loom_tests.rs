@@ -179,6 +179,7 @@ const TAG_LADDER_LAST: i64 = 5;
 ///
 /// Both token producers (frame conduit tokens and handle tokens) mint over this one keyed
 /// core, so this model covers the key scheme for both.
+// bug: a new caller at a reused channel token matches a dead caller's parked send, so the dead value is delivered or freed twice under some interleaving | tier: High
 #[test]
 fn loom_aba_same_token_new_generation_delivers_new_value() {
     model("aba_same_token_new_generation", |iteration| unsafe {
@@ -242,6 +243,7 @@ fn loom_aba_same_token_new_generation_delivers_new_value() {
 /// Frame-token producer: a task parked on `send` is cancelled (its purge — exactly the drop
 /// ladder's call) while the consumer drains. The dead send must never land, its entry must
 /// not outlive it, and its payload is freed exactly once.
+// bug: a task cancelled while parked on send leaves its pending_sends entry (or its payload) alive, or frees the payload twice, under some interleaving | tier: High
 #[test]
 fn loom_orphan_purge_on_frame_cancellation() {
     model("orphan_purge_frame", |iteration| unsafe {
@@ -285,6 +287,7 @@ fn loom_orphan_purge_on_frame_cancellation() {
 /// Handle-token producer: `h.send()` parks under `(handle_ptr, send_gen)`; `ynz_handle_free`
 /// (the real second cancellation path — purge, then release the conduit ref) races the
 /// consumer's drain. Same invariant as the frame path, through the real handle ABI.
+// bug: ynz_handle_free leaves the handle's parked send entry alive, or frees its payload twice, racing the consumer's drain | tier: High
 #[test]
 fn loom_orphan_purge_on_handle_free() {
     unsafe extern "C-unwind" fn never_polled(_frame: *mut u8, _waker: *mut u8) -> i32 {
@@ -432,6 +435,7 @@ unsafe fn assert_purged_before_released(chan: *mut u8, ladder_key: (u64, u64)) {
 /// every interleaving: no orphan, the task's payload freed exactly once, exactly one reference
 /// released, the channel still fully usable by the survivor — and the ORDER: the survivor
 /// never observes the ladder's reference gone while the ladder's send is still parked.
+// bug: the drop ladder releases its channel reference before purging its own parked sends, leaving an orphan, an unbalanced refcount or a payload not freed exactly once while a co-owner uses the channel | tier: High
 #[test]
 fn loom_drop_ladder_kind2_arm_purges_before_release_with_live_co_owner() {
     model("drop_ladder_live_co_owner", |iteration| unsafe {
@@ -497,6 +501,7 @@ fn loom_drop_ladder_kind2_arm_purges_before_release_with_live_co_owner() {
 /// release; teardown's `Drop` walk must then find nothing left to glue), and the ORDER is
 /// probed by the co-owner right before it lets go of its own reference — the last moment it
 /// can still legally look.
+// bug: the drop ladder and a co-owner racing to release the last channel reference free a cancelled send's payload twice or never | tier: High
 #[test]
 fn loom_drop_ladder_kind2_arm_when_ladder_may_hold_last_reference() {
     model("drop_ladder_last_reference", |iteration| unsafe {
@@ -542,6 +547,7 @@ fn loom_drop_ladder_kind2_arm_when_ladder_may_hold_last_reference() {
 /// recorded BEFORE its `poll_recv` returned Pending. The property: if the value is still
 /// buffered after all three threads finish (nobody consumed it), every consumer that ended
 /// Pending has been woken — a Pending, un-woken receiver next to a buffered value is the hang.
+// bug: a receiver's waker is recorded after its poll, so a send landing mid-poll leaves a Pending receiver never woken next to a buffered value | tier: High
 #[test]
 fn loom_recv_register_before_poll_no_lost_wakeup() {
     model("recv_register_before_poll", |_iteration| unsafe {
@@ -604,6 +610,7 @@ const CLOSE_SEND_GEN: u64 = 3;
 /// and the channel reports closed once drained. The model deliberately does NOT assert
 /// "refused whenever `close()` returned first": that ordering is neither provided nor
 /// needed (the clone is the linearization point).
+// bug: close racing send lands the value and also refuses it, or does neither, so a payload is lost or freed twice | tier: High
 #[test]
 fn loom_close_vs_send_linearizes_at_the_sender_lock_clone() {
     model("close_vs_send_sender_lock", |iteration| unsafe {
@@ -704,6 +711,7 @@ unsafe fn plant_channel_and_cell_ladder(
 /// on either path. A `refuse_closed` that glues WITHOUT releasing is the ladder+glue double
 /// free (kind stays HEAP_SHAPE); one that releases WITHOUT gluing is P2-3's leak
 /// (`glue_count == 0`).
+// bug: refuse_closed glues a payload without releasing the ladder slot (a double free) or releases without gluing (a leak) when close races a task's send | tier: High
 #[test]
 fn loom_refuse_closed_releases_the_ladder_slot_then_glues_exactly_once() {
     model("refuse_closed_release_then_glue", |iteration| unsafe {
@@ -802,6 +810,7 @@ const ARC_SIZE: usize = 8;
 /// exact imbalance a missed spawn-site clone would be — makes the transient release + task 1's
 /// release hit zero while task 2 still holds the pointer, and task 2's "freed while I hold it"
 /// assertion fires (an assertion, not a crash: the check runs BEFORE the read).
+// bug: an Auto-Arc block is freed while a task still holds a reference, or freed other than exactly once, when task releases race the transient release | tier: High
 #[test]
 fn loom_arc_group_clone_per_task_then_transient_release_frees_exactly_once() {
     let _lane = ARC_MODEL_LANE.lock().unwrap();

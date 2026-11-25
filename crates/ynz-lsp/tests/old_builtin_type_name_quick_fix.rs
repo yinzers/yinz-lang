@@ -1,15 +1,15 @@
 // WHY: the teaching error for an old lowercase built-in type (`int`) carries a quick-fix that
 // rewrites it to the PascalCase name. A missing or wrong fix leaves the user retyping every
-// type by hand after the rename. High tier: the edit text comes from the one shared old->new
-// table, so this also pins that the fix and the error agree.
+// type by hand after the rename. This file is separate from code_action.rs because its source
+// holds the old spelling `int` on purpose, so the PascalCase codemod never rewrites it
+// (FILES_NEVER_REWRITTEN in ynz-pascalcase-codemod).
 
 use ynz_lsp::{
     capabilities::PositionEncoding, code_action::code_action_response, position::LineTable,
     state::ServerState,
 };
 
-// Bug it catches: no quick-fix for `int`, or a fix that writes anything but `Int` over exactly
-// the `int` token.
+// bug: the old lowercase type `int` gets no quick-fix, or a fix that writes anything but `Int` over exactly the `int` token | tier: Medium
 #[test]
 fn old_lowercase_type_spelling_gets_a_quick_fix_to_pascal_case() {
     let src = "function entrypoint() -> Nothing {\n  let count: int = 1\n  print(count)\n}\n";
