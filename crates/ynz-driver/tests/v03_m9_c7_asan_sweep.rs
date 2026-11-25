@@ -4,11 +4,11 @@
 //!
 //! The release plan's safety measure is that no fixture frees early, twice, or frees a value it
 //! does not own. The per-feature ASan tests pin the cases a change targets; this sweep checks a
-//! release-path change against the whole corpus. It is `#[ignore]` because it builds ~950
-//! programs twice (about 30 minutes on 4 cores): a dedicated-lane test, not a pre-push one.
+//! release-path change against the whole corpus. It runs in the nightly lane (`nightly_`):
+//! it builds ~950 programs twice (about 30 minutes on 4 cores), too long for a pre-push run.
 //!
 //! ```text
-//! cargo test -p ynz-driver --test v03_m9_c7_asan_sweep -- --ignored --nocapture
+//! cargo nextest run -p ynz-driver --test v03_m9_c7_asan_sweep --ignore-default-filter --no-capture
 //! ```
 //!
 //! The report goes to `$YNZ_ASAN_SWEEP_OUT` (default `<workspace>/target/asan_sweep.tsv`), one
@@ -62,9 +62,9 @@ fn check(fixture: &str, no_optimize: bool) -> Verdict {
     }
 }
 
+// bug: a release-path change frees early, twice or a value it does not own in a fixture no per-feature test targets (ASan use after free, double free, invalid free) | tier: High
 #[test]
-#[ignore = "builds and runs ~950 programs at two levels (about 30 minutes on 4 cores): a dedicated-lane test; run with --ignored"]
-fn sweep_every_fixture_under_asan_at_both_levels() {
+fn nightly_sweep_every_fixture_under_asan_at_both_levels() {
     let filter = std::env::var("YNZ_ASAN_SWEEP_FILTER").unwrap_or_default();
     let names = support::fixture_names(&filter);
     // One job per (fixture, level), so a slow fixture's two builds run on different workers.
@@ -126,9 +126,7 @@ fn sweep_every_fixture_under_asan_at_both_levels() {
     }
     println!("report: {}", out_path.display());
 
-    // Bug caught (High: use after free, double free, invalid free): a release-path change that
-    // frees early, twice or a value it does not own in a fixture no per-feature test targets,
-    // or a listed fixture whose report is gone while its entry stays.
+    // A listed fixture whose report is gone while its entry stays also fails here.
     let mut reported: Vec<&str> = findings
         .iter()
         .filter(|(class, _, _, _)| *class == "asan")

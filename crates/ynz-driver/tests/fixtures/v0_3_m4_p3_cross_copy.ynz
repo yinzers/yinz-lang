@@ -3,19 +3,23 @@
 // safe independent COPY — no false reject, no data race: the task reads its own copy,
 // the caller keeps its own value (prints 42). Auto-Arc is the deferred perf-form that
 // would refcount-share this same read-only crossing; the SAFE floor is proven here.
+// The spawner waits for the task's message before it prints, so the order never depends on how
+// fast the task runs (a fixed sleep raced the task under load).
 shape Report {
   label: String
   total: Int
 }
 
-function summarize(report: Report) -> Nothing {
+function summarize(report: Report, printed: Channel<Int>) -> Nothing {
   print(report.label)
+  printed.send(1)
 }
 
 function entrypoint() -> Nothing {
   let r: Report = { label: `q3`, total: 42 }
-  background summarize(r)
-  sleepBlocking(60)
+  let printed: Channel<Int> = Channel<Int>(1)
+  background summarize(r, printed)
+  let wasPrinted = printed.receive()
   print(r.total.toString())
   print(`cross-copy-done`)
 }

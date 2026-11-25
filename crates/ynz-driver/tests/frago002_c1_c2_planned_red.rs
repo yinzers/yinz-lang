@@ -225,6 +225,7 @@ fn assert_o0_always_correct(fixture_name: &str, expected: &str) {
 // LIVE REGRESSION LOCK since Phase 3 step 3.1 (dispatch hardening-p3.1-20260906-a1) —
 // `collect_crossings_in_stmts` now scans EVERY suspending statement's own operands, so
 // `rows` gets its frame slot. A red here is a real re-opening of FRAGO 002 cluster C1.
+// bug: a local read only by a channel `send` that is itself a suspension point gets no frame slot, so the resumed continuation reads an uninitialised alloca (SIGABRT optimized, wrong value at -O0) | tier: High
 #[test]
 fn frago002_c1_red_array_before_wait_channel_send() {
     // WHY: `rows` (array<int>) is declared before `wait sleep(20)` and read only by
@@ -243,6 +244,7 @@ fn frago002_c1_red_array_before_wait_channel_send() {
 // LIVE REGRESSION LOCK since Phase 3 step 3.1 (dispatch hardening-p3.1-20260906-a1) —
 // the severity case of cluster C1 (no channel, no `background`, ordinary code). A red
 // here is silent wrong output at exit 0 in the default mode; treat it as a stop-ship.
+// bug: a local passed as an argument to a suspending call gets no frame slot and the resumed callee reads a stale value (silent wrong output at exit 0) | tier: High
 #[test]
 fn frago002_c1_red_array_before_wait_suspending_call() {
     // WHY: `rows` is passed as a plain argument to `useRows`, whose OWN body
@@ -265,6 +267,7 @@ fn frago002_c1_red_array_before_wait_suspending_call() {
 // 30/30 correct at -O0 after the fix (was ~half wrong). A red here means a blocked
 // send's resume is reading a stale slot again; the run count makes flakiness in the
 // pass direction vanishingly unlikely, so one red run is a real defect.
+// bug: a `number` local read by blocking channel sends gets no frame slot and a resumed send reads a stale slot (wrong total in about half of -O0 runs) | tier: High
 #[test]
 fn frago002_c1_red_number_local_blocking_channel_send() {
     // WHY: `price` (number) is read by three `wire.send(price)` statements into a
@@ -283,6 +286,7 @@ fn frago002_c1_red_number_local_blocking_channel_send() {
 // LIVE REGRESSION LOCK since Phase 3 step 3.1 (dispatch hardening-p3.1-20260906-a1) —
 // 30/30 correct at -O0 after the fix (was printing raw heap addresses in a majority of
 // runs). Confirms in the tree that the discriminator was never the element type.
+// bug: an `int` local read by blocking channel sends gets no frame slot and a resumed send prints raw heap addresses (the discriminator is the suspending read, not the element type) | tier: High
 #[test]
 fn frago002_c1_red_int_local_blocking_channel_send() {
     // WHY: int-local twin of the number probe (same producer, same shape) — added
@@ -302,6 +306,7 @@ fn frago002_c1_red_int_local_blocking_channel_send() {
 
 // LIVE REGRESSION LOCK since Phase 3 step 3.2 (dispatch hardening-p3.2-20260906-a1) — the
 // `AliasNoOp` arm is gone; `fixed<T>` copies its cells into fresh storage.
+// bug: `.copy()` on a `fixed<T>` returns the receiver's own pointer, so writing the copy mutates the source | tier: High
 #[test]
 fn frago002_c2_red_fixed_copy_aliases_source() {
     // WHY: `b = a.copy()` on a `fixed<int>` aliases `a`'s own storage; `b.set(0,

@@ -1,550 +1,93 @@
-//! v0.3-M6 Phase 1b (FRAGO 004) + Phase 1c (FRAGOs 006/007/013): aggregate-arg
-//! frame-backing use-after-free RED→GREEN class (the signed-R14 surface).
+//! Aggregate arguments (shape, `number`, `maybe`, union, anonymous struct literal, `fixed<T>`)
+//! passed BY POINTER to a SUSPENDING callee: the argument is staged in the PARENT resume fn's
+//! stack alloca, the child frame stores a `ptrtoint` of that address, the parent returns
+//! Pending, its stack dies, and the child resumes on a dangling pointer. The crossing
+//! classifier must frame-back (or promote, or refuse) every such argument. Before the fix the
+//! value was silent, run-to-run varying garbage or a stable wrong value (`0.000...`, the wrong
+//! union variant), never a crash.
 //!
-//! Authored BEFORE the crossing-classifier fix (RED-repro-before-fix): each test asserts
-//! the CORRECT behavior and fails RED on the pre-fix tree for the documented UAF reason —
-//! a shape (or `fixed<T>`) aggregate passed BY POINTER to a suspending callee is staged in
-//! the PARENT resume fn's stack alloca; the child frame stores a `ptrtoint` of that stack
-//! address; the parent returns Pending, its stack dies, and the child resumes on a dangling
-//! `self`. Pre-fix signature: silent NONDETERMINISTIC garbage across runs (observed:
-//! 13-15-digit pointer-like values, different every run), never a stable wrong value.
-//!
-//! The sibling UFCS fixture (b) `v0_3_m6_ufcs_explicit_wait.ynz` (carved out of Phase 1 as
-//! this phase's locked RED repro) is asserted by `v03_m6_ufcs_suspension.rs`.
+//! The sibling UFCS repro `v0_3_m6_ufcs_explicit_wait.ynz` is asserted by
+//! `v03_m6_ufcs_suspension.rs`.
 
-use std::io::Read;
-use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+mod support;
 
-fn fixture(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name)
+use support::{assert_fixture_prints, at_both_optimization_levels, compile};
+
+/// One named test per input class of the `aggregate arg to a suspending callee` unit; each
+/// case is a test the runner names.
+macro_rules! suspending_call_arg_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: an argument passed by pointer to a suspending callee reads freed parent stack after the wait (garbage or the wrong value), or a valid non-escaping argument is wrongly rejected | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
 }
 
-/// Run `ynz run <fixture>` with a kill-after-timeout guard.
-/// Returns (stdout, stderr, exit_code, timed_out). exit_code is -1 when killed/signalled.
-fn ynz_run_with_timeout(name: &str, timeout: Duration) -> (String, String, i32, bool) {
-    ynz_run_at_level_with_timeout(name, timeout, false)
-}
-
-/// [`ynz_run_with_timeout`] at -O0 when `no_optimize` is set (`YNZ_NO_OPTIMIZE=1`), else at the
-/// default -O2.
-fn ynz_run_at_level_with_timeout(
-    name: &str,
-    timeout: Duration,
-    no_optimize: bool,
-) -> (String, String, i32, bool) {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_ynz"));
-    command
-        .args(["run", fixture(name).to_str().unwrap()])
-        .env("CLICOLOR", "0");
-    if no_optimize {
-        command.env("YNZ_NO_OPTIMIZE", "1");
-    } else {
-        command.env_remove("YNZ_NO_OPTIMIZE");
+suspending_call_arg_high_case! {
+    // case: `wait crew(ship)` with a shape argument (the pure-Call form) reads freed stack
+    v03_m6_shape_arg_pure_call_yields_deterministic_value => {
+        assert_fixture_prints("v0_3_m6_shape_arg_pure_call.ynz", false, "7\n", "wait crew(ship) must yield the cargo value 7");
     }
-    let mut child = command
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("failed to spawn ynz binary");
-
-    let start = Instant::now();
-    let mut timed_out = false;
-    loop {
-        match child.try_wait().expect("try_wait failed") {
-            Some(_) => break,
-            None if start.elapsed() > timeout => {
-                child.kill().ok();
-                child.wait().ok();
-                timed_out = true;
-                break;
-            }
-            None => std::thread::sleep(Duration::from_millis(20)),
-        }
+    // case: bare `tally(ship)` (auto-inserted suspension) through a pass-through chain reads freed stack
+    v03_m6_shape_arg_transitive_chain_yields_deterministic_value => {
+        assert_fixture_prints("v0_3_m6_shape_arg_transitive_chain.ynz", false, "8\n", "tally(ship) must yield crew(ship)+1 through the auto-inserted suspension chain");
     }
-    let mut stdout = String::new();
-    let mut stderr = String::new();
-    if let Some(mut s) = child.stdout.take() {
-        s.read_to_string(&mut stdout).ok();
+    // case: a `number` (decimal128) argument is copied to a resume-fn stack temp and reads back 0.000...
+    v03_m6_number_arg_pure_call_yields_deterministic_value => {
+        assert_fixture_prints("v0_3_m6_number_arg_pure_call.ynz", false, "2.5\n", "wait grow(x) must yield 2.5, not a dangling stack temp's 0.000...");
     }
-    if let Some(mut s) = child.stderr.take() {
-        s.read_to_string(&mut stderr).ok();
+    // case: `number` arguments of an auto-parallelized I/O group (third arg-staging loop) read freed stack
+    v03_m6_number_arg_parallel_group_yields_deterministic_values => {
+        assert_fixture_prints("v0_3_m6_number_arg_parallel_group.ynz", false, "2.5\n4.5\n", "the parallel group must yield 2.5 then 4.5");
     }
-    let code = if timed_out {
-        -1
-    } else {
-        child
-            .try_wait()
-            .ok()
-            .flatten()
-            .and_then(|s| s.code())
-            .unwrap_or(-1)
-    };
-    (stdout, stderr, code, timed_out)
-}
-
-/// Liveness budget, not a performance assertion: an order of magnitude over the observed run so
-/// a contended parallel test lane never flips it.
-const RUN_TIMEOUT: Duration = Duration::from_secs(60);
-
-#[test]
-fn v03_m6_shape_arg_pure_call_yields_deterministic_value() {
-    // WHY: `const c = wait crew(ship)` — the pure-`Call` form of the FRAGO 004 UAF. `ship`
-    // escapes by pointer into the suspending callee, so it crosses the suspension and must
-    // be frame-embedded in the parent's heap frame. Pre-fix: `ship` lives in a parent
-    // stack alloca and the resumed child reads freed stack (nondeterministic garbage).
-    let (stdout, stderr, code, timed_out) =
-        ynz_run_with_timeout("v0_3_m6_shape_arg_pure_call.ynz", RUN_TIMEOUT);
-    assert!(
-        !timed_out,
-        "pure-Call shape-arg fixture must not hang; stdout:\n{stdout}\nstderr:\n{stderr}"
-    );
-    assert_eq!(
-        code, 0,
-        "pure-Call shape-arg fixture must compile and run clean; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout, "7\n",
-        "wait crew(ship) must yield the cargo value 7 — pre-fix this is nondeterministic \
-         pointer garbage (the UAF tell); stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m6_shape_arg_transitive_chain_yields_deterministic_value() {
-    // WHY: the AUTO-INSERTED suspension twin — bare `tally(ship)` (no explicit wait at the
-    // arg-passing site) through a param-passthrough chain into the suspending leaf. The
-    // FRAGO 004 corroboration confirmed the UAF reproduces in this form too; the fix must
-    // close BOTH forms via the one crossing classifier.
-    let (stdout, stderr, code, timed_out) =
-        ynz_run_with_timeout("v0_3_m6_shape_arg_transitive_chain.ynz", RUN_TIMEOUT);
-    assert!(
-        !timed_out,
-        "transitive shape-arg fixture must not hang; stdout:\n{stdout}\nstderr:\n{stderr}"
-    );
-    assert_eq!(
-        code, 0,
-        "transitive shape-arg fixture must compile and run clean; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout, "8\n",
-        "tally(ship) must yield crew(ship)+1 == 8 through the auto-inserted suspension \
-         chain — pre-fix this is nondeterministic garbage; stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m6_shape_arg_pure_call_is_deterministic_across_runs() {
-    // WHY: the non-vacuous determinism proof (Phase 1b step 5). The pre-fix UAF signature
-    // is DIFFERENT garbage on every run (freed-stack reads); a fix that merely masked the
-    // symptom (e.g. a coincidentally-stable staging slot) could pass a single-run value
-    // assertion. N=10 identical correct values proves the value lives in stable frame
-    // memory, not surviving-by-luck stack.
-    for run in 0..10 {
-        let (stdout, stderr, code, timed_out) =
-            ynz_run_with_timeout("v0_3_m6_shape_arg_pure_call.ynz", RUN_TIMEOUT);
-        assert!(!timed_out, "run {run}: must not hang; stderr:\n{stderr}");
-        assert_eq!(code, 0, "run {run}: must exit clean; stderr:\n{stderr}");
-        assert_eq!(
-            stdout, "7\n",
-            "run {run}: every run must print exactly 7 — any variation is the UAF \
-             signature; stderr:\n{stderr}"
+    // case: a `number` argument of the I/O member in a fused CPU+I/O group reads freed stack
+    v03_m6_number_arg_fused_group_yields_deterministic_values => {
+        assert_fixture_prints("v0_3_m6_number_arg_fused_group.ynz", false, "1226\n4.5\n", "the fused group must yield 1226 (CPU) then 4.5 (I/O number arg)");
+    }
+    // case: a `maybe<int>` envelope in a parent stack alloca reads back pointer garbage instead of 42
+    v03_m6_maybe_arg_pure_call_yields_deterministic_value => {
+        assert_fixture_prints("v0_3_m6_maybe_arg_pure_call.ynz", false, "42\n", "wait pick(m) must yield 42");
+    }
+    // case: a union argument's tag reads from freed stack and selects the wrong variant
+    v03_m6_union_arg_pure_call_yields_deterministic_value => {
+        assert_fixture_prints("v0_3_m6_union_arg_pure_call.ynz", false, "square\n", "wait describe(fig) must yield the variant `square`");
+    }
+    // case: an anonymous struct literal argument has no `let` name for the classifier and reads freed stack
+    v03_m6_anon_struct_arg_pure_call_yields_deterministic_value => {
+        assert_fixture_prints("v0_3_m6_anon_struct_arg_pure_call.ynz", false, "7\n", "wait crew({...}) must yield the cargo value 7");
+    }
+    // case: a `number` literal or expression argument (`tally(2.25)`, `tally(seed + 2.75)`) reads dead stack after the callee's wait, at -O0 and -O2
+    v03_m9_c1h_number_literal_and_expression_args_reach_a_suspending_callee => {
+        at_both_optimization_levels(|no_optimize| {
+            assert_fixture_prints(
+                "v0_3_m9_c1h_number_literal_arg_suspending_call.ynz",
+                no_optimize,
+                "2.50\n5.50\n",
+                "a number literal or expression argument must survive the callee's wait",
+            );
+        });
+    }
+    // case: non-escaping number/fixed/maybe/union/anon arguments must stay accepted and unchanged (a classifier false positive rejects valid code)
+    v03_m6_non_escaping_args_of_every_widened_type_are_not_wrongly_affected => {
+        assert_fixture_prints(
+            "v0_3_m6_non_escaping_args_false_positive_sweep.ynz",
+            false,
+            "3.5\n9\n40\nsquare\n6\n",
+            "bump(x) == 3.5, headroom(nums) == 9, firstOr(m) == 40, tagOf(f) == `square`, crewOf({...}) == 6",
         );
     }
-}
-
-#[test]
-fn v03_m6_number_arg_pure_call_yields_deterministic_value() {
-    // WHY: `const y = wait grow(x)` with `x: number` — the FRAGO 006 / signed-R14 growth
-    // of the same UAF class. The parent's arg-staging copies the decimal128 bits into a
-    // fresh resume-fn STACK temp (load()'s Number arm) and stages ptr_to_int(temp) into
-    // the child frame; the parent returns Pending, the temp dies, and the child reads
-    // freed memory. Pre-fix signature (probe-confirmed): deterministic 0.000... instead
-    // of 2.5. The fix must stage a pointer to FRAME-RESIDENT bits via the one classifier.
-    let (stdout, stderr, code, timed_out) =
-        ynz_run_with_timeout("v0_3_m6_number_arg_pure_call.ynz", RUN_TIMEOUT);
-    assert!(
-        !timed_out,
-        "number-arg fixture must not hang; stdout:\n{stdout}\nstderr:\n{stderr}"
-    );
-    assert_eq!(
-        code, 0,
-        "number-arg fixture must compile and run clean; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout, "2.5\n",
-        "wait grow(x) must yield 2.5 — pre-fix this reads a dangling stack temp and \
-         prints 0.000... (the UAF tell); stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m6_number_arg_pure_call_is_deterministic_across_runs() {
-    // WHY: the non-vacuous determinism proof (Phase 1b step 5) for the number half.
-    // A fix that merely masked the symptom (a coincidentally-surviving staging slot)
-    // could pass a single-run assertion. N=10 identical correct values proves the
-    // staged bits live in stable frame memory, not surviving-by-luck stack.
-    for run in 0..10 {
-        let (stdout, stderr, code, timed_out) =
-            ynz_run_with_timeout("v0_3_m6_number_arg_pure_call.ynz", RUN_TIMEOUT);
-        assert!(!timed_out, "run {run}: must not hang; stderr:\n{stderr}");
-        assert_eq!(code, 0, "run {run}: must exit clean; stderr:\n{stderr}");
-        assert_eq!(
-            stdout, "2.5\n",
-            "run {run}: every run must print exactly 2.5 — any variation or 0.000 is \
-             the UAF signature; stderr:\n{stderr}"
-        );
-    }
-}
-
-#[test]
-fn v03_m6_shape_arg_transitive_chain_is_deterministic_across_runs() {
-    // WHY: the non-vacuous determinism proof for the transitive-chain form (fix-loop
-    // hardening — this repro was single-run while its pure-Call siblings had N=10).
-    // The pre-fix UAF signature is DIFFERENT garbage per run; N=10 identical correct
-    // values proves the value lives in stable frame memory across the whole chain.
-    for run in 0..10 {
-        let (stdout, stderr, code, timed_out) =
-            ynz_run_with_timeout("v0_3_m6_shape_arg_transitive_chain.ynz", RUN_TIMEOUT);
-        assert!(!timed_out, "run {run}: must not hang; stderr:\n{stderr}");
-        assert_eq!(code, 0, "run {run}: must exit clean; stderr:\n{stderr}");
-        assert_eq!(
-            stdout, "8\n",
-            "run {run}: every run must print exactly 8 — any variation is the UAF \
-             signature; stderr:\n{stderr}"
-        );
-    }
-}
-
-#[test]
-fn v03_m6_number_arg_parallel_group_yields_deterministic_values() {
-    // WHY: the FRAGO 006 number-arg UAF through the THIRD arg-staging loop
-    // (`emit_io_member_init`, the auto-parallelized independent I/O-group path) — missed
-    // by the initial two-loop conversion. `grow(x)`/`shrink(y)` form one parallel group;
-    // each callee reads its decimal128 arg after its own suspend point. Pre-fix
-    // (reproduced 3/3 on the unfixed tree): both print
-    // 0.000000000000000000000000000000000000000000000 instead of 2.5/4.5.
-    let (stdout, stderr, code, timed_out) =
-        ynz_run_with_timeout("v0_3_m6_number_arg_parallel_group.ynz", RUN_TIMEOUT);
-    assert!(
-        !timed_out,
-        "parallel-group number-arg fixture must not hang; stdout:\n{stdout}\nstderr:\n{stderr}"
-    );
-    assert_eq!(
-        code, 0,
-        "parallel-group number-arg fixture must compile and run clean; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout, "2.5\n4.5\n",
-        "the parallel group must yield 2.5 then 4.5 — pre-fix both read dangling stack \
-         temps and print 0.000... (the UAF tell); stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m6_number_arg_parallel_group_is_deterministic_across_runs() {
-    // WHY: the non-vacuous determinism proof for the parallel-group number half — a
-    // run-to-run garbage UAF must flip a run red (fresh child process per run).
-    for run in 0..10 {
-        let (stdout, stderr, code, timed_out) =
-            ynz_run_with_timeout("v0_3_m6_number_arg_parallel_group.ynz", RUN_TIMEOUT);
-        assert!(!timed_out, "run {run}: must not hang; stderr:\n{stderr}");
-        assert_eq!(code, 0, "run {run}: must exit clean; stderr:\n{stderr}");
-        assert_eq!(
-            stdout, "2.5\n4.5\n",
-            "run {run}: every run must print exactly 2.5 then 4.5 — any variation or \
-             0.000 is the UAF signature; stderr:\n{stderr}"
-        );
-    }
-}
-
-#[test]
-fn v03_m6_number_arg_fused_group_yields_deterministic_values() {
-    // WHY: the same third-staging-loop UAF through `emit_io_member_init`'s OTHER caller —
-    // `emit_fused_group_spawn_poll` (mixed CPU+I/O group). Pre-fix (reproduced 3/3 on
-    // the temp-reverted staging loop): 1226 (CPU member, unaffected) then 0.000...
-    // instead of 4.5 (the I/O member's decimal128 arg read from freed stack).
-    let (stdout, stderr, code, timed_out) =
-        ynz_run_with_timeout("v0_3_m6_number_arg_fused_group.ynz", RUN_TIMEOUT);
-    assert!(
-        !timed_out,
-        "fused-group number-arg fixture must not hang; stdout:\n{stdout}\nstderr:\n{stderr}"
-    );
-    assert_eq!(
-        code, 0,
-        "fused-group number-arg fixture must compile and run clean; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout, "1226\n4.5\n",
-        "the fused group must yield 1226 (CPU) then 4.5 (I/O number arg) — pre-fix the \
-         number reads a dangling stack temp and prints 0.000...; stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m6_number_arg_fused_group_is_deterministic_across_runs() {
-    // WHY: the non-vacuous determinism proof for the fused-group number half (fresh
-    // child process per run; a run-to-run garbage UAF must flip a run red).
-    for run in 0..10 {
-        let (stdout, stderr, code, timed_out) =
-            ynz_run_with_timeout("v0_3_m6_number_arg_fused_group.ynz", RUN_TIMEOUT);
-        assert!(!timed_out, "run {run}: must not hang; stderr:\n{stderr}");
-        assert_eq!(code, 0, "run {run}: must exit clean; stderr:\n{stderr}");
-        assert_eq!(
-            stdout, "1226\n4.5\n",
-            "run {run}: every run must print exactly 1226 then 4.5 — any variation or \
-             0.000 is the UAF signature; stderr:\n{stderr}"
-        );
-    }
-}
-
-#[test]
-fn v03_m6_non_escaping_args_of_every_widened_type_are_not_wrongly_affected() {
-    // WHY: the committed FALSE-POSITIVE sweep (previously only run on gitignored probe
-    // files; extended by Phase 1c step 5 with the maybe/union/anon halves). A
-    // NON-escaping `number` arg to a pure callee must not be wrongly
-    // frame-backed — the 3.5 value assertion guards observable behavior; the direct
-    // proof of the plain-alloca classification is the Phase 1b IR sweep, not this value
-    // (frame-backing is value-preserving, so 3.5 alone cannot rule it out) — a
-    // NON-escaping `fixed<int>` arg to a pure
-    // callee must not be wrongly Check-2b-rejected (compiles, runs, prints 9), and the
-    // Phase 1c types must be equally untouched: a non-escaping `maybe<int>` /
-    // union / anonymous struct-literal arg to a pure callee is neither rejected
-    // (Check 2 / Check 2b skips key on arg-escape-ONLY names — these never arg-escape)
-    // nor wrongly heap-cell-promoted (promotion keys on the crossing set; the direct
-    // no-promotion proof is the Phase 1c step-5 IR sweep — zero `ynz_alloc` cell sites
-    // for these bindings). The fixture's layout notes document two TRUE-crossing shapes
-    // (declare-after-wait reads; adjacent CPU-spike pairs) this sweep deliberately
-    // avoids.
-    let (stdout, stderr, code, timed_out) = ynz_run_with_timeout(
-        "v0_3_m6_non_escaping_args_false_positive_sweep.ynz",
-        RUN_TIMEOUT,
-    );
-    assert!(
-        !timed_out,
-        "false-positive sweep fixture must not hang; stdout:\n{stdout}\nstderr:\n{stderr}"
-    );
-    assert_eq!(
-        code, 0,
-        "non-escaping number/fixed/maybe/union/anon args must compile and run clean (a \
-         Check 2 / Check 2b rejection here is a classifier false positive); \
-         stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout, "3.5\n9\n40\nsquare\n6\n",
-        "non-escaping args must be untouched: bump(x) == 3.5, headroom(nums) == 9, \
-         firstOr(m) == 40, tagOf(f) == `square`, crewOf({{...}}) == 6; stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m6_maybe_arg_pure_call_yields_deterministic_value() {
-    // WHY: `const v = wait pick(m)` with `m: maybe<int>` — the Phase 1c (FRAGOs 006/007,
-    // signed R14) half of the same UAF class. The maybe envelope lives in a parent stack
-    // alloca; arg-staging stages ptr_to_int of that STACK address into the child frame
-    // and Check 2b never fires on arg-escape. Pre-fix signature (Paper-Traced this
-    // phase): NONDETERMINISTIC 15-digit pointer garbage instead of 42. The FRAGO-013 fix
-    // must bind-time-promote the envelope to a counted heap cell via the one classifier.
-    let (stdout, stderr, code, timed_out) =
-        ynz_run_with_timeout("v0_3_m6_maybe_arg_pure_call.ynz", RUN_TIMEOUT);
-    assert!(
-        !timed_out,
-        "maybe-arg fixture must not hang; stdout:\n{stdout}\nstderr:\n{stderr}"
-    );
-    assert_eq!(
-        code, 0,
-        "maybe-arg fixture must compile and run clean — a Check 2b rejection here \
-         violates the signed R14 'nothing rejected' disposition; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout, "42\n",
-        "wait pick(m) must yield 42 — pre-fix this reads a dangling stack envelope and \
-         prints nondeterministic pointer garbage (the UAF tell); stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m6_maybe_arg_pure_call_is_deterministic_across_runs() {
-    // WHY: the non-vacuous determinism proof for the maybe half (Phase 1c step 4). The
-    // pre-fix UAF signature is DIFFERENT garbage every run; N=10 identical correct
-    // values proves the envelope lives in stable heap memory, not surviving-by-luck
-    // stack.
-    for run in 0..10 {
-        let (stdout, stderr, code, timed_out) =
-            ynz_run_with_timeout("v0_3_m6_maybe_arg_pure_call.ynz", RUN_TIMEOUT);
-        assert!(!timed_out, "run {run}: must not hang; stderr:\n{stderr}");
-        assert_eq!(code, 0, "run {run}: must exit clean; stderr:\n{stderr}");
-        assert_eq!(
-            stdout, "42\n",
-            "run {run}: every run must print exactly 42 — any variation is the UAF \
-             signature; stderr:\n{stderr}"
-        );
-    }
-}
-
-#[test]
-fn v03_m6_union_arg_pure_call_yields_deterministic_value() {
-    // WHY: `const label = wait describe(fig)` with `fig: Figure = Circle | Square`
-    // holding a Square — the Phase 1c union half. The union's {i64 tag, i64 data}
-    // tagged struct lives in a parent stack alloca; staging stages ptr_to_int of it.
-    // Pre-fix signature (Paper-Traced this phase): deterministically the WRONG variant —
-    // `circle` 3/3 from the dangling tag read. The FRAGO-013 fix must bind-time-promote
-    // the envelope as a by-value union slot in a frame region (`flush_crossing_union`, resolving the
-    // value_to_stable_bits known-hole for the crossing path) via the one classifier.
-    let (stdout, stderr, code, timed_out) =
-        ynz_run_with_timeout("v0_3_m6_union_arg_pure_call.ynz", RUN_TIMEOUT);
-    assert!(
-        !timed_out,
-        "union-arg fixture must not hang; stdout:\n{stdout}\nstderr:\n{stderr}"
-    );
-    assert_eq!(
-        code, 0,
-        "union-arg fixture must compile and run clean — a Check 2b rejection here \
-         violates the signed R14 'nothing rejected' disposition; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout, "square\n",
-        "wait describe(fig) must yield `square` — pre-fix the dangling tag read prints \
-         the wrong variant `circle` (the UAF tell); stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m6_union_arg_pure_call_is_deterministic_across_runs() {
-    // WHY: the non-vacuous determinism proof for the union half (Phase 1c step 4).
-    // Pre-fix the wrong variant happened to be DETERMINISTIC (stale memory decoding as
-    // the Circle tag), so the value assertion alone carries the RED; N=10 additionally
-    // proves the fixed staging is stable heap memory, not surviving-by-luck stack.
-    for run in 0..10 {
-        let (stdout, stderr, code, timed_out) =
-            ynz_run_with_timeout("v0_3_m6_union_arg_pure_call.ynz", RUN_TIMEOUT);
-        assert!(!timed_out, "run {run}: must not hang; stderr:\n{stderr}");
-        assert_eq!(code, 0, "run {run}: must exit clean; stderr:\n{stderr}");
-        assert_eq!(
-            stdout, "square\n",
-            "run {run}: every run must print exactly `square` — any variation is the \
-             UAF signature; stderr:\n{stderr}"
-        );
-    }
-}
-
-#[test]
-fn v03_m6_anon_struct_arg_pure_call_yields_deterministic_value() {
-    // WHY: `wait crew({ ... })` — the Phase 1c anonymous-aggregate half. The literal has
-    // NO LET name for the crossing classifier to anchor on, so the Phase 1b fix cannot
-    // see it; it is materialized in a dying stack slot and staged by pointer. Pre-fix
-    // signature (Paper-Traced this phase): 4240380 instead of 7, 3/3 runs. The fix must
-    // route StructLit args through value_to_stable_bits inside the ONE
-    // stage_suspending_call_arg_bits helper (covers all three staging loops).
-    let (stdout, stderr, code, timed_out) =
-        ynz_run_with_timeout("v0_3_m6_anon_struct_arg_pure_call.ynz", RUN_TIMEOUT);
-    assert!(
-        !timed_out,
-        "anon-struct-arg fixture must not hang; stdout:\n{stdout}\nstderr:\n{stderr}"
-    );
-    assert_eq!(
-        code, 0,
-        "anon-struct-arg fixture must compile and run clean; stderr:\n{stderr}"
-    );
-    assert_eq!(
-        stdout, "7\n",
-        "wait crew({{...}}) must yield the cargo value 7 — pre-fix this reads a dangling \
-         unnamed temporary and prints garbage (the UAF tell); stderr:\n{stderr}"
-    );
-}
-
-#[test]
-fn v03_m6_anon_struct_arg_pure_call_is_deterministic_across_runs() {
-    // WHY: the non-vacuous determinism proof for the anonymous-aggregate half (Phase 1c
-    // step 4). N=10 identical correct values proves the literal is staged from a stable
-    // surviving allocation, not surviving-by-luck stack.
-    for run in 0..10 {
-        let (stdout, stderr, code, timed_out) =
-            ynz_run_with_timeout("v0_3_m6_anon_struct_arg_pure_call.ynz", RUN_TIMEOUT);
-        assert!(!timed_out, "run {run}: must not hang; stderr:\n{stderr}");
-        assert_eq!(code, 0, "run {run}: must exit clean; stderr:\n{stderr}");
-        assert_eq!(
-            stdout, "7\n",
-            "run {run}: every run must print exactly 7 — any variation is the UAF \
-             signature; stderr:\n{stderr}"
-        );
-    }
-}
-
-#[test]
-fn v03_m6_fixed_arg_to_suspending_callee_is_rejected() {
-    // WHY: a `fixed<T>` local escaping by pointer into a suspending callee is the same
-    // dangling-stack class, but fixed arrays cannot yet be frame-backed (stack `[N x i64]`
-    // allocas; recursive aggregate frame-embedding is a later milestone). The established
-    // design for a fixed<T> crossing a suspension is the UnsupportedCrossingLocalType
-    // teaching error (check.rs Check 2b) — the escape-through-callee form must route into
-    // that SAME guard via the one classifier. Pre-fix: this compiles and runs (exit 0),
-    // shipping the silent-UAF hazard.
-    let (stdout, stderr, code, timed_out) = ynz_run_with_timeout(
-        "v0_3_m6_fixed_arg_suspending_call_rejected.ynz",
-        RUN_TIMEOUT,
-    );
-    assert!(
-        !timed_out,
-        "fixed-arg fixture must fail at COMPILE time, never run; stdout:\n{stdout}"
-    );
-    assert_ne!(
-        code, 0,
-        "a Fixed<Int> passed to a suspending callee must be a compile error — pre-fix it \
-         compiles and runs with a dangling stack pointer; stdout:\n{stdout}"
-    );
-    assert!(
-        stderr.contains("cannot yet cross a `wait`"),
-        "the UnsupportedCrossingLocalType teaching error must fire; stderr:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("Array<T>"),
-        "the teaching error must suggest the heap-backed `Array<T>` alternative; \
-         stderr:\n{stderr}"
-    );
-}
-
-mod v03_m9_c1h_number_literal_and_expression_args_reach_a_suspending_callee {
-    use super::*;
-
-    fn assert_arguments_survive_the_callees_wait(no_optimize: bool) {
-        // WHY: a `number` literal or expression passed to a suspending callee was staged in the
-        // caller's resume-function stack (only a named local was frame-backed), so the callee
-        // read dead stack after its `wait`: `tally(2.25)` printed 0.25 instead of 2.50 and
-        // `tally(seed + 2.75)` read whatever the stack held. It made
-        // `red_opt_dangling_stack_return_sm_tier` depend on stack garbage. Tier: Medium.
-        // Run at -O0 and -O2: the staging differs between the two levels. Decided: this fix
-        // rides in C1h (#433); search git log "decimal128 staging fix rides".
-        let (stdout, stderr, code, timed_out) = ynz_run_at_level_with_timeout(
-            "v0_3_m9_c1h_number_literal_arg_suspending_call.ynz",
-            RUN_TIMEOUT,
-            no_optimize,
+    // case: a `fixed<T>` local escaping into a suspending callee compiled and shipped a dangling stack pointer instead of being refused
+    v03_m6_fixed_arg_to_suspending_callee_is_rejected => {
+        let compiled = compile("v0_3_m6_fixed_arg_suspending_call_rejected.ynz");
+        assert!(
+            !compiled.success,
+            "a Fixed<Int> passed to a suspending callee must be a compile error; diagnostics:\n{}",
+            compiled.diagnostics
         );
         assert!(
-            !timed_out,
-            "no_optimize={no_optimize}: must not hang; stderr:\n{stderr}"
+            compiled.diagnostics.contains("cannot yet cross a `wait`"),
+            "the UnsupportedCrossingLocalType teaching error must fire; diagnostics:\n{}",
+            compiled.diagnostics
         );
-        assert_eq!(
-            code, 0,
-            "no_optimize={no_optimize}: must run clean; stderr:\n{stderr}"
-        );
-        assert_eq!(
-            stdout, "2.50\n5.50\n",
-            "no_optimize={no_optimize}: a number literal or expression argument must survive \
-             the callee's wait; stderr:\n{stderr}"
-        );
-    }
-
-    #[test]
-    fn optimized() {
-        assert_arguments_survive_the_callees_wait(false);
-    }
-
-    #[test]
-    fn no_optimize() {
-        assert_arguments_survive_the_callees_wait(true);
     }
 }

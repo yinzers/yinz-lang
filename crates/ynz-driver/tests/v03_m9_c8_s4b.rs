@@ -9,30 +9,6 @@ use support::{
     assert_source_balanced_and_asan_clean as assert_source_balanced,
 };
 
-#[test]
-fn a_plain_maybe_union_errors_hit_releases_its_view() {
-    assert_fixture_balanced(
-        "v0_3_m9_c8_s4b_maybe_union_errors_plain_hit.ynz",
-        "big kept\nend\n",
-    );
-}
-
-#[test]
-fn a_plain_maybe_union_errors_miss_releases_nothing_it_does_not_own() {
-    assert_fixture_balanced(
-        "v0_3_m9_c8_s4b_maybe_union_errors_plain_miss.ynz",
-        "none\nend\n",
-    );
-}
-
-#[test]
-fn a_plain_errors_local_of_every_inner_type_is_released_with_its_own_form() {
-    assert_fixture_balanced(
-        "v0_3_m9_c8_s4b_errors_inner_types_plain.ynz",
-        &"false\n".repeat(9),
-    );
-}
-
 const SUSPENDING_MAYBE_CALLEES: &str = "
 shape Big {
   label: String
@@ -55,47 +31,6 @@ function pickNumber(index: Int) -> Maybe<Number> {
 }
 ";
 
-#[test]
-fn a_maybe_shape_a_suspending_callee_returns_is_released_when_bound_without_crossing() {
-    let source = format!(
-        "{SUSPENDING_MAYBE_CALLEES}
-function entrypoint() -> Nothing {{
-  let picked = pickShape(0)
-  print(picked.exists())
-}}
-"
-    );
-    assert_source_balanced("maybe_shape_return", &source, "true\n");
-}
-
-#[test]
-fn a_maybe_number_a_suspending_callee_returns_is_released_when_bound_without_crossing() {
-    let source = format!(
-        "{SUSPENDING_MAYBE_CALLEES}
-function entrypoint() -> Nothing {{
-  let picked = pickNumber(0)
-  print(picked.exists())
-}}
-"
-    );
-    assert_source_balanced("maybe_number_return", &source, "true\n");
-}
-
-#[test]
-fn a_maybe_shape_a_suspending_callee_returns_is_released_when_its_local_crosses_a_wait() {
-    let source = format!(
-        "{SUSPENDING_MAYBE_CALLEES}
-function entrypoint() -> Nothing {{
-  let picked = pickShape(0)
-  print(picked.exists())
-  wait sleep(1)
-  print(`after`)
-}}
-"
-    );
-    assert_source_balanced("maybe_shape_return_crossing", &source, "true\nafter\n");
-}
-
 /// Callees every errors-path test below shares: a suspending `string errors` that succeeds or
 /// fails on request (`__testFallibleAsync` fails when given `true`).
 const FALLIBLE_CALLEES: &str = "
@@ -105,11 +40,9 @@ function fetchName(fail: Boolean) -> String errors {
 }
 ";
 
-#[test]
-fn an_auto_propagation_in_a_resume_function_releases_the_open_locals() {
-    for (fail, expected) in [("false", "ok\n"), ("true", "failed\n")] {
-        let source = format!(
-            "{FALLIBLE_CALLEES}
+fn assert_propagation_releases_open_locals(fail: &str, expected: &str) {
+    let source = format!(
+        "{FALLIBLE_CALLEES}
 function work(fail: Boolean) -> Int errors {{
   let rows: Array<Int> = [1, 2]
   let label = `ab`.toUpperCase()
@@ -129,16 +62,13 @@ function entrypoint() -> Nothing {{
   }}
 }}
 "
-        );
-        assert_source_balanced(&format!("propagation_{fail}"), &source, expected);
-    }
+    );
+    assert_source_balanced(&format!("propagation_{fail}"), &source, expected);
 }
 
-#[test]
-fn a_narrowed_re_read_of_an_errors_local_in_a_resume_function_releases_what_it_owns() {
-    for (fail, expected) in [("false", "NAME42\nNAME42\n"), ("true", "failed\n")] {
-        let source = format!(
-            "{FALLIBLE_CALLEES}
+fn assert_narrowed_re_read_releases_owned(fail: &str, expected: &str) {
+    let source = format!(
+        "{FALLIBLE_CALLEES}
 function entrypoint() -> Nothing {{
   let tag = `t`.toUpperCase()
   let name = fetchName({fail})
@@ -151,13 +81,153 @@ function entrypoint() -> Nothing {{
   print(name.toUpperCase())
 }}
 "
-        );
-        assert_source_balanced(&format!("narrowed_{fail}"), &source, expected);
-    }
+    );
+    assert_source_balanced(&format!("narrowed_{fail}"), &source, expected);
 }
 
-#[test]
-fn a_crossing_errors_local_whose_string_is_taken_is_released_once() {
+/// Bug caught: pre-existing; errors return packed a decimal128 into a bignum ok word (wrong value,
+/// invalid free on release). An `errors` function declared `number<40>` returns a
+/// literal or a `number<34>`-or-narrower expression. The `return` must convert the value to the
+/// declared success type before it packs the ok word. Plain and suspending function alike.
+fn assert_errors_number_40_return_converted(suspending: bool, wait_line: &str) {
+    let source = format!(
+        "function literal() -> Number<40> errors {{
+  {wait_line}
+  return 2.5
+}}
+
+function expression(n: Int) -> Number<40> errors {{
+  {wait_line}
+  let small: Number<20> = 1.25
+  return small + small
+}}
+
+function entrypoint() -> Nothing {{
+  let fallback: Number<40> = 0.5
+  let first = literal()
+  print(first.or(fallback))
+  let second = expression(1)
+  print(second.or(fallback))
+}}
+"
+    );
+    assert_source_balanced(
+        &format!("number_40_errors_return_{suspending}"),
+        &source,
+        "2.5\n2.50\n",
+    );
+}
+
+/// Bug caught: pre-existing, found with item 1; the crash appears only on the plan branch (C7's
+/// release makes it an invalid free): a plain `-> number<40>` returned a narrower value (a
+/// `number<20>` local, a `number<20>` sum) as the decimal128 cell it was, which the caller then read
+/// and freed as bignum text (wrong value, `free(): invalid pointer`). The function is
+/// plain; its caller is plain or suspending. (A bare suspending `-> number<40>` does not compile
+/// today, "SM wrapper-return has no arm", a separate bug.)
+fn assert_plain_number_40_return_converted(suspending: bool, wait_line: &str) {
+    let source = format!(
+        "function narrowed() -> Number<40> {{
+  let small: Number<20> = 1.25
+  return small
+}}
+
+function summed() -> Number<40> {{
+  let small: Number<20> = 1.25
+  return small + small
+}}
+
+function entrypoint() -> Nothing {{
+  {wait_line}
+  let first = narrowed()
+  print(first)
+  let second = summed()
+  print(second)
+}}
+"
+    );
+    assert_source_balanced(
+        &format!("plain_number_40_return_{suspending}"),
+        &source,
+        "1.25\n2.50\n",
+    );
+}
+
+/// One named test per errors-capable value form of the `slice 4b errors values in a resume function` run unit; each case is balanced (heap and strings) and ASan clean at both optimization levels.
+macro_rules! s4b_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a resume function or errors-capable function leaks, double frees or mis-converts an errors value, a maybe a suspending callee returns, a taken string or a number<40> return, silently at exit 0 | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+s4b_high_case! {
+    a_plain_maybe_union_errors_hit_releases_its_view => {
+        assert_fixture_balanced(
+            "v0_3_m9_c8_s4b_maybe_union_errors_plain_hit.ynz",
+            "big kept\nend\n",
+        );
+    }
+    a_plain_maybe_union_errors_miss_releases_nothing_it_does_not_own => {
+        assert_fixture_balanced(
+            "v0_3_m9_c8_s4b_maybe_union_errors_plain_miss.ynz",
+            "none\nend\n",
+        );
+    }
+    a_plain_errors_local_of_every_inner_type_is_released_with_its_own_form => {
+        assert_fixture_balanced(
+            "v0_3_m9_c8_s4b_errors_inner_types_plain.ynz",
+            &"false\n".repeat(9),
+        );
+    }
+    a_maybe_shape_a_suspending_callee_returns_is_released_when_bound_without_crossing => {
+    let source = format!(
+        "{SUSPENDING_MAYBE_CALLEES}
+function entrypoint() -> Nothing {{
+  let picked = pickShape(0)
+  print(picked.exists())
+}}
+"
+    );
+    assert_source_balanced("maybe_shape_return", &source, "true\n");
+    }
+    a_maybe_number_a_suspending_callee_returns_is_released_when_bound_without_crossing => {
+    let source = format!(
+        "{SUSPENDING_MAYBE_CALLEES}
+function entrypoint() -> Nothing {{
+  let picked = pickNumber(0)
+  print(picked.exists())
+}}
+"
+    );
+    assert_source_balanced("maybe_number_return", &source, "true\n");
+    }
+    a_maybe_shape_a_suspending_callee_returns_is_released_when_its_local_crosses_a_wait => {
+    let source = format!(
+        "{SUSPENDING_MAYBE_CALLEES}
+function entrypoint() -> Nothing {{
+  let picked = pickShape(0)
+  print(picked.exists())
+  wait sleep(1)
+  print(`after`)
+}}
+"
+    );
+    assert_source_balanced("maybe_shape_return_crossing", &source, "true\nafter\n");
+    }
+    an_auto_propagation_in_a_resume_function_releases_the_open_locals_when_the_call_succeeds => {
+        assert_propagation_releases_open_locals("false", "ok\n");
+    }
+    an_auto_propagation_in_a_resume_function_releases_the_open_locals_when_the_call_fails => {
+        assert_propagation_releases_open_locals("true", "failed\n");
+    }
+    a_narrowed_re_read_of_an_errors_local_in_a_resume_function_releases_what_it_owns_when_the_call_succeeds => {
+        assert_narrowed_re_read_releases_owned("false", "NAME42\nNAME42\n");
+    }
+    a_narrowed_re_read_of_an_errors_local_in_a_resume_function_releases_what_it_owns_when_the_call_fails => {
+        assert_narrowed_re_read_releases_owned("true", "failed\n");
+    }
+    a_crossing_errors_local_whose_string_is_taken_is_released_once => {
     let source = format!(
         "{FALLIBLE_CALLEES}
 function entrypoint() -> Nothing {{
@@ -170,10 +240,8 @@ function entrypoint() -> Nothing {{
 "
     );
     assert_source_balanced("crossing_taken", &source, "name42\n");
-}
-
-#[test]
-fn a_reassigned_errors_local_in_a_resume_function_releases_its_old_value() {
+    }
+    a_reassigned_errors_local_in_a_resume_function_releases_its_old_value => {
     let source = format!(
         "{FALLIBLE_CALLEES}
 function plainName() -> String errors {{
@@ -189,10 +257,8 @@ function entrypoint() -> Nothing {{
 "
     );
     assert_source_balanced("reassigned", &source, "PLAIN\n");
-}
-
-#[test]
-fn an_errors_local_reassigned_in_a_loop_across_waits_releases_each_old_value() {
+    }
+    an_errors_local_reassigned_in_a_loop_across_waits_releases_each_old_value => {
     let source = format!(
         "{FALLIBLE_CALLEES}
 function plainName() -> String errors {{
@@ -212,10 +278,8 @@ function entrypoint() -> Nothing {{
 "
     );
     assert_source_balanced("reassigned_in_loop", &source, "PLAIN\n");
-}
-
-#[test]
-fn a_given_maybe_call_result_is_staged_in_the_frame_for_a_suspending_callee() {
+    }
+    a_given_maybe_call_result_is_staged_in_the_frame_for_a_suspending_callee => {
     let source = "
 function makeNote() -> Maybe<String> {
   let items: Array<String> = [`note`.toUpperCase()]
@@ -235,10 +299,8 @@ function entrypoint() -> Nothing {
 }
 ";
     assert_source_balanced("given_maybe_call_result", source, "4\n");
-}
-
-#[test]
-fn a_maybe_of_a_union_temporary_of_a_suspending_statement_is_released() {
+    }
+    a_maybe_of_a_union_temporary_of_a_suspending_statement_is_released => {
     let source = "
 shape Tiny {
   flag: Boolean
@@ -273,20 +335,13 @@ function entrypoint() -> Nothing {
 }
 ";
     assert_source_balanced("maybe_union_temporary", source, "1\n0\n");
-}
-
-#[test]
-fn a_maybe_a_handle_delivers_is_not_freed_by_its_binding_because_the_handle_owns_it() {
-    // `h.receive()` of a `maybe<int>` is a pointer into the handle's own 16-byte buffer: releasing
-    // it as a heap cell was a double free (ASan sweep, before the borrowed ok word was recorded).
-    assert_fixture_balanced("v0_3_m8_p4_handle_maybe_return.ynz", "7\ndone\n");
-}
-
-#[test]
-fn a_narrowed_read_of_an_errors_local_that_crosses_only_through_its_release_still_builds() {
-    // Bug: the narrowed read re-pointed `locals` at an alloca made in the read's own branch, and
-    // the reload after a later `wait` wrote into it: LLVM "Instruction does not dominate all
-    // uses" (examples/pirates-roster, found by `examples_basics_runs_end_to_end`).
+    }
+    // case: `h.receive()` of a `maybe<int>` is a pointer into the handle's own 16-byte buffer: releasing it as a heap cell was a double free (ASan sweep, before the borrowed ok word was recorded).
+    a_maybe_a_handle_delivers_is_not_freed_by_its_binding_because_the_handle_owns_it => {
+        assert_fixture_balanced("v0_3_m8_p4_handle_maybe_return.ynz", "7\ndone\n");
+    }
+    // case: Bug: the narrowed read re-pointed `locals` at an alloca made in the read's own branch, and the reload after a later `wait` wrote into it: LLVM "Instruction does not dominate all uses" (examples/pirates-roster, found by `examples_basics_runs_end_to_end`).
+    a_narrowed_read_of_an_errors_local_that_crosses_only_through_its_release_still_builds => {
     let source = "
 function battingAverage(hits: Int, atBats: Int) -> Int errors {
   return (hits * 1000) / atBats
@@ -303,77 +358,17 @@ function entrypoint() -> Nothing {
 }
 ";
     assert_source_balanced("narrowed_read_release_only", source, "250\nend\n");
-}
-
-/// Bug caught: pre-existing; errors return packed a decimal128 into a bignum ok word (wrong value,
-/// invalid free on release); tier Medium. An `errors` function declared `number<40>` returns a
-/// literal or a `number<34>`-or-narrower expression. The `return` must convert the value to the
-/// declared success type before it packs the ok word. Plain and suspending function alike.
-#[test]
-fn a_number_40_errors_return_of_a_narrower_value_is_converted_to_the_declared_type() {
-    for (suspending, wait_line) in [(false, ""), (true, "wait sleep(1)")] {
-        let source = format!(
-            "function literal() -> Number<40> errors {{
-  {wait_line}
-  return 2.5
-}}
-
-function expression(n: Int) -> Number<40> errors {{
-  {wait_line}
-  let small: Number<20> = 1.25
-  return small + small
-}}
-
-function entrypoint() -> Nothing {{
-  let fallback: Number<40> = 0.5
-  let first = literal()
-  print(first.or(fallback))
-  let second = expression(1)
-  print(second.or(fallback))
-}}
-"
-        );
-        assert_source_balanced(
-            &format!("number_40_errors_return_{suspending}"),
-            &source,
-            "2.5\n2.50\n",
-        );
     }
-}
-
-/// Bug caught: pre-existing, found with item 1; the crash appears only on the plan branch (C7's
-/// release makes it an invalid free): a plain `-> number<40>` returned a narrower value (a
-/// `number<20>` local, a `number<20>` sum) as the decimal128 cell it was, which the caller then read
-/// and freed as bignum text (wrong value, `free(): invalid pointer`). Tier Medium. The function is
-/// plain; its caller is plain or suspending. (A bare suspending `-> number<40>` does not compile
-/// today, "SM wrapper-return has no arm", a separate bug.)
-#[test]
-fn a_plain_number_40_return_of_a_narrower_value_is_converted_to_the_declared_type() {
-    for (suspending, wait_line) in [(false, ""), (true, "wait sleep(1)")] {
-        let source = format!(
-            "function narrowed() -> Number<40> {{
-  let small: Number<20> = 1.25
-  return small
-}}
-
-function summed() -> Number<40> {{
-  let small: Number<20> = 1.25
-  return small + small
-}}
-
-function entrypoint() -> Nothing {{
-  {wait_line}
-  let first = narrowed()
-  print(first)
-  let second = summed()
-  print(second)
-}}
-"
-        );
-        assert_source_balanced(
-            &format!("plain_number_40_return_{suspending}"),
-            &source,
-            "1.25\n2.50\n",
-        );
+    a_number_40_errors_return_of_a_narrower_value_is_converted_to_the_declared_type_in_a_plain_function => {
+        assert_errors_number_40_return_converted(false, "");
+    }
+    a_number_40_errors_return_of_a_narrower_value_is_converted_to_the_declared_type_in_a_suspending_function => {
+        assert_errors_number_40_return_converted(true, "wait sleep(1)");
+    }
+    a_plain_number_40_return_of_a_narrower_value_is_converted_to_the_declared_type_read_by_a_plain_caller => {
+        assert_plain_number_40_return_converted(false, "");
+    }
+    a_plain_number_40_return_of_a_narrower_value_is_converted_to_the_declared_type_read_by_a_suspending_caller => {
+        assert_plain_number_40_return_converted(true, "wait sleep(1)");
     }
 }

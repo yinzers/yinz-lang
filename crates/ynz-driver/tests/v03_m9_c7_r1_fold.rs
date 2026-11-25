@@ -61,28 +61,6 @@ function entrypoint() -> Nothing {
 
 const UNION_MAYBE_RETURNED_EXPECTED: &str = "tiny\nbig kept\nnone\nend\n";
 
-/// A `maybe<Union>` a function returns is released by its caller: heap blocks and strings freed
-/// equal allocated, and nothing is freed twice (High).
-#[test]
-fn a_maybe_union_a_function_returns_is_released() {
-    at_both_optimization_levels(|no_optimize| {
-        let counters = run_balanced(
-            "c7_fold_maybe_union",
-            UNION_MAYBE_RETURNED,
-            UNION_MAYBE_RETURNED_EXPECTED,
-            no_optimize,
-        );
-        assert_heap_balanced("c7_fold_maybe_union", &counters, no_optimize);
-        assert_strings_balanced("c7_fold_maybe_union", &counters, no_optimize);
-        assert_asan_clean(
-            "c7_fold_maybe_union",
-            UNION_MAYBE_RETURNED,
-            UNION_MAYBE_RETURNED_EXPECTED,
-            no_optimize,
-        );
-    });
-}
-
 const UNION_MAYBE_FORMS: &str = "
 shape Tiny {
   flag: Boolean
@@ -130,28 +108,6 @@ function entrypoint() -> Nothing {
 
 const UNION_MAYBE_FORMS_EXPECTED: &str = "has\nsecond\nhas\nsecond\nnone\nend\n";
 
-/// A `maybe<Union>` returned straight from a `get`, through a local, discarded, and read in
-/// place is released once each (High).
-#[test]
-fn every_form_of_a_returned_maybe_union_is_released() {
-    at_both_optimization_levels(|no_optimize| {
-        let counters = run_balanced(
-            "c7_fold_maybe_union_forms",
-            UNION_MAYBE_FORMS,
-            UNION_MAYBE_FORMS_EXPECTED,
-            no_optimize,
-        );
-        assert_heap_balanced("c7_fold_maybe_union_forms", &counters, no_optimize);
-        assert_strings_balanced("c7_fold_maybe_union_forms", &counters, no_optimize);
-        assert_asan_clean(
-            "c7_fold_maybe_union_forms",
-            UNION_MAYBE_FORMS,
-            UNION_MAYBE_FORMS_EXPECTED,
-            no_optimize,
-        );
-    });
-}
-
 // ── Probe: a `maybe` a UFCS call gives ───────────────────────────────────────────────────────
 
 const MAYBE_GIVEN_BY_UFCS: &str = "
@@ -178,14 +134,61 @@ function entrypoint() -> Nothing {
 }
 ";
 
-/// A `.copy()` of a `maybe`, or a function's `maybe` result, at the `give` position of a UFCS call
-/// (`list.eatTag(x)`) is handed over once, like the plain call `eatTag(x)` (High).
-#[test]
-fn a_fresh_maybe_given_through_a_ufcs_call_is_handed_over_once() {
-    at_both_optimization_levels(|no_optimize| {
-        let counters = run_balanced("c7_fold_ufcs_give", MAYBE_GIVEN_BY_UFCS, "4\n", no_optimize);
-        assert_heap_balanced("c7_fold_ufcs_give", &counters, no_optimize);
-        assert_strings_balanced("c7_fold_ufcs_give", &counters, no_optimize);
-        assert_asan_clean("c7_fold_ufcs_give", MAYBE_GIVEN_BY_UFCS, "4\n", no_optimize);
-    });
+/// One named test per form of the `returned maybe<Union> / UFCS give` run unit; each case runs at both optimization levels (counters and AddressSanitizer).
+macro_rules! r1_fold_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a maybe<Union> a function returns, or a maybe handed over through a UFCS give, is leaked or freed twice by the plain path, silently at exit 0 | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+r1_fold_high_case! {
+    // case: A `maybe<Union>` a function returns is released by its caller: heap blocks and strings freed equal allocated, and nothing is freed twice
+    a_maybe_union_a_function_returns_is_released => {
+        at_both_optimization_levels(|no_optimize| {
+            let counters = run_balanced(
+                "c7_fold_maybe_union",
+                UNION_MAYBE_RETURNED,
+                UNION_MAYBE_RETURNED_EXPECTED,
+                no_optimize,
+            );
+            assert_heap_balanced("c7_fold_maybe_union", &counters, no_optimize);
+            assert_strings_balanced("c7_fold_maybe_union", &counters, no_optimize);
+            assert_asan_clean(
+                "c7_fold_maybe_union",
+                UNION_MAYBE_RETURNED,
+                UNION_MAYBE_RETURNED_EXPECTED,
+                no_optimize,
+            );
+        });
+    }
+    // case: A `maybe<Union>` returned straight from a `get`, through a local, discarded, and read in place is released once each
+    every_form_of_a_returned_maybe_union_is_released => {
+        at_both_optimization_levels(|no_optimize| {
+            let counters = run_balanced(
+                "c7_fold_maybe_union_forms",
+                UNION_MAYBE_FORMS,
+                UNION_MAYBE_FORMS_EXPECTED,
+                no_optimize,
+            );
+            assert_heap_balanced("c7_fold_maybe_union_forms", &counters, no_optimize);
+            assert_strings_balanced("c7_fold_maybe_union_forms", &counters, no_optimize);
+            assert_asan_clean(
+                "c7_fold_maybe_union_forms",
+                UNION_MAYBE_FORMS,
+                UNION_MAYBE_FORMS_EXPECTED,
+                no_optimize,
+            );
+        });
+    }
+    // case: A `.copy()` of a `maybe`, or a function's `maybe` result, at the `give` position of a UFCS call (`list.eatTag(x)`) is handed over once, like the plain call `eatTag(x)`
+    a_fresh_maybe_given_through_a_ufcs_call_is_handed_over_once => {
+        at_both_optimization_levels(|no_optimize| {
+            let counters = run_balanced("c7_fold_ufcs_give", MAYBE_GIVEN_BY_UFCS, "4\n", no_optimize);
+            assert_heap_balanced("c7_fold_ufcs_give", &counters, no_optimize);
+            assert_strings_balanced("c7_fold_ufcs_give", &counters, no_optimize);
+            assert_asan_clean("c7_fold_ufcs_give", MAYBE_GIVEN_BY_UFCS, "4\n", no_optimize);
+        });
+    }
 }

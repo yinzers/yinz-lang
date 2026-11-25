@@ -43,14 +43,6 @@ function entrypoint() -> Nothing {
 }
 ";
 
-/// Bug (High: leak): `provenance` classed a built-in's heap result as `Reaches([receiver])`
-/// unless the method was in `builtin_method_returns_fresh`; `split` was not, so `parts` was a
-/// piece of `s`, never an owner, and its array and three strings were never released.
-#[test]
-fn a_split_result_bound_by_let_is_an_owner_and_is_released() {
-    assert_balanced_and_clean("c7r1_split_let", SPLIT_BOUND_BY_LET, "3\n");
-}
-
 const SPLIT_TEMPORARIES: &str = "
 function countOf(share cells: Array<String>) -> Int {
   return cells.count()
@@ -67,13 +59,6 @@ function entrypoint() -> Nothing {
   print(total)
 }
 ";
-
-/// Bug (High: leak): a `split` result nothing binds (a receiver, a borrowed argument, a `for`
-/// iterable) was not a temporary, so it was never released at its statement's end.
-#[test]
-fn a_split_result_nothing_binds_is_released_at_the_end_of_its_statement() {
-    assert_balanced_and_clean("c7r1_split_temporaries", SPLIT_TEMPORARIES, "12\n");
-}
 
 const SPLIT_HANDED_OVER: &str = "
 shape Row {
@@ -92,13 +77,6 @@ function entrypoint() -> Nothing {
   print(row.cells.count() + nested.count() + again.count())
 }
 ";
-
-/// Bug (High: double free): a `split` result that is an owner is handed over by a store and
-/// copied by `.copy()`; each must be released once.
-#[test]
-fn a_split_result_stored_copied_returned_or_reassigned_is_released_once() {
-    assert_balanced_and_clean("c7r1_split_handed_over", SPLIT_HANDED_OVER, "7\n");
-}
 
 // ── Group 4: a `.copy()` of a `maybe` is one owner, taken once ──────────────────────────────
 
@@ -121,14 +99,6 @@ function entrypoint() -> Nothing {
 }
 ";
 
-/// Bug (High: leak): `emit_owned_copy` mints a heap envelope cell and a payload for a `maybe`
-/// copy, then the `let` copied the envelope again into the binding's slot and orphaned the first
-/// (4 allocs / 2 frees for `saved = m.copy()`; 3/2 for a `maybe<int>`).
-#[test]
-fn a_maybe_copy_bound_by_let_or_assignment_is_taken_not_copied_again() {
-    assert_heap_balanced_and_clean("c7r1_maybe_copy_bound", MAYBE_COPY_BOUND, "14\n");
-}
-
 const MAYBE_COPY_PERSISTED: &str = "
 shape Tag {
   name: String
@@ -145,14 +115,6 @@ function entrypoint() -> Nothing {
   print(boxed.count() + heldBoxed.count())
 }
 ";
-
-/// Bug (High: leak): a `.copy()` of a `maybe` stored into an array literal, `set` or `add` was
-/// cloned a second time by the persist (`value_to_stable_bits`), orphaning the copy's cell, payload
-/// cell and string.
-#[test]
-fn a_maybe_copy_stored_into_an_array_is_kept_by_the_array() {
-    assert_balanced_and_clean("c7r1_maybe_copy_persisted", MAYBE_COPY_PERSISTED, "3\n");
-}
 
 const MAYBE_COPY_TEMPORARY_AND_RETURNED: &str = "
 shape Tag {
@@ -175,17 +137,6 @@ function entrypoint() -> Nothing {
 }
 ";
 
-/// Bug (High: leak): a `.copy()` of a `maybe` nothing binds (a receiver, a borrowed argument) was
-/// not a temporary, and a `return` of one copied it again.
-#[test]
-fn a_maybe_copy_nothing_binds_or_a_function_returns_is_released_once() {
-    assert_balanced_and_clean(
-        "c7r1_maybe_copy_temp",
-        MAYBE_COPY_TEMPORARY_AND_RETURNED,
-        "6\n",
-    );
-}
-
 // ── Group 5: a `fixed` list of shapes owns the cell of each item ────────────────────────────
 
 const FIXED_OF_FLAT_SHAPES: &str = "
@@ -201,14 +152,6 @@ function entrypoint() -> Nothing {
   print(pair.count() + copied.count() + boxes.count())
 }
 ";
-
-/// Bug (High: leak): `heap_class_of` called a `fixed` of a shape that owns no heap `NoHeap`, so the
-/// binding was never released, yet every item sits in a heap cell of its own
-/// (`value_to_stable_bits`): `let pair: fixed<Part> = [{qty: 1}, {qty: 2}]` was 2 allocs / 0 frees.
-#[test]
-fn a_fixed_list_of_heap_free_shapes_releases_its_item_cells() {
-    assert_heap_balanced_and_clean("c7r1_fixed_flat_shapes", FIXED_OF_FLAT_SHAPES, "6\n");
-}
 
 /// [`assert_balanced_and_clean`] for a program that allocates strings only.
 fn assert_strings_balanced_and_clean(label: &str, program: &str, expected: &str) {
@@ -239,14 +182,6 @@ function entrypoint() -> Nothing {
 }
 ";
 
-/// Bug (High: leak): `ynz_string_codepoint_at` / `ynz_string_grapheme_at` build a new string, which
-/// `let c = s.get(0)` then cloned again (the binding copies a `maybe<string>` it does not take) and
-/// a `maybe` nothing binds never freed (`let s = ...; let c = s.get(0)`: strings 3/2).
-#[test]
-fn a_string_character_read_frees_the_string_it_built() {
-    assert_strings_balanced_and_clean("c7r1_string_get", STRING_CHARACTER_READS, "8\n");
-}
-
 // ── Group 4: a shape with a `maybe` field owns the field's envelope cell ────────────────────
 
 const SHAPE_WITH_A_MAYBE_FIELD: &str = "
@@ -270,15 +205,6 @@ function entrypoint() -> Nothing {
   print(rows.count() + holder.found.or({qty: 0}).qty)
 }
 ";
-
-/// Bug (High: leak): `shape_class` classed a shape whose only heap is a `maybe` field of a
-/// heap-free payload `NoHeap`, but a `maybe` field is a pointer to a heap envelope cell
-/// (`store_field`), so no release was planned for the shape: `let slot: Slot = { count: none }`
-/// was 2 allocs / 0 frees.
-#[test]
-fn a_shape_with_a_maybe_field_releases_the_fields_envelope_cell() {
-    assert_heap_balanced_and_clean("c7r1_maybe_field", SHAPE_WITH_A_MAYBE_FIELD, "3\n");
-}
 
 // ── Group 4: a `maybe` returned, persisted or given has one owner of its payload ────────────
 
@@ -316,15 +242,6 @@ function entrypoint() -> Nothing {
 }
 ";
 
-/// Bug (High: leak): a function that returned a `maybe` copied its payload at the `return`, yet
-/// typeck called the returned local "returned" and planned no release for it (`copied_at_return`
-/// said a `maybe` is not copied), so the local's own copy of the shape's string leaked (6/5), and a
-/// returned owned local was copied twice.
-#[test]
-fn a_maybe_a_function_returns_is_copied_once_and_its_local_released() {
-    assert_balanced_and_clean("c7r1_maybe_returned", MAYBE_RETURNED, "6\n");
-}
-
 const MAYBE_PERSISTED_AND_GIVEN: &str = "
 shape Tag {
   name: String
@@ -352,14 +269,66 @@ function entrypoint() -> Nothing {
 }
 ";
 
-/// Bug (High: leak): a `maybe` a function returned (or a string `get` built, or a `.copy()` of a
-/// `maybe`) owns its payload, but a persist into an array literal or `add` cloned it again, and a
-/// `give` parameter was handed the payload's heap cell its release does not free.
-#[test]
-fn a_fresh_maybe_stored_or_given_hands_its_payload_over_once() {
-    assert_balanced_and_clean(
-        "c7r1_maybe_persisted_given",
-        MAYBE_PERSISTED_AND_GIVEN,
-        "6\n",
-    );
+/// One named test per producer of the `plain-local leak producers` run unit; each case runs at both optimization levels (counters and AddressSanitizer).
+macro_rules! r1_producers_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a plain-local leak producer (split result, maybe copy, fixed shape cells, string character read, shape maybe field, returned or given maybe) leaks or is freed twice, silently at exit 0 | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+r1_producers_high_case! {
+    // case: Bug (High: leak): `provenance` classed a built-in's heap result as `Reaches([receiver])` unless the method was in `builtin_method_returns_fresh`; `split` was not, so `parts` was a piece of `s`, never an owner, and its array and three strings were never released.
+    a_split_result_bound_by_let_is_an_owner_and_is_released => {
+        assert_balanced_and_clean("c7r1_split_let", SPLIT_BOUND_BY_LET, "3\n");
+    }
+    // case: Bug (High: leak): a `split` result nothing binds (a receiver, a borrowed argument, a `for` iterable) was not a temporary, so it was never released at its statement's end.
+    a_split_result_nothing_binds_is_released_at_the_end_of_its_statement => {
+        assert_balanced_and_clean("c7r1_split_temporaries", SPLIT_TEMPORARIES, "12\n");
+    }
+    // case: Bug (High: double free): a `split` result that is an owner is handed over by a store and copied by `.copy()`; each must be released once.
+    a_split_result_stored_copied_returned_or_reassigned_is_released_once => {
+        assert_balanced_and_clean("c7r1_split_handed_over", SPLIT_HANDED_OVER, "7\n");
+    }
+    // case: Bug (High: leak): `emit_owned_copy` mints a heap envelope cell and a payload for a `maybe` copy, then the `let` copied the envelope again into the binding's slot and orphaned the first (4 allocs / 2 frees for `saved = m.copy()`; 3/2 for a `maybe<int>`).
+    a_maybe_copy_bound_by_let_or_assignment_is_taken_not_copied_again => {
+        assert_heap_balanced_and_clean("c7r1_maybe_copy_bound", MAYBE_COPY_BOUND, "14\n");
+    }
+    // case: Bug (High: leak): a `.copy()` of a `maybe` stored into an array literal, `set` or `add` was cloned a second time by the persist (`value_to_stable_bits`), orphaning the copy's cell, payload cell and string.
+    a_maybe_copy_stored_into_an_array_is_kept_by_the_array => {
+        assert_balanced_and_clean("c7r1_maybe_copy_persisted", MAYBE_COPY_PERSISTED, "3\n");
+    }
+    // case: Bug (High: leak): a `.copy()` of a `maybe` nothing binds (a receiver, a borrowed argument) was not a temporary, and a `return` of one copied it again.
+    a_maybe_copy_nothing_binds_or_a_function_returns_is_released_once => {
+        assert_balanced_and_clean(
+            "c7r1_maybe_copy_temp",
+            MAYBE_COPY_TEMPORARY_AND_RETURNED,
+            "6\n",
+        );
+    }
+    // case: Bug (High: leak): `heap_class_of` called a `fixed` of a shape that owns no heap `NoHeap`, so the binding was never released, yet every item sits in a heap cell of its own (`value_to_stable_bits`): `let pair: fixed<Part> = [{qty: 1}, {qty: 2}]` was 2 allocs / 0 frees.
+    a_fixed_list_of_heap_free_shapes_releases_its_item_cells => {
+        assert_heap_balanced_and_clean("c7r1_fixed_flat_shapes", FIXED_OF_FLAT_SHAPES, "6\n");
+    }
+    // case: Bug (High: leak): `ynz_string_codepoint_at` / `ynz_string_grapheme_at` build a new string, which `let c = s.get(0)` then cloned again (the binding copies a `maybe<string>` it does not take) and a `maybe` nothing binds never freed (`let s = ...; let c = s.get(0)`: strings 3/2).
+    a_string_character_read_frees_the_string_it_built => {
+        assert_strings_balanced_and_clean("c7r1_string_get", STRING_CHARACTER_READS, "8\n");
+    }
+    // case: Bug (High: leak): `shape_class` classed a shape whose only heap is a `maybe` field of a heap-free payload `NoHeap`, but a `maybe` field is a pointer to a heap envelope cell (`store_field`), so no release was planned for the shape: `let slot: Slot = { count: none }` was 2 allocs / 0 frees.
+    a_shape_with_a_maybe_field_releases_the_fields_envelope_cell => {
+        assert_heap_balanced_and_clean("c7r1_maybe_field", SHAPE_WITH_A_MAYBE_FIELD, "3\n");
+    }
+    // case: Bug (High: leak): a function that returned a `maybe` copied its payload at the `return`, yet typeck called the returned local "returned" and planned no release for it (`copied_at_return` said a `maybe` is not copied), so the local's own copy of the shape's string leaked (6/5), and a returned owned local was copied twice.
+    a_maybe_a_function_returns_is_copied_once_and_its_local_released => {
+        assert_balanced_and_clean("c7r1_maybe_returned", MAYBE_RETURNED, "6\n");
+    }
+    // case: Bug (High: leak): a `maybe` a function returned (or a string `get` built, or a `.copy()` of a `maybe`) owns its payload, but a persist into an array literal or `add` cloned it again, and a `give` parameter was handed the payload's heap cell its release does not free.
+    a_fresh_maybe_stored_or_given_hands_its_payload_over_once => {
+        assert_balanced_and_clean(
+            "c7r1_maybe_persisted_given",
+            MAYBE_PERSISTED_AND_GIVEN,
+            "6\n",
+        );
+    }
 }

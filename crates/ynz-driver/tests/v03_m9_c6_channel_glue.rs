@@ -26,6 +26,7 @@ fn function_text<'ir>(ir: &'ir str, name: &str) -> &'ir str {
 }
 
 /// Bug: the channel glue frees an array element flat, leaking the strings it owns (High).
+// bug: channel teardown frees an Array<String> element flat, leaking the strings it owns | tier: High
 #[test]
 fn channel_element_glue_calls_the_release_function_of_the_element_type() {
     let built = build("v0_3_m9_c6_channel_glue.ynz", true);
