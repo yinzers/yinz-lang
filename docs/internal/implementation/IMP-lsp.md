@@ -179,7 +179,7 @@ The Yinz compiler enforces WHAT/WHAT-INSTEAD/WHY structure in every diagnostic (
 {what}\n\nWHAT INSTEAD: {what_instead}\n\nWHY: {why}
 ```
 
-VSCode renders plaintext newlines as soft breaks in squiggle tooltips. The format is verified by Phase 3's integration tests, which assert the LSP message contains each substring.
+VSCode renders plaintext newlines as soft breaks in squiggle tooltips. `to_lsp_diagnostic` builds the message in this format (`crates/ynz-lsp/src/diagnostic_transform.rs:35-38`). No test asserts the message text. The didOpen test asserts the structured `code` and `data.what_instead` fields that carry the same three parts (`crates/ynz-lsp/tests/diagnostic_structured_fields.rs:26-56`).
 
 **Structured `Diagnostic.data` field** (v0.2-M5): if the client supports it, the data field will carry the three components as a JSON object, enabling per-client custom rendering of WHAT/WHAT-INSTEAD/WHY in a richer UI. The plaintext `message` stays as the canonical fallback. See the Deferrals table in the M2 plan.
 
