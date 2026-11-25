@@ -168,3 +168,19 @@ fn pow10_256(n: u32) -> (u128, u128) {
     }
     (val.hi, val.lo)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Private-function case: `wide` is `pub(crate)` and the only production caller shifts by 1,
+    // so no public decimal128 operation reaches a shift of 128 or more; this unit case is the
+    // only way to hold the arm, as the lane-4 private-function survivors are.
+    // bug: U256::shl by 128 or more drops the low half or leaves it in the low word, so a wide product or scale is wrong by 2^128 | tier: High
+    #[test]
+    fn shl_by_exactly_128_moves_the_low_half_into_the_high_half() {
+        let shifted = U256::from_u128(1).shl(128);
+        assert_eq!(shifted.hi, 1);
+        assert_eq!(shifted.lo, 0);
+    }
+}
