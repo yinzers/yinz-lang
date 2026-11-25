@@ -178,3 +178,24 @@ bignum_round_trip_cases! {
     round_trip_integer: "42";
     round_trip_integer_with_fraction: "100.001";
 }
+
+/// Half-even at an exact tie, one significant digit (Python `Decimal` with ROUND_HALF_EVEN and
+/// precision 1): the kept digit moves to the even neighbour, so an odd kept digit rounds up and an
+/// even one stays.
+macro_rules! half_even_tie_cases {
+    ($($case:ident: $text:literal rounds_to $expected:literal;)+) => {
+        $(
+            // bug: bignum rounds an exact tie (…5 with nothing below) up or down regardless of the kept digit's parity, so results differ from ROUND_HALF_EVEN by 1 ULP | tier: High
+            #[test]
+            fn $case() {
+                assert_eq!(fmt(&parse($text, 1)), $expected);
+            }
+        )+
+    };
+}
+
+half_even_tie_cases! {
+    half_even_tie_1_5_rounds_up_to_the_even_2: "1.5" rounds_to "2";
+    half_even_tie_2_5_rounds_down_to_the_even_2: "2.5" rounds_to "2";
+    half_even_tie_3_5_rounds_up_to_the_even_4: "3.5" rounds_to "4";
+}
