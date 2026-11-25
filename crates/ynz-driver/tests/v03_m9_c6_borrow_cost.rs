@@ -29,9 +29,11 @@ fn run_fixture(fixture: &str, expected_stdout: &str) -> support::Counters {
 }
 
 /// One named test per read site of the `borrow read release balance` run unit; each case is a
-/// test the runner names.
+/// test the runner names. `$owed_copy_alloc` is `Some(counted allocations)` for the sites where a
+/// write makes the reader own one copy: a reader left pointing at the written place allocates
+/// less than that count (and still balances), so the exact count is what catches it.
 macro_rules! borrow_read_balance_high_case {
-    ($($case_name:ident, $fixture:literal, $expected_stdout:literal;)+) => { $(
+    ($($case_name:ident, $fixture:literal, $expected_stdout:literal, $owed_copy_alloc:expr;)+) => { $(
         // bug: a reader left pointing at a replaced or released place reads freed memory, or a copy it owns is never released | tier: High
         #[test]
         fn $case_name() {
@@ -47,53 +49,61 @@ macro_rules! borrow_read_balance_high_case {
                 "{}: every allocation must be freed: {counters:?}",
                 $fixture
             );
+            let owed_copy_alloc: Option<u64> = $owed_copy_alloc;
+            if let Some(owed_copy_alloc) = owed_copy_alloc {
+                assert_eq!(
+                    counters.alloc, owed_copy_alloc,
+                    "{}: the reader must own its one copy of the written place: {counters:?}",
+                    $fixture
+                );
+            }
         }
     )+ };
 }
 
 borrow_read_balance_high_case! {
     // case: a loop variable copied per iteration although the body never writes the array
-    a_loop_whose_body_writes_nothing_copies_nothing, "v0_3_m9_c6_cost_loop_no_write.ynz", "1\n1\n";
+    a_loop_whose_body_writes_nothing_copies_nothing, "v0_3_m9_c6_cost_loop_no_write.ynz", "1\n1\n", None;
     // case: a loop variable left pointing at an item the body frees, or a per-iteration copy that is never released
-    a_loop_that_overwrites_an_item_copies_one_item_per_iteration, "v0_3_m9_c6_cost_loop_write.ynz", "1\n1\n";
+    a_loop_that_overwrites_an_item_copies_one_item_per_iteration, "v0_3_m9_c6_cost_loop_write.ynz", "1\n1\n", Some(14);
     // case: a `share` argument copied although no argument of the call writes its collection
-    share_arguments_with_no_lend_of_their_collection_copy_nothing, "v0_3_m9_c6_cost_arg_no_alias.ynz", "3\n";
+    share_arguments_with_no_lend_of_their_collection_copy_nothing, "v0_3_m9_c6_cost_arg_no_alias.ynz", "3\n", None;
     // case: a `share` argument that reads an item another argument's `lend` overwrites, read after it was freed
-    a_share_argument_read_from_a_lent_collection_is_copied_once_and_released, "v0_3_m9_c6_cost_arg_lend_alias.ynz", "3\n";
+    a_share_argument_read_from_a_lent_collection_is_copied_once_and_released, "v0_3_m9_c6_cost_arg_lend_alias.ynz", "3\n", Some(10);
     // case: a `let` of a field copied although the field is never written
-    a_let_of_a_field_nobody_overwrites_copies_nothing, "v0_3_m9_c6_cost_let_no_write.ynz", "3\n";
+    a_let_of_a_field_nobody_overwrites_copies_nothing, "v0_3_m9_c6_cost_let_no_write.ynz", "3\n", None;
     // case: a `let` of a field left pointing at the array the field assignment frees
-    a_let_of_a_field_that_is_overwritten_copies_it_once, "v0_3_m9_c6_cost_let_write.ynz", "3\n";
+    a_let_of_a_field_that_is_overwritten_copies_it_once, "v0_3_m9_c6_cost_let_write.ynz", "3\n", Some(6);
     // case: a `let` of a field copied because its root lives in a loop body, although the reader dies with it
-    a_read_that_dies_with_its_roots_scope_copies_nothing, "v0_3_m9_c6_cost_outlive_same_scope.ynz", "3\n3\n";
+    a_read_that_dies_with_its_roots_scope_copies_nothing, "v0_3_m9_c6_cost_outlive_same_scope.ynz", "3\n3\n", None;
     // case: a reassignment left pointing at an array the root's scope exit frees, read after it
-    a_read_that_outlives_its_roots_scope_is_copied_once, "v0_3_m9_c6_cost_outlive_root.ynz", "3\n";
+    a_read_that_outlives_its_roots_scope_is_copied_once, "v0_3_m9_c6_cost_outlive_root.ynz", "3\n", Some(6);
     // case: a call result copied again where the callee already returned an owned copy
-    a_returned_field_is_copied_once_and_the_caller_binds_it_without_a_second_copy, "v0_3_m9_c6_cost_return_once.ynz", "3\n";
+    a_returned_field_is_copied_once_and_the_caller_binds_it_without_a_second_copy, "v0_3_m9_c6_cost_return_once.ynz", "3\n", None;
     // case: a state-machine loop variable copied because a `wait` is in the body, although nothing writes the array
-    a_state_machine_loop_whose_body_writes_nothing_copies_nothing, "v0_3_m9_c6_cost_sm_loop_no_write.ynz", "1\n1\n";
+    a_state_machine_loop_whose_body_writes_nothing_copies_nothing, "v0_3_m9_c6_cost_sm_loop_no_write.ynz", "1\n1\n", None;
     // case: a state-machine loop variable left pointing at an item the body frees, or a copy never released
-    a_state_machine_loop_that_overwrites_an_item_copies_and_releases_one_item_per_iteration, "v0_3_m9_c6_cost_sm_loop_write.ynz", "1\n1\n";
+    a_state_machine_loop_that_overwrites_an_item_copies_and_releases_one_item_per_iteration, "v0_3_m9_c6_cost_sm_loop_write.ynz", "1\n1\n", Some(15);
     // case: a map-entry loop variable cloned per iteration (its array value and its string key) although the body never writes the map
-    a_map_loop_whose_body_writes_nothing_copies_no_entry, "v0_3_m9_c6_cost_map_loop_no_write.ynz", "2\n1\n";
+    a_map_loop_whose_body_writes_nothing_copies_no_entry, "v0_3_m9_c6_cost_map_loop_no_write.ynz", "2\n1\n", None;
     // case: a union loop variable copied per iteration (its string variant cloned) although the body never writes the list
-    a_union_loop_whose_body_writes_nothing_copies_no_item, "v0_3_m9_c6_cost_union_loop_no_write.ynz", "big-1\n";
+    a_union_loop_whose_body_writes_nothing_copies_no_item, "v0_3_m9_c6_cost_union_loop_no_write.ynz", "big-1\n", None;
     // case: a dotted UFCS receiver (`world.bucket.total(world.owners)`) copied although no argument of the call writes the world
-    a_ufcs_receiver_field_nobody_writes_is_not_copied, "v0_3_m9_c6_cost_ufcs_receiver_no_write.ynz", "3\n";
+    a_ufcs_receiver_field_nobody_writes_is_not_copied, "v0_3_m9_c6_cost_ufcs_receiver_no_write.ynz", "3\n", None;
     // case: a dotted UFCS receiver (`world.bucket.total(world.owners)`) read after another argument's `lend` of its root overwrote an element, or a copy never released
-    a_ufcs_receiver_field_whose_root_is_lent_is_copied_once_and_released, "v0_3_m9_c6_cost_ufcs_receiver_write.ynz", "3\n";
+    a_ufcs_receiver_field_whose_root_is_lent_is_copied_once_and_released, "v0_3_m9_c6_cost_ufcs_receiver_write.ynz", "3\n", Some(11);
     // case: a plain-call `share` argument copied although no argument of the call writes its list
-    a_shape_list_element_argument_nobody_writes_is_not_copied, "v0_3_m9_c6_cost_call_arg_shape_no_write.ynz", "2\n";
+    a_shape_list_element_argument_nobody_writes_is_not_copied, "v0_3_m9_c6_cost_call_arg_shape_no_write.ynz", "2\n", None;
     // case: a plain-call `share` argument that reads an element another argument's `lend` overwrites, read after it was freed
-    a_shape_list_element_argument_read_from_a_lent_list_is_copied_once_and_released, "v0_3_m9_c6_cost_call_arg_shape_write.ynz", "2\n";
+    a_shape_list_element_argument_read_from_a_lent_list_is_copied_once_and_released, "v0_3_m9_c6_cost_call_arg_shape_write.ynz", "2\n", Some(10);
     // case: a reassignment that views the field leaks the binding's first value, or one that copies leaks the copy
-    a_reassignment_from_a_field_nobody_writes_copies_it_once_and_balances, "v0_3_m9_c6_cost_assign_no_write.ynz", "3\n";
+    a_reassignment_from_a_field_nobody_writes_copies_it_once_and_balances, "v0_3_m9_c6_cost_assign_no_write.ynz", "3\n", None;
     // case: a `let` of a `Maybe<Array>` and of its `.or` copying the payload array although the list is never written
-    a_let_of_a_maybe_array_element_nobody_writes_copies_no_payload, "v0_3_m9_c6_cost_maybe_array_let_no_write.ynz", "3\n";
+    a_let_of_a_maybe_array_element_nobody_writes_copies_no_payload, "v0_3_m9_c6_cost_maybe_array_let_no_write.ynz", "3\n", None;
     // case: a `let` of a `Maybe<Map>` and of its `.or` copying the payload map although the list is never written
-    a_let_of_a_maybe_map_element_nobody_writes_copies_no_payload, "v0_3_m9_c6_cost_maybe_map_let_no_write.ynz", "1\n";
+    a_let_of_a_maybe_map_element_nobody_writes_copies_no_payload, "v0_3_m9_c6_cost_maybe_map_let_no_write.ynz", "1\n", None;
     // case: an argument staged into a suspending callee's frame copied although nothing writes its place
-    an_argument_of_a_suspending_call_nobody_writes_is_staged_without_a_copy, "v0_3_m9_c6_cost_suspending_call_no_write.ynz", "2\n";
+    an_argument_of_a_suspending_call_nobody_writes_is_staged_without_a_copy, "v0_3_m9_c6_cost_suspending_call_no_write.ynz", "2\n", None;
 }
 
 /// One named test per no-write read site of the `borrow read copy cost` run unit; each case is a
