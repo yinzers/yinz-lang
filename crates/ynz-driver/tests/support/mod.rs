@@ -553,6 +553,25 @@ pub fn assert_asan_clean_and_prints_at_both_levels(fixture_name: &str, expected_
     });
 }
 
+/// The program as shipped (`assert_fixture_prints`) and under AddressSanitizer
+/// (`assert_asan_clean_and_prints`), each at -O2 and at -O0, all four at once. The plain run keeps a
+/// read that is only wrong without the sanitizer's changed stack layout; the ASan run names an
+/// out-of-bounds or dangling read whose output looks right.
+pub fn assert_prints_and_asan_clean_at_both_levels(
+    fixture_name: &str,
+    expected_stdout: &str,
+    what_it_guards: &str,
+) {
+    concurrently(
+        || {
+            at_both_optimization_levels(|no_optimize| {
+                assert_fixture_prints(fixture_name, no_optimize, expected_stdout, what_it_guards);
+            });
+        },
+        || assert_asan_clean_and_prints_at_both_levels(fixture_name, expected_stdout),
+    );
+}
+
 /// Run two independent checks at once and return both results. Each call builds into its own temp
 /// directory and runs its own process (module header), so two checks share nothing; running them
 /// in turn made one test as slow as their sum (`.claude/rules/test-parallelism.md`). A panic in

@@ -16,22 +16,15 @@
 mod support;
 
 use support::{
-    assert_asan_clean_and_prints_at_both_levels, assert_fixture_prints,
-    at_both_optimization_levels, concurrently,
+    assert_asan_clean_and_prints_at_both_levels, assert_prints_and_asan_clean_at_both_levels,
 };
 
-const WHAT: &str = "a union stored where it outlives its frame must keep its tag and payload";
-
-/// The program as shipped (stdout exact) and under AddressSanitizer, each at both optimization
-/// levels, all four at once.
+/// The program as shipped and under AddressSanitizer, at both levels: the stored union reads back.
 fn assert_stored_union_reads_back(fixture: &str, expected_stdout: &str) {
-    concurrently(
-        || {
-            at_both_optimization_levels(|no_optimize| {
-                assert_fixture_prints(fixture, no_optimize, expected_stdout, WHAT);
-            });
-        },
-        || assert_asan_clean_and_prints_at_both_levels(fixture, expected_stdout),
+    assert_prints_and_asan_clean_at_both_levels(
+        fixture,
+        expected_stdout,
+        "a union stored where it outlives its frame must keep its tag and payload",
     );
 }
 
