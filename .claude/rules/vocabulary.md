@@ -4,7 +4,7 @@ description: "Applies when writing or reviewing Yinz docs, diagnostics or design
 trigger: relevance
 ---
 
-Use these terms in user docs, design docs, diagnostics and chat output, never legacy terms from other languages. Why: one word per concept keeps every doc consistent. A concept with no official term needs Chief's confirmation before anyone invents one. Why: the vocabulary is curated, not crowdsourced.
+Use these terms in user docs, design docs (IMP docs included), diagnostics and chat output, never legacy terms from other languages. Why: one word per concept keeps every doc consistent. Exception: an IMP doc may use Rust words where it describes the compiler's own Rust code. Why: those words name real Rust items, not Yinz concepts. A concept with no official term needs Chief's confirmation before anyone invents one. Why: the vocabulary is curated, not crowdsourced.
 
 The banned legacy words are the `[[banned_jargon]]` entries in `registry/features.toml`; do not copy that list into text. The word "type" is fine in prose (a keyword ban applies only to `type Foo { }` as a declaration). Why: the registry is the one list, and the compiler enforces it.
 
@@ -13,7 +13,7 @@ The banned legacy words are the `[[banned_jargon]]` entries in `registry/feature
 | Declare a data structure | `shape` | type, struct, class, interface |
 | An instance of a shape | value ("a Player") | object, instance, struct |
 | Key-value collection | `Map<K, V>` | dictionary, HashMap, object |
-| Growable list | `Array<T>` | Vec, list |
+| Growable list | `Array<T>` | Vec, `list` as a type name |
 | Stack list, size set at creation | `Fixed<T>` | static array, stack array |
 | Enum replacement | `options` | enum |
 | Non-instantiable base | `base shape` | abstract class |
