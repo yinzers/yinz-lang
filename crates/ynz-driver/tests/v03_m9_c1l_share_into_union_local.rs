@@ -23,6 +23,8 @@ macro_rules! union_store_refusal_high_case {
 union_store_refusal_high_case! {
     // case: a `share` parameter silently stored into a union local leaves two holders of one array
     a_share_parameter_stored_into_a_union_local_is_refused_with_the_teaching_text, "v0_3_m9_c1l_share_into_union_local_refused.ynz", &["declared `share`", "gives it away"];
+    // case: a callee that does not own a union stored its `share` parameter in a list, so the caller and the list both held one payload (`give` is the one way to store a union you were passed)
+    a_share_parameter_stored_in_a_list_is_refused, "v0_3_m9_union_keep_share_refused.ynz", &["`thing` is a parameter of `keep` that is declared `share`"];
     // case: a piece stored into a literal (`mkm()` may return a piece someone else holds, so the same memory would be freed twice)
     a_piece_stored_into_a_literal_is_refused_with_a_why_that_names_the_holder, "v0_3_m9_c1l_piece_into_literal_refused.ynz", &["Give away a copy instead: `mkm().copy()`"];
     // case: `carry<T>(give item: T) -> nothing | T` called with a `Big | Tiny` stopped in codegen with "compiler bug"
