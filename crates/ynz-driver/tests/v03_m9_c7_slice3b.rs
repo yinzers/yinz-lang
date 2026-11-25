@@ -42,6 +42,7 @@ fn check(label: &str, program: &str, expected: &str, balance: Balance) {
 /// `case!(name, PROGRAM, "stdout", Balance::X, "the bug it catches (High)")`.
 macro_rules! case {
     ($case:ident, $program:expr, $expected:literal, $balance:expr, $bug:literal) => {
+        // bug: a nested shape take, channel hand-back, errors reassignment or write under a let view is leaked, freed early or freed twice in a built program, silently at exit 0 | tier: High
         #[doc = $bug]
         #[test]
         fn $case() {
@@ -77,11 +78,9 @@ function entrypoint() -> Nothing {
 }
 ";
 
+// bug: `let taken = make(i).inner` deep-copies the nested shape's strings where Rust moves it (200 calls build 2 strings and one cell each; the `let` and the reassignment must add no string and no cell) | tier: Medium
 #[test]
-fn a_nested_shape_taken_from_a_temporary_is_not_copied_and_balances() {
-    // Bug (cost, Golden Rule 6; High: a wrong take is a double free): `let taken = make(i).inner`
-    // deep-copies the nested shape's strings where Rust moves it. 200 calls build 2 strings and one
-    // cell each; the `let` and the reassignment must add no string and no cell.
+fn a_nested_shape_taken_from_a_temporary_is_not_copied() {
     at_both_optimization_levels(|no_optimize| {
         let counters = run_balanced("take_nested", TAKE_NESTED_SHAPE, "10000\n", no_optimize);
         assert_eq!(
@@ -94,7 +93,6 @@ fn a_nested_shape_taken_from_a_temporary_is_not_copied_and_balances() {
             (401, 401),
             "no_optimize={no_optimize}: two strings per `make` call and the literal `k`: {counters:?}"
         );
-        assert_asan_clean("take_nested", TAKE_NESTED_SHAPE, "10000\n", no_optimize);
     });
 }
 
@@ -260,43 +258,6 @@ function entrypoint() -> Nothing {
 }
 ";
 
-#[test]
-fn a_returned_channel_or_maybe_channel_is_one_counted_reference_given_back_once() {
-    // Bug (High): a holder of an untraceable `maybe<channel>` result leaked (no founder), and an
-    // owned local the callee returned left its reference orphaned (the caller shared again).
-    // Every reference now has one owner: the callee's return shares what it does not move, the
-    // caller moves the result, and each holder gives its reference back at its scope exit.
-    at_both_optimization_levels(|no_optimize| {
-        assert_asan_and_leaks_clean(
-            "channels_handed_back",
-            CHANNELS_HANDED_BACK_AND_RELAYED,
-            "20\n",
-            no_optimize,
-        );
-    });
-}
-
-/// An imported function hands back a `maybe` of its argument's channel and the argument's owner dies
-/// before the holder (the `NoStaticFounder` reproducer of `transfer_record.rs`): the holder owns a
-/// reference of its own, so the channel is neither leaked nor freed early.
-#[test]
-fn a_maybe_channel_an_imported_function_returns_outlives_its_arguments_owner() {
-    at_both_optimization_levels(|no_optimize| {
-        let built = support::build("v0_3_m9_c7_imported_maybe_channel", no_optimize);
-        let sanitized = support::build_asan(&built);
-        let output = std::process::Command::new(&sanitized)
-            .env("ASAN_OPTIONS", "detect_leaks=1:free_fill_byte=0")
-            .output()
-            .expect("run the sanitized binary");
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            output.status.success() && !stderr.contains("Sanitizer"),
-            "no_optimize={no_optimize}: ASan or LeakSanitizer reported:\n{stderr}"
-        );
-        assert_eq!(String::from_utf8_lossy(&output.stdout), "1\n1\n");
-    });
-}
-
 // ── Item 5: a `MapEntry` spawned to a task keeps its own decimal key ────────────────────────
 
 const A_MAP_ENTRY_WITH_A_DECIMAL_KEY_IS_SPAWNED: &str = "
@@ -311,35 +272,6 @@ function entrypoint() -> Nothing {
   wait sleep(200)
 }
 ";
-
-#[test]
-fn a_map_entry_spawned_to_a_task_keeps_its_own_decimal_key() {
-    // Bug (High: a task reads a buffer the next iteration overwrote, or freed memory): the stable
-    // copy of a spawned `MapEntry` copied the value half and left a decimal KEY as the address of the
-    // loop's per-site key buffer. The three tasks printed `3.5` and then garbage. The tasks run
-    // concurrently, so the lines are compared as a set.
-    at_both_optimization_levels(|no_optimize| {
-        let built = support::build_source(
-            A_MAP_ENTRY_WITH_A_DECIMAL_KEY_IS_SPAWNED,
-            "map_entry_decimal_key",
-            no_optimize,
-        );
-        let output = std::process::Command::new(&built.binary)
-            .output()
-            .expect("run the program");
-        let mut lines: Vec<String> = String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .map(str::to_string)
-            .collect();
-        lines.sort();
-        assert_eq!(
-            lines,
-            vec!["1.5", "2.5", "3.5"],
-            "no_optimize={no_optimize}: stderr:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    });
-}
 
 /// `ynz build` of `program`: its exit status and the text it printed.
 fn build_result(program: &str, label: &str) -> (bool, String) {
@@ -370,34 +302,15 @@ fn entry_escape(body: &str) -> String {
     )
 }
 
-#[test]
-fn typeck_refuses_every_way_a_map_entry_outlives_its_iteration() {
-    // Evidence for the C7 item 5 claim (High: an entry points at the loop's per-site staging, whose
-    // decimal key and value buffers the next iteration overwrites). Each escape is refused at
-    // compile time; the one accepted use that keeps an entry beyond the iteration is a `background`
-    // argument, which `value_to_stable_bits` re-homes (the case above).
-    let refused_by_a_store = [
-        ("let", "let kept = entry"),
-        ("list add", "list.add(entry)"),
-        ("shape literal", "let holder: Holder = { entry: entry }"),
-        ("array literal", "let items = [entry]"),
-    ];
-    for (label, body) in refused_by_a_store {
-        let (built, text) = build_result(&entry_escape(body), label);
-        assert!(!built, "{label}: `{body}` must not compile:\n{text}");
-        assert!(
-            text.contains("gives `entry` away"),
-            "{label}: refused for another reason:\n{text}"
-        );
-    }
-    let (built, text) = build_result(&entry_escape("wire.send(entry)"), "send");
-    assert!(!built, "a send of an entry must not compile:\n{text}");
-    assert!(text.contains("is not supported yet"), "send: {text}");
-    let (built, text) = build_result(&entry_escape("let copied = entry.copy()"), "copy");
-    assert!(!built, "a copy of an entry must not compile:\n{text}");
+/// A map entry points at the loop's per-site staging, whose decimal key and value buffers the next
+/// iteration overwrites, so each way to keep it beyond the iteration is refused at compile time; the
+/// one accepted use is a `background` argument, which `value_to_stable_bits` re-homes (the spawn case).
+fn assert_entry_escape_refused(body: &str, phrase: &str) {
+    let (built, text) = build_result(&entry_escape(body), body);
+    assert!(!built, "`{body}` must not compile:\n{text}");
     assert!(
-        text.contains("cannot make a separate `MapEntry"),
-        "copy: {text}"
+        text.contains(phrase),
+        "`{body}` refused for another reason:\n{text}"
     );
 }
 
@@ -541,3 +454,94 @@ case!(
     Balance::Strings,
     "a union a function returns (a moved local, a relayed result, a `share` parameter) is copied twice, or its payload strings are freed by the callee and again by the caller, or the unbound result leaks (High)"
 );
+
+/// One named test per hand-written program of the `slice 3b` unit (the `case!` table runs inline sources; these build fixture directories, spawn tasks or assert compile refusals).
+macro_rules! slice3b_program_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a nested shape take, channel hand-back, map entry spawn or entry escape in a built program is leaked, freed early or freed twice, or typeck accepts a map entry that outlives its iteration, silently at exit 0 | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+slice3b_program_high_case! {
+    // case: Bug (High): a wrong take of `let taken = make(i).inner` is a double free or a leak.
+    a_nested_shape_taken_from_a_temporary_is_taken_and_freed_once => {
+        at_both_optimization_levels(|no_optimize| {
+            let counters = run_balanced("take_nested", TAKE_NESTED_SHAPE, "10000\n", no_optimize);
+            assert_heap_balanced("take_nested", &counters, no_optimize);
+            assert_strings_balanced("take_nested", &counters, no_optimize);
+            assert_asan_clean("take_nested", TAKE_NESTED_SHAPE, "10000\n", no_optimize);
+        });
+    }
+    // case: Bug (High): a holder of an untraceable `maybe<channel>` result leaked (no founder), and an owned local the callee returned left its reference orphaned (the caller shared again). Every reference now has one owner: the callee's return shares what it does not move, the caller moves the result, and each holder gives its reference back at its scope exit.
+    a_returned_channel_or_maybe_channel_is_one_counted_reference_given_back_once => {
+        at_both_optimization_levels(|no_optimize| {
+            assert_asan_and_leaks_clean(
+                "channels_handed_back",
+                CHANNELS_HANDED_BACK_AND_RELAYED,
+                "20\n",
+                no_optimize,
+            );
+        });
+    }
+    // case: An imported function hands back a `maybe` of its argument's channel and the argument's owner dies before the holder (the `NoStaticFounder` reproducer of `transfer_record.rs`): the holder owns a reference of its own, so the channel is neither leaked nor freed early.
+    a_maybe_channel_an_imported_function_returns_outlives_its_arguments_owner => {
+        at_both_optimization_levels(|no_optimize| {
+            let built = support::build("v0_3_m9_c7_imported_maybe_channel", no_optimize);
+            let sanitized = support::build_asan(&built);
+            let output = std::process::Command::new(&sanitized)
+                .env("ASAN_OPTIONS", "detect_leaks=1:free_fill_byte=0")
+                .output()
+                .expect("run the sanitized binary");
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                output.status.success() && !stderr.contains("Sanitizer"),
+                "no_optimize={no_optimize}: ASan or LeakSanitizer reported:\n{stderr}"
+            );
+            assert_eq!(String::from_utf8_lossy(&output.stdout), "1\n1\n");
+        });
+    }
+    // case: Bug (High: a task reads a buffer the next iteration overwrote, or freed memory): the stable copy of a spawned `MapEntry` copied the value half and left a decimal KEY as the address of the loop's per-site key buffer. The three tasks printed `3.5` and then garbage. The tasks run concurrently, so the lines are compared as a set.
+    a_map_entry_spawned_to_a_task_keeps_its_own_decimal_key => {
+        at_both_optimization_levels(|no_optimize| {
+            let built = support::build_source(
+                A_MAP_ENTRY_WITH_A_DECIMAL_KEY_IS_SPAWNED,
+                "map_entry_decimal_key",
+                no_optimize,
+            );
+            let output = std::process::Command::new(&built.binary)
+                .output()
+                .expect("run the program");
+            let mut lines: Vec<String> = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .map(str::to_string)
+                .collect();
+            lines.sort();
+            assert_eq!(
+                lines,
+                vec!["1.5", "2.5", "3.5"],
+                "no_optimize={no_optimize}: stderr:\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        });
+    }
+    a_map_entry_bound_by_let_outlives_its_iteration_is_refused => {
+        assert_entry_escape_refused("let kept = entry", "gives `entry` away");
+    }
+    a_map_entry_added_to_a_list_is_refused => {
+        assert_entry_escape_refused("list.add(entry)", "gives `entry` away");
+    }
+    a_map_entry_in_a_shape_literal_is_refused => {
+        assert_entry_escape_refused("let holder: Holder = { entry: entry }", "gives `entry` away");
+    }
+    a_map_entry_in_an_array_literal_is_refused => {
+        assert_entry_escape_refused("let items = [entry]", "gives `entry` away");
+    }
+    a_map_entry_sent_on_a_channel_is_refused => {
+        assert_entry_escape_refused("wire.send(entry)", "is not supported yet");
+    }
+    a_map_entry_copied_is_refused => {
+        assert_entry_escape_refused("let copied = entry.copy()", "cannot make a separate `MapEntry");
+    }
+}

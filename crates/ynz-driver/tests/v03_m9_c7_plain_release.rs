@@ -32,16 +32,6 @@ function entrypoint() -> Nothing {
 }
 ";
 
-/// A `while` body's and an `if` body's arrays leak at the block end, or the `if` end frees the
-/// enclosing loop's array (High).
-#[test]
-fn block_ends_release_the_array_of_each_block_once() {
-    at_both_optimization_levels(|no_optimize| {
-        let counters = run_balanced("c7_block_ends", BLOCK_ENDS, "198\n", no_optimize);
-        assert_heap_balanced("c7_block_ends", &counters, no_optimize);
-    });
-}
-
 const FOR_LOOPS: &str = "
 function entrypoint() -> Nothing {
   let rows: Array<Int> = [1, 2, 3]
@@ -62,16 +52,6 @@ function entrypoint() -> Nothing {
   print(total)
 }
 ";
-
-/// A `for` body's locals (array, range and string iteration alike) leak per iteration, or are
-/// released at the loop's end instead of each iteration's (High).
-#[test]
-fn for_loop_bodies_release_their_locals_per_iteration() {
-    at_both_optimization_levels(|no_optimize| {
-        let counters = run_balanced("c7_for_loops", FOR_LOOPS, "14\n", no_optimize);
-        assert_heap_balanced("c7_for_loops", &counters, no_optimize);
-    });
-}
 
 const MATCH_ARMS: &str = "
 function entrypoint() -> Nothing {
@@ -99,15 +79,6 @@ function entrypoint() -> Nothing {
 }
 ";
 
-/// A `match` arm's and an `else` arm's local leaks at the arm end (High).
-#[test]
-fn match_arms_release_their_locals() {
-    at_both_optimization_levels(|no_optimize| {
-        let counters = run_balanced("c7_match_arms", MATCH_ARMS, "60\n", no_optimize);
-        assert_heap_balanced("c7_match_arms", &counters, no_optimize);
-    });
-}
-
 const MAP_LOCAL: &str = "
 function entrypoint() -> Nothing {
   let i: Int = 0
@@ -120,16 +91,6 @@ function entrypoint() -> Nothing {
   print(total)
 }
 ";
-
-/// A `map` local (buffers, and the keys the map owns) leaks per iteration (High).
-#[test]
-fn a_map_local_is_released_with_its_keys() {
-    at_both_optimization_levels(|no_optimize| {
-        let counters = run_balanced("c7_map_local", MAP_LOCAL, "1325\n", no_optimize);
-        assert_heap_balanced("c7_map_local", &counters, no_optimize);
-        assert_strings_balanced("c7_map_local", &counters, no_optimize);
-    });
-}
 
 const SHAPE_LOCAL: &str = "
 shape Tag {
@@ -149,16 +110,6 @@ function entrypoint() -> Nothing {
   print(total)
 }
 ";
-
-/// A flat shape local's string field leaks per iteration, or the release frees the shape's
-/// entry-block region as if it were a heap cell (High).
-#[test]
-fn a_flat_shape_local_releases_its_fields_not_its_region() {
-    at_both_optimization_levels(|no_optimize| {
-        let counters = run_balanced("c7_shape_local", SHAPE_LOCAL, "1375\n", no_optimize);
-        assert_strings_balanced("c7_shape_local", &counters, no_optimize);
-    });
-}
 
 const EARLY_RETURN: &str = "
 function pick(stopAt: Int) -> Int {
@@ -186,17 +137,6 @@ function entrypoint() -> Nothing {
 }
 ";
 
-/// An early `return` releases only the innermost frame, releases an outer frame twice (once at
-/// the return and once at its own end), or releases before the return value is built (High).
-#[test]
-fn an_early_return_releases_every_open_frame_exactly_once() {
-    at_both_optimization_levels(|no_optimize| {
-        let counters = run_balanced("c7_early_return", EARLY_RETURN, "168\n", no_optimize);
-        assert_heap_balanced("c7_early_return", &counters, no_optimize);
-        assert_asan_clean("c7_early_return", EARLY_RETURN, "168\n", no_optimize);
-    });
-}
-
 const MAIN_RETURN: &str = "
 function entrypoint() -> Nothing {
   let outer: Array<Int> = [1, 2]
@@ -210,16 +150,6 @@ function entrypoint() -> Nothing {
   print(`unreachable`)
 }
 ";
-
-/// `main`'s `return` leaks what is open, or releases it after the runtime has shut down (High).
-#[test]
-fn main_releases_every_open_binding_at_its_return() {
-    at_both_optimization_levels(|no_optimize| {
-        let counters = run_balanced("c7_main_return", MAIN_RETURN, "DONE\n1\n", no_optimize);
-        assert_heap_balanced("c7_main_return", &counters, no_optimize);
-        assert_strings_balanced("c7_main_return", &counters, no_optimize);
-    });
-}
 
 const GENERIC_BODY: &str = "
 function describe<T>(value: T) -> Int {
@@ -237,16 +167,6 @@ function entrypoint() -> Nothing {
   print(total)
 }
 ";
-
-/// A generic function's instance leaks its concrete-typed local (the plan is made once, for the
-/// body with its type parameter unresolved) (High).
-#[test]
-fn a_generic_instance_releases_its_concrete_locals() {
-    at_both_optimization_levels(|no_optimize| {
-        let counters = run_balanced("c7_generic", GENERIC_BODY, "60\n", no_optimize);
-        assert_heap_balanced("c7_generic", &counters, no_optimize);
-    });
-}
 
 const ERRORS_PLAIN: &str = "
 function inner() -> Int errors {
@@ -270,16 +190,6 @@ function entrypoint() -> Nothing {
 }
 ";
 
-/// An errors-capable plain function leaks its locals at the success `return` or at the
-/// propagation edge, or the edge breaks the function's IR (High).
-#[test]
-fn an_errors_capable_plain_function_releases_its_locals() {
-    at_both_optimization_levels(|no_optimize| {
-        let counters = run_balanced("c7_errors", ERRORS_PLAIN, "120\n", no_optimize);
-        assert_heap_balanced("c7_errors", &counters, no_optimize);
-    });
-}
-
 const STRING_TAKEN_BY_STORE: &str = "
 function collect() -> Array<String> {
   let rows: Array<String> = []
@@ -298,20 +208,6 @@ function entrypoint() -> Nothing {
   print(rows[3].or(`none`))
 }
 ";
-
-/// A string a store took (`rows.add(row)`, the last use of `row`) is freed at the scope end while
-/// the array still holds it: a double free or use-after-free (High).
-#[test]
-fn a_string_a_store_took_is_not_released_by_its_old_binding() {
-    at_both_optimization_levels(|no_optimize| {
-        assert_asan_clean(
-            "c7_string_taken_by_store",
-            STRING_TAKEN_BY_STORE,
-            "20\nROW\n",
-            no_optimize,
-        );
-    });
-}
 
 const STRING_TAKEN_ON_SOME_PATHS: &str = "
 function keep(flag: Boolean) -> Array<String> {
@@ -332,20 +228,6 @@ function entrypoint() -> Nothing {
 }
 ";
 
-/// A string stored on one path only is released on the path that stored it (double free), the
-/// slot null check cannot tell without a move site's nulling (High).
-#[test]
-fn a_string_taken_on_some_paths_is_never_released_under_its_new_holder() {
-    at_both_optimization_levels(|no_optimize| {
-        assert_asan_clean(
-            "c7_string_some_paths",
-            STRING_TAKEN_ON_SOME_PATHS,
-            "1\n0\nKEPT\n",
-            no_optimize,
-        );
-    });
-}
-
 const STRING_GIVEN: &str = "
 function consume(give text: String) -> Int {
   return text.count()
@@ -362,15 +244,6 @@ function entrypoint() -> Nothing {
   print(total)
 }
 ";
-
-/// A string given to a `give` parameter is freed by the caller's scope end and by the callee's
-/// (High).
-#[test]
-fn a_given_string_is_released_by_at_most_one_side() {
-    at_both_optimization_levels(|no_optimize| {
-        assert_asan_clean("c7_string_given", STRING_GIVEN, "80\n", no_optimize);
-    });
-}
 
 const STRING_RETURNED: &str = "
 function label(index: Int) -> String {
@@ -390,16 +263,6 @@ function entrypoint() -> Nothing {
 }
 ";
 
-/// A returned local string is released by the return edge under the caller (High).
-#[test]
-fn a_returned_local_string_is_not_released_at_the_return() {
-    at_both_optimization_levels(|no_optimize| {
-        assert_asan_clean("c7_string_returned", STRING_RETURNED, "100\n", no_optimize);
-        let counters = run_balanced("c7_string_returned", STRING_RETURNED, "100\n", no_optimize);
-        assert_strings_balanced("c7_string_returned", &counters, no_optimize);
-    });
-}
-
 const GENERIC_CALL_RESULT_AND_ARGUMENT_TEMPORARY: &str = "
 function ident<T>(share value: T) -> T {
   return value
@@ -416,31 +279,6 @@ function entrypoint() -> Nothing {
   print(total)
 }
 ";
-
-/// A call of a generic function whose result is a heap type: its `return` copies, so the call is
-/// an owned value (bound by move, or a temporary released at the statement end), and an array
-/// literal passed to its `share` parameter is a temporary the caller releases. Typeck judged the
-/// result by the unresolved `T` (a `MayAlias`: the `let` copied it again and nothing released
-/// the result), and a generic callee was absent from the signature table, so its argument
-/// was assumed taken. Both leaked 1 to 3 arrays per call (High: leak).
-#[test]
-fn a_generic_call_result_and_its_argument_temporary_are_released() {
-    at_both_optimization_levels(|no_optimize| {
-        let counters = run_balanced(
-            "c7_generic_call",
-            GENERIC_CALL_RESULT_AND_ARGUMENT_TEMPORARY,
-            "60\n",
-            no_optimize,
-        );
-        assert_heap_balanced("c7_generic_call", &counters, no_optimize);
-        assert_asan_clean(
-            "c7_generic_call",
-            GENERIC_CALL_RESULT_AND_ARGUMENT_TEMPORARY,
-            "60\n",
-            no_optimize,
-        );
-    });
-}
 
 const A_CALL_RETURNING_A_MAYBE_NOTHING_BINDS: &str = "
 shape Row {
@@ -469,31 +307,6 @@ function entrypoint() -> Nothing {
   print(total)
 }
 ";
-
-/// A user function returns a `maybe` of a string or shape with the payload its `return` allocated.
-/// A call whose `maybe` nothing binds (`.exists()`, `.or(..)`) leaked that payload, and
-/// `let chosen = find(..).or(fallback)` copied the read yet the plan listed `chosen` as a
-/// non-owner (the call-receiver `.or` was not judged a read through a temporary), leaking the
-/// copy (High: leak).
-#[test]
-fn a_returned_maybe_nothing_binds_is_released_at_the_statement_end() {
-    at_both_optimization_levels(|no_optimize| {
-        let counters = run_balanced(
-            "c7_returned_maybe",
-            A_CALL_RETURNING_A_MAYBE_NOTHING_BINDS,
-            "21\n",
-            no_optimize,
-        );
-        assert_heap_balanced("c7_returned_maybe", &counters, no_optimize);
-        assert_strings_balanced("c7_returned_maybe", &counters, no_optimize);
-        assert_asan_clean(
-            "c7_returned_maybe",
-            A_CALL_RETURNING_A_MAYBE_NOTHING_BINDS,
-            "21\n",
-            no_optimize,
-        );
-    });
-}
 
 const A_UNION_REASSIGNED_INSIDE_ITS_OWN_IS_ARM: &str = "
 shape Circle {
@@ -530,24 +343,171 @@ function entrypoint() -> Nothing {
 }
 ";
 
-/// An assignment inside an `is` arm of the binding it narrows wrote the arm's variant-payload slot
-/// (stale value after the arm) and the assignment release read that payload pointer as a union
-/// view (stack-buffer-overflow under ASan; the replaced union never freed) (High).
-#[test]
-fn a_union_reassigned_inside_its_own_is_arm_replaces_and_releases_the_whole_union() {
-    at_both_optimization_levels(|no_optimize| {
-        let counters = run_balanced(
-            "c7_union_arm_assign",
-            A_UNION_REASSIGNED_INSIDE_ITS_OWN_IS_ARM,
-            "60\n",
-            no_optimize,
-        );
-        assert_strings_balanced("c7_union_arm_assign", &counters, no_optimize);
-        assert_asan_clean(
-            "c7_union_arm_assign",
-            A_UNION_REASSIGNED_INSIDE_ITS_OWN_IS_ARM,
-            "60\n",
-            no_optimize,
-        );
-    });
+/// One named test per owner kind or exit edge of the `plain-function scope-exit release` run unit; each case runs at both optimization levels.
+macro_rules! plain_release_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: plain-function scope-exit release leaks an owner, frees one twice, or frees a value another holder owns, silently at exit 0 | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+plain_release_high_case! {
+    // case: A `while` body's and an `if` body's arrays leak at the block end, or the `if` end frees the enclosing loop's array
+    block_ends_release_the_array_of_each_block_once => {
+        at_both_optimization_levels(|no_optimize| {
+            let counters = run_balanced("c7_block_ends", BLOCK_ENDS, "198\n", no_optimize);
+            assert_heap_balanced("c7_block_ends", &counters, no_optimize);
+        });
+    }
+    // case: A `for` body's locals (array, range and string iteration alike) leak per iteration, or are released at the loop's end instead of each iteration's
+    for_loop_bodies_release_their_locals_per_iteration => {
+        at_both_optimization_levels(|no_optimize| {
+            let counters = run_balanced("c7_for_loops", FOR_LOOPS, "14\n", no_optimize);
+            assert_heap_balanced("c7_for_loops", &counters, no_optimize);
+        });
+    }
+    // case: A `match` arm's and an `else` arm's local leaks at the arm end
+    match_arms_release_their_locals => {
+        at_both_optimization_levels(|no_optimize| {
+            let counters = run_balanced("c7_match_arms", MATCH_ARMS, "60\n", no_optimize);
+            assert_heap_balanced("c7_match_arms", &counters, no_optimize);
+        });
+    }
+    // case: A `map` local (buffers, and the keys the map owns) leaks per iteration
+    a_map_local_is_released_with_its_keys => {
+        at_both_optimization_levels(|no_optimize| {
+            let counters = run_balanced("c7_map_local", MAP_LOCAL, "1325\n", no_optimize);
+            assert_heap_balanced("c7_map_local", &counters, no_optimize);
+            assert_strings_balanced("c7_map_local", &counters, no_optimize);
+        });
+    }
+    // case: A flat shape local's string field leaks per iteration, or the release frees the shape's entry-block region as if it were a heap cell
+    a_flat_shape_local_releases_its_fields_not_its_region => {
+        at_both_optimization_levels(|no_optimize| {
+            let counters = run_balanced("c7_shape_local", SHAPE_LOCAL, "1375\n", no_optimize);
+            assert_strings_balanced("c7_shape_local", &counters, no_optimize);
+        });
+    }
+    // case: An early `return` releases only the innermost frame, releases an outer frame twice (once at the return and once at its own end), or releases before the return value is built
+    an_early_return_releases_every_open_frame_exactly_once => {
+        at_both_optimization_levels(|no_optimize| {
+            let counters = run_balanced("c7_early_return", EARLY_RETURN, "168\n", no_optimize);
+            assert_heap_balanced("c7_early_return", &counters, no_optimize);
+            assert_asan_clean("c7_early_return", EARLY_RETURN, "168\n", no_optimize);
+        });
+    }
+    // case: `main`'s `return` leaks what is open, or releases it after the runtime has shut down
+    main_releases_every_open_binding_at_its_return => {
+        at_both_optimization_levels(|no_optimize| {
+            let counters = run_balanced("c7_main_return", MAIN_RETURN, "DONE\n1\n", no_optimize);
+            assert_heap_balanced("c7_main_return", &counters, no_optimize);
+            assert_strings_balanced("c7_main_return", &counters, no_optimize);
+        });
+    }
+    // case: A generic function's instance leaks its concrete-typed local (the plan is made once, for the body with its type parameter unresolved)
+    a_generic_instance_releases_its_concrete_locals => {
+        at_both_optimization_levels(|no_optimize| {
+            let counters = run_balanced("c7_generic", GENERIC_BODY, "60\n", no_optimize);
+            assert_heap_balanced("c7_generic", &counters, no_optimize);
+        });
+    }
+    // case: An errors-capable plain function leaks its locals at the success `return` or at the propagation edge, or the edge breaks the function's IR
+    an_errors_capable_plain_function_releases_its_locals => {
+        at_both_optimization_levels(|no_optimize| {
+            let counters = run_balanced("c7_errors", ERRORS_PLAIN, "120\n", no_optimize);
+            assert_heap_balanced("c7_errors", &counters, no_optimize);
+        });
+    }
+    // case: A string a store took (`rows.add(row)`, the last use of `row`) is freed at the scope end while the array still holds it: a double free or use-after-free
+    a_string_a_store_took_is_not_released_by_its_old_binding => {
+        at_both_optimization_levels(|no_optimize| {
+            assert_asan_clean(
+                "c7_string_taken_by_store",
+                STRING_TAKEN_BY_STORE,
+                "20\nROW\n",
+                no_optimize,
+            );
+        });
+    }
+    // case: A string stored on one path only is released on the path that stored it (double free), the slot null check cannot tell without a move site's nulling
+    a_string_taken_on_some_paths_is_never_released_under_its_new_holder => {
+        at_both_optimization_levels(|no_optimize| {
+            assert_asan_clean(
+                "c7_string_some_paths",
+                STRING_TAKEN_ON_SOME_PATHS,
+                "1\n0\nKEPT\n",
+                no_optimize,
+            );
+        });
+    }
+    // case: A string given to a `give` parameter is freed by the caller's scope end and by the callee's
+    a_given_string_is_released_by_at_most_one_side => {
+        at_both_optimization_levels(|no_optimize| {
+            assert_asan_clean("c7_string_given", STRING_GIVEN, "80\n", no_optimize);
+        });
+    }
+    // case: A returned local string is released by the return edge under the caller
+    a_returned_local_string_is_not_released_at_the_return => {
+        at_both_optimization_levels(|no_optimize| {
+            assert_asan_clean("c7_string_returned", STRING_RETURNED, "100\n", no_optimize);
+            let counters = run_balanced("c7_string_returned", STRING_RETURNED, "100\n", no_optimize);
+            assert_strings_balanced("c7_string_returned", &counters, no_optimize);
+        });
+    }
+    // case: A call of a generic function whose result is a heap type: its `return` copies, so the call is an owned value (bound by move, or a temporary released at the statement end), and an array literal passed to its `share` parameter is a temporary the caller releases. Typeck judged the result by the unresolved `T` (a `MayAlias`: the `let` copied it again and nothing released the result), and a generic callee was absent from the signature table, so its argument was assumed taken. Both leaked 1 to 3 arrays per call (High: leak).
+    a_generic_call_result_and_its_argument_temporary_are_released => {
+        at_both_optimization_levels(|no_optimize| {
+            let counters = run_balanced(
+                "c7_generic_call",
+                GENERIC_CALL_RESULT_AND_ARGUMENT_TEMPORARY,
+                "60\n",
+                no_optimize,
+            );
+            assert_heap_balanced("c7_generic_call", &counters, no_optimize);
+            assert_asan_clean(
+                "c7_generic_call",
+                GENERIC_CALL_RESULT_AND_ARGUMENT_TEMPORARY,
+                "60\n",
+                no_optimize,
+            );
+        });
+    }
+    // case: A user function returns a `maybe` of a string or shape with the payload its `return` allocated. A call whose `maybe` nothing binds (`.exists()`, `.or(..)`) leaked that payload, and `let chosen = find(..).or(fallback)` copied the read yet the plan listed `chosen` as a non-owner (the call-receiver `.or` was not judged a read through a temporary), leaking the copy (High: leak).
+    a_returned_maybe_nothing_binds_is_released_at_the_statement_end => {
+        at_both_optimization_levels(|no_optimize| {
+            let counters = run_balanced(
+                "c7_returned_maybe",
+                A_CALL_RETURNING_A_MAYBE_NOTHING_BINDS,
+                "21\n",
+                no_optimize,
+            );
+            assert_heap_balanced("c7_returned_maybe", &counters, no_optimize);
+            assert_strings_balanced("c7_returned_maybe", &counters, no_optimize);
+            assert_asan_clean(
+                "c7_returned_maybe",
+                A_CALL_RETURNING_A_MAYBE_NOTHING_BINDS,
+                "21\n",
+                no_optimize,
+            );
+        });
+    }
+    // case: An assignment inside an `is` arm of the binding it narrows wrote the arm's variant-payload slot (stale value after the arm) and the assignment release read that payload pointer as a union view (stack-buffer-overflow under ASan; the replaced union never freed)
+    a_union_reassigned_inside_its_own_is_arm_replaces_and_releases_the_whole_union => {
+        at_both_optimization_levels(|no_optimize| {
+            let counters = run_balanced(
+                "c7_union_arm_assign",
+                A_UNION_REASSIGNED_INSIDE_ITS_OWN_IS_ARM,
+                "60\n",
+                no_optimize,
+            );
+            assert_strings_balanced("c7_union_arm_assign", &counters, no_optimize);
+            assert_asan_clean(
+                "c7_union_arm_assign",
+                A_UNION_REASSIGNED_INSIDE_ITS_OWN_IS_ARM,
+                "60\n",
+                no_optimize,
+            );
+        });
+    }
 }

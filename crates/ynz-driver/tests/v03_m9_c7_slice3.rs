@@ -39,6 +39,7 @@ fn check(label: &str, program: &str, expected: &str, balance: Balance) {
 /// `case!(name, PROGRAM, "stdout", Balance::X, "the bug it catches (High)")`.
 macro_rules! case {
     ($case:ident, $program:expr, $expected:literal, $balance:expr, $bug:literal) => {
+        // bug: an inline aggregate local (nested shape, maybe, union, fixed, errors value, SoA array) is leaked, freed early or freed twice at its scope exit, silently at exit 0 | tier: High
         #[doc = $bug]
         #[test]
         fn $case() {
@@ -347,14 +348,10 @@ fn soa_program() -> String {
     )
 }
 
-/// An admitted-SoA array local is never released: its per-field strings and arrays (and the
-/// buffer) leak, or its item-layout release reads the segments as items and frees garbage (High).
-#[test]
-fn an_soa_array_releases_each_field_segment() {
-    check(
-        "an_soa_array_releases_each_field_segment",
-        &soa_program(),
-        "24850\n",
-        Balance::HeapAndStrings,
-    );
-}
+case!(
+    an_soa_array_releases_each_field_segment,
+    &soa_program(),
+    "24850\n",
+    Balance::HeapAndStrings,
+    "an admitted-SoA array local is never released: its per-field strings and arrays (and the buffer) leak, or its item-layout release reads the segments as items and frees garbage (High)"
+);

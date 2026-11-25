@@ -12,7 +12,7 @@ mod support;
 
 use support::{
     assert_asan_clean, assert_heap_balanced, assert_strings_balanced, at_both_optimization_levels,
-    build_source, run_balanced,
+    run_balanced,
 };
 
 fn assert_balanced_and_clean(label: &str, program: &str, expected: &str) {
@@ -41,46 +41,22 @@ function entrypoint() -> Nothing {
 }
 ";
 
-#[test]
-fn a_given_type_parameter_string_is_released_by_the_generic_callee() {
-    // Bug (High: leak): `twice<T>` omitted both `give` parameters as `Omitted(TypeParameter)`, so
-    // each call leaked two strings.
-    assert_balanced_and_clean("c7_r1_twice", TWICE, "1\n1\n1\n");
+/// One named test per ownership path of the `generic give / T local release` run unit; each case balances counters and runs under AddressSanitizer at both optimization levels.
+macro_rules! r1_generic_give_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a give parameter or local of a generic type parameter T is leaked, freed twice or released at the wrong instance type, silently at exit 0 | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
 }
 
-#[test]
-fn an_int_instance_of_a_generic_give_compiles_with_no_release() {
-    // Bug caught: releasing `T` = `int` would load a pointer from an int slot (or null the int on
-    // a move). The instance owns no heap, so its IR has no release at all.
-    at_both_optimization_levels(|no_optimize| {
-        let built = build_source(
-            "
-function twice<T>(give first: T, give second: T) -> Nothing {
-  let held: T = first
-  print(1)
-}
-function entrypoint() -> Nothing {
-  twice(5, 6)
-}
-",
-            "c7_r1_int_instance",
-            no_optimize,
-        );
-        let ir = std::fs::read_to_string(&built.ir).expect("read the IR");
-        let released = ir
-            .lines()
-            .any(|line| line.contains("call") && line.contains("release"));
-        assert!(
-            !released && !ir.contains("define internal void @ynz_release"),
-            "no_optimize={no_optimize}: an `int` instance releases nothing:\n{ir}"
-        );
-    });
-}
-
-#[test]
-fn a_type_parameter_local_is_released() {
-    // Bug (High: leak): `let held: T = value` was `Omitted(TypeParameter)`; its store also copied
-    // the string and left `value` unreleased.
+r1_generic_give_high_case! {
+    // case: Bug (High: leak): `twice<T>` omitted both `give` parameters as `Omitted(TypeParameter)`, so each call leaked two strings.
+    a_given_type_parameter_string_is_released_by_the_generic_callee => {
+        assert_balanced_and_clean("c7_r1_twice", TWICE, "1\n1\n1\n");
+    }
+    // case: Bug (High: leak): `let held: T = value` was `Omitted(TypeParameter)`; its store also copied the string and left `value` unreleased.
+    a_type_parameter_local_is_released => {
     assert_balanced_and_clean(
         "c7_r1_local",
         "
@@ -99,12 +75,9 @@ function entrypoint() -> Nothing {
 ",
         "1\n1\n1\n1\n",
     );
-}
-
-#[test]
-fn a_type_parameter_returned_or_stored_is_released_once_by_its_new_holder() {
-    // Bug (High: double free): a `T` handed on by `return` or by a store must not also be released
-    // by the parameter it left.
+    }
+    // case: Bug (High: double free): a `T` handed on by `return` or by a store must not also be released by the parameter it left.
+    a_type_parameter_returned_or_stored_is_released_once_by_its_new_holder => {
     assert_balanced_and_clean(
         "c7_r1_moved_on",
         "
@@ -134,12 +107,9 @@ function entrypoint() -> Nothing {
 ",
         "a 4\nb 4\n1\n5\n1\n1\n",
     );
-}
-
-#[test]
-fn a_type_parameter_moved_on_some_paths_is_released_only_where_it_is_live() {
-    // Bug (High: double free or leak): `value` is stored on one path only, so it is
-    // `ReleaseIfLive`: released when the flag is false, not when it was stored.
+    }
+    // case: Bug (High: double free or leak): `value` is stored on one path only, so it is `ReleaseIfLive`: released when the flag is false, not when it was stored.
+    a_type_parameter_moved_on_some_paths_is_released_only_where_it_is_live => {
     assert_balanced_and_clean(
         "c7_r1_some_paths",
         "
@@ -165,11 +135,9 @@ function entrypoint() -> Nothing {
 ",
         "1\n1\n1\n",
     );
-}
-
-#[test]
-fn a_reassigned_type_parameter_local_releases_the_value_it_replaces() {
-    // Bug (High: leak): each assignment to a `T` local drops the old value unreleased.
+    }
+    // case: Bug (High: leak): each assignment to a `T` local drops the old value unreleased.
+    a_reassigned_type_parameter_local_releases_the_value_it_replaces => {
     assert_balanced_and_clean(
         "c7_r1_reassign",
         "
@@ -187,13 +155,9 @@ function entrypoint() -> Nothing {
 ",
         "b 4\n2\n2\n",
     );
-}
-
-#[test]
-fn a_fresh_type_parameter_value_no_binding_holds_is_released_per_instance() {
-    // Bug (High: leak): `value.copy()` and an `.or` fallback built from it have type `T`, which
-    // `temporaries` did not list, so the copy leaked in every instance whose `T` owns heap
-    // (string, array, shape); the `int` instance owns nothing and must stay untouched.
+    }
+    // case: Bug (High: leak): `value.copy()` and an `.or` fallback built from it have type `T`, which `temporaries` did not list, so the copy leaked in every instance whose `T` owns heap (string, array, shape); the `int` instance owns nothing and must stay untouched.
+    a_fresh_type_parameter_value_no_binding_holds_is_released_per_instance => {
     assert_balanced_and_clean(
         "c7_r1_temporary",
         "
@@ -218,4 +182,5 @@ function entrypoint() -> Nothing {
 ",
         "1\n1\n1\n1\n",
     );
+    }
 }

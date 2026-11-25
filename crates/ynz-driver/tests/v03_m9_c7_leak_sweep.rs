@@ -3,8 +3,8 @@
 //!
 //! The release plan's measure is `frees == allocations`. This sweep is the list of where that
 //! still fails, so a producer fix can be checked against the whole corpus and the next agent
-//! can see what is left. It is `#[ignore]` because it builds ~950 programs (about 3 to 5
-//! minutes on 4 cores): a dedicated-lane test, not a pre-push one.
+//! can see what is left. It runs in the nightly lane (`nightly_`): it
+//! builds ~950 programs (about 3 to 5 minutes on 4 cores), too long for a pre-push run.
 //!
 //! It asserts two things. C7: a `plain`-class fixture leaks only if it is listed in
 //! `KNOWN_PLAIN_LEAKS` with its reason, and every listed one still leaks (a fixed leak must leave
@@ -13,7 +13,7 @@
 //! Re-run (writes the report, prints a summary):
 //!
 //! ```text
-//! cargo test -p ynz-driver --test v03_m9_c7_leak_sweep -- --ignored --nocapture
+//! cargo nextest run -p ynz-driver --test v03_m9_c7_leak_sweep --ignore-default-filter --no-capture
 //! ```
 //!
 //! The report goes to `$YNZ_LEAK_SWEEP_OUT` (default `<workspace>/target/leak_sweep.tsv`), one
@@ -118,9 +118,9 @@ fn measure(fixture: &str) -> Result<Outcome, &'static str> {
     })
 }
 
+// bug: a fixture leaks (frees != allocations) that is not listed in KNOWN_PLAIN_LEAKS, or a state-machine-class fixture leaks at all | tier: High
 #[test]
-#[ignore = "builds and runs ~950 programs (about 5 minutes on 4 cores): a dedicated-lane test; run with --ignored"]
-fn sweep_every_fixture_for_leaks_and_classify_them() {
+fn nightly_sweep_every_fixture_for_leaks_and_classify_them() {
     let filter = std::env::var("YNZ_LEAK_SWEEP_FILTER").unwrap_or_default();
     let names = support::fixture_names(&filter);
 

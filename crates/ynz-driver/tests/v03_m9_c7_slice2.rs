@@ -47,6 +47,7 @@ fn check(label: &str, program: &str, expected: &str, balance: Balance) {
 /// `case!(name, PROGRAM, "stdout", Balance::X, "the bug it catches (High)")`.
 macro_rules! case {
     ($case:ident, $program:expr, $expected:literal, $balance:expr, $bug:literal) => {
+        // bug: a move site, give, reassignment, piece read or temporary release in a program frees early, frees twice or leaks, silently at exit 0 | tier: High
         #[doc = $bug]
         #[test]
         fn $case() {
@@ -545,20 +546,6 @@ case!(
     "`for (row in makeRows())`: the iterated temporary is freed before the loop ends (use-after-free) or never (High)"
 );
 
-#[test]
-fn an_imported_calls_unbound_result_is_freed_at_statement_end() {
-    // Bug: `freshRows(i).count()` holds an untraceable (`NoOwner`) result that nothing frees (High).
-    at_both_optimization_levels(|no_optimize| {
-        let fixture = "v0_3_m9_c7_imported_temp";
-        let built = build(fixture, no_optimize);
-        let (run, counters) = run_counted(&built);
-        assert_eq!(run.exit_code, 0, "stderr:\n{}", run.stderr);
-        assert_eq!(run.stdout, "40\n");
-        assert_heap_balanced(fixture, &counters, no_optimize);
-        support::assert_asan_clean_and_prints(fixture, no_optimize, "40\n");
-    });
-}
-
 const TAKE_PIECE: &str = "
 shape Bucket {
   rows: Array<Int>
@@ -575,22 +562,6 @@ function entrypoint() -> Nothing {
   print(rows.count())
 }
 ";
-
-#[test]
-fn binding_a_piece_of_a_fresh_temporary_takes_it_without_a_copy() {
-    // Bug (cost, Golden Rule 6): `let rows = makeBucket().rows` copies the field, where Rust moves
-    // it out of the temporary and drops the rest. The one array (header + buffer: 2 allocations)
-    // is allocated once, taken by `rows` and freed once (High: a wrong take is a double free).
-    at_both_optimization_levels(|no_optimize| {
-        let counters = run_balanced("take_piece", TAKE_PIECE, "2\n", no_optimize);
-        assert_eq!(
-            (counters.alloc, counters.free),
-            (2, 2),
-            "no_optimize={no_optimize}: {counters:?}"
-        );
-        assert_asan_clean("take_piece", TAKE_PIECE, "2\n", no_optimize);
-    });
-}
 
 // ── Item 7: an early return inside a loop releases the loop variable's copy ─────────────────
 
@@ -824,27 +795,6 @@ case!(
 /// `helpers.firstRow` returns `rows.first()`, a piece of its argument; `held` outlives `local`.
 const IMPORTED_MAYBE_PROJECT: &str = "v0_3_m9_c7_imported_maybe";
 
-/// Bug (High): the holder of an untraceable result joined the argument's class and outlived it,
-/// so the class had no static founder and `local` was never released (alloc 200, free 80); a view
-/// of it would dangle once `local` is released. Now `held` owns a copy and `local` is released.
-/// The copy `held` owns (2 counted allocations per pass of `pick(true)`, 20 passes) is released
-/// at its scope exit since C7 slice 3 released `maybe` locals: alloc 200, free 200 (was 160).
-#[test]
-fn an_imported_maybe_result_is_a_copy_the_argument_owners_release_does_not_dangle() {
-    at_both_optimization_levels(|no_optimize| {
-        let built = build(IMPORTED_MAYBE_PROJECT, no_optimize);
-        let (run, counters) = run_counted(&built);
-        assert_eq!(run.exit_code, 0, "stderr:\n{}", run.stderr);
-        assert_eq!(run.stdout, "60\n");
-        assert_eq!(
-            (counters.alloc, counters.free),
-            (200, 200),
-            "no_optimize={no_optimize}: {counters:?}"
-        );
-        support::assert_asan_clean_and_prints(IMPORTED_MAYBE_PROJECT, no_optimize, "60\n");
-    });
-}
-
 // ── A function that hands back its channel argument: the holder takes a counted reference ───
 
 /// `same` (imported) and `passOn` (local) return their channel argument; `held` outlives `local`.
@@ -860,6 +810,7 @@ const CHANNEL_HANDED_BACK_PROJECT: &str = "v0_3_m9_c7_imported_channel";
 /// share is pinned in the IR (one per function that returns a channel it does not move: `same` and
 /// `passOn`, at both optimization levels), and the run is ASan-clean with leak detection on (a channel nobody
 /// releases is a leak: the control program with only plain channel locals is clean the same way).
+// bug: a function that hands back its channel argument stores the argument pointer instead of a counted reference, so one reference is released twice or never (only the IR pin sees it: the runtime is not ASan-instrumented) | tier: High
 #[test]
 fn a_channel_handed_back_by_a_function_is_held_by_a_counted_reference() {
     at_both_optimization_levels(|no_optimize| {
@@ -890,6 +841,62 @@ fn a_channel_handed_back_by_a_function_is_held_by_a_counted_reference() {
         assert!(
             checked.status.success() && !stderr.contains("Sanitizer"),
             "no_optimize={no_optimize}: ASan or LeakSanitizer reported:\n{stderr}"
+        );
+    });
+}
+
+/// One named test per fixture program of the `slice 2 release` run unit (the table above runs inline sources; these build a fixture directory or a counted piece take).
+macro_rules! slice2_program_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a move site, give, reassignment, piece read or temporary release in a built program frees early, frees twice or leaks, silently at exit 0 | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+slice2_program_high_case! {
+    // case: `freshRows(i).count()` holds an untraceable (`NoOwner`) result that nothing frees
+    an_imported_calls_unbound_result_is_freed_at_statement_end => {
+        at_both_optimization_levels(|no_optimize| {
+            let fixture = "v0_3_m9_c7_imported_temp";
+            let built = build(fixture, no_optimize);
+            let (run, counters) = run_counted(&built);
+            assert_eq!(run.exit_code, 0, "stderr:\n{}", run.stderr);
+            assert_eq!(run.stdout, "40\n");
+            assert_heap_balanced(fixture, &counters, no_optimize);
+            support::assert_asan_clean_and_prints(fixture, no_optimize, "40\n");
+        });
+    }
+    // case: `let rows = makeBucket().rows` takes the field out of the temporary; a wrong take is a double free (the cost half is `binding_a_piece_of_a_fresh_temporary_takes_it_without_a_copy`)
+    binding_a_piece_of_a_fresh_temporary_is_taken_and_freed_once => {
+        at_both_optimization_levels(|no_optimize| {
+            let counters = run_balanced("take_piece", TAKE_PIECE, "2\n", no_optimize);
+            assert_heap_balanced("take_piece", &counters, no_optimize);
+            assert_asan_clean("take_piece", TAKE_PIECE, "2\n", no_optimize);
+        });
+    }
+    // case: the holder of an untraceable result joined the argument's class and outlived it, so the class had no static founder and `local` was never released (alloc 200, free 80); a view of it would dangle once `local` is released. Now `held` owns a copy and `local` is released. The copy `held` owns (2 counted allocations per pass of `pick(true)`, 20 passes) is released at its scope exit since C7 slice 3 released `maybe` locals: alloc 200, free 200 (was 160).
+    an_imported_maybe_result_is_a_copy_the_argument_owners_release_does_not_dangle => {
+        at_both_optimization_levels(|no_optimize| {
+            let built = build(IMPORTED_MAYBE_PROJECT, no_optimize);
+            let (run, counters) = run_counted(&built);
+            assert_eq!(run.exit_code, 0, "stderr:\n{}", run.stderr);
+            assert_eq!(run.stdout, "60\n");
+            assert_heap_balanced(IMPORTED_MAYBE_PROJECT, &counters, no_optimize);
+            support::assert_asan_clean_and_prints(IMPORTED_MAYBE_PROJECT, no_optimize, "60\n");
+        });
+    }
+}
+
+// bug: `let rows = makeBucket().rows` copies the field instead of taking it out of the temporary (2 allocations expected, more means a copy) | tier: Medium
+#[test]
+fn binding_a_piece_of_a_fresh_temporary_takes_it_without_a_copy() {
+    at_both_optimization_levels(|no_optimize| {
+        let counters = run_balanced("take_piece", TAKE_PIECE, "2\n", no_optimize);
+        assert_eq!(
+            (counters.alloc, counters.free),
+            (2, 2),
+            "no_optimize={no_optimize}: {counters:?}"
         );
     });
 }
