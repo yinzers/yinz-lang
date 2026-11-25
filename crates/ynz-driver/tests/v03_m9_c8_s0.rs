@@ -54,6 +54,7 @@ fn assert_run_balances(built: &support::Built, what: &str, expected: Option<&str
 /// both optimization levels, prints `stdout` and frees what it allocates.
 macro_rules! green_program {
     ($case:ident, $source:expr, $expected:literal, $bug:literal) => {
+        // bug: a suspension-frame producer (frame locals, temporaries, loop copies, argument copies, group results, errors, unions, spawn ladder, a task dropped while Pending) leaks or frees twice a heap value or string, silently at exit 0 | tier: High
         #[doc = $bug]
         #[test]
         fn $case() {
@@ -69,6 +70,7 @@ macro_rules! green_program {
 /// optimization levels, frees what it allocates.
 macro_rules! green_fixture {
     ($case:ident, $fixture:literal, $bug:literal) => {
+        // bug: a suspension-frame producer (frame locals, temporaries, loop copies, argument copies, group results, errors, unions, spawn ladder, a task dropped while Pending) leaks or frees twice a heap value or string, silently at exit 0 | tier: High
         #[doc = $bug]
         #[test]
         fn $case() {
@@ -80,43 +82,38 @@ macro_rules! green_fixture {
     };
 }
 
+/// `green_fixture_asan!(case, "fixture.ynz", "stdout", "producer: what leaks")`: the fixture frees what it
+/// allocates and is ASan clean (the caller's `free_frame` after Ready neither double frees a
+/// frame-held local nor reads the freed return slot; the worker's own release of its `give`
+/// parameter and the spawn drop ladder never free the same clone), at both optimization levels.
+macro_rules! green_fixture_asan {
+    ($case:ident, $fixture:literal, $expected:literal, $bug:literal) => {
+        // bug: a suspension-frame producer (frame locals, temporaries, loop copies, argument copies, group results, errors, unions, spawn ladder, a task dropped while Pending) leaks or frees twice a heap value or string, silently at exit 0 | tier: High
+        #[doc = $bug]
+        #[test]
+        fn $case() {
+            at_both_optimization_levels(|no_optimize| {
+                let built = build($fixture, no_optimize);
+                assert_run_balances(&built, $bug, Some($expected), no_optimize);
+                assert_asan_clean_and_prints($fixture, no_optimize, $expected);
+            });
+        }
+    };
+}
+
 // ── (a) C2 frame-retirement fixtures ────────────────────────────────────────────────────────
 
-/// ASan guard: the caller's `free_frame` after Ready neither double
-/// frees a frame-held local nor reads the freed return slot. C8's frame release must keep it so.
-#[test]
-fn c2_caller_free_frame_stays_asan_clean() {
-    at_both_optimization_levels(|no_optimize| {
-        assert_asan_clean_and_prints(
-            "v0_3_m9_c2_caller_free_frame.ynz",
-            no_optimize,
-            "8\n3\n2\n12\n",
-        );
-    });
-}
-
-/// ASan guard: the worker's own release of its `give` parameter and the
-/// spawn drop ladder never free the same clone.
-#[test]
-fn c2_spawn_drop_ladder_stays_asan_clean() {
-    at_both_optimization_levels(|no_optimize| {
-        assert_asan_clean_and_prints(
-            "v0_3_m9_c2_spawn_drop_ladder.ynz",
-            no_optimize,
-            "3\n7\n2\n8\n3\n",
-        );
-    });
-}
-
-green_fixture!(
-    c2_caller_free_frame_balances,
+green_fixture_asan!(
+    c2_caller_free_frame_balances_and_stays_asan_clean,
     "v0_3_m9_c2_caller_free_frame.ynz",
+    "8\n3\n2\n12\n",
     "producer P1 (frame locals): `kept`, `extra`, `inner`, `mine` of a suspending callee leak (30 allocations, 6 frees)"
 );
 
-green_fixture!(
-    c2_spawn_drop_ladder_balances,
+green_fixture_asan!(
+    c2_spawn_drop_ladder_balances_and_stays_asan_clean,
     "v0_3_m9_c2_spawn_drop_ladder.ynz",
+    "3\n7\n2\n8\n3\n",
     "producers P1 + P8 (worker locals, drop ladder beside the worker's own `give` release): 17 allocations, 9 frees"
 );
 

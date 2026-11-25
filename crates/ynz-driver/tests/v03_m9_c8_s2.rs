@@ -94,53 +94,10 @@ fn assert_asan_clean_program(label: &str, program: &str, expected: &str) {
     });
 }
 
-#[test]
-fn wait_statement_temporary_array_and_string_are_released() {
-    assert_balanced_program(
-        "wait_statement_temporary",
-        TEMPORARY_ACROSS_WAIT,
-        "3\n4\n",
-        true,
-    );
-}
-
-#[test]
-fn wait_statement_temporary_stays_asan_clean() {
-    assert_asan_clean_program(
-        "wait_statement_temporary_asan",
-        TEMPORARY_ACROSS_WAIT,
-        "3\n4\n",
-    );
-}
-
-#[test]
-fn wait_statement_temporary_in_a_loop_is_released_once_per_iteration() {
-    assert_balanced_program(
-        "wait_statement_temporary_loop",
-        TEMPORARY_ACROSS_WAIT_IN_LOOP,
-        "9\n",
-        false,
-    );
-    assert_asan_clean_program(
-        "wait_statement_temporary_loop_asan",
-        TEMPORARY_ACROSS_WAIT_IN_LOOP,
-        "9\n",
-    );
-}
-
-#[test]
-fn reassign_releases_the_old_array_and_string_in_a_resume_function() {
-    assert_balanced_program(
-        "reassign_in_resume_function",
-        REASSIGN_ARRAY_AND_STRING,
-        "3\n5\n",
-        true,
-    );
-    assert_asan_clean_program(
-        "reassign_in_resume_function_asan",
-        REASSIGN_ARRAY_AND_STRING,
-        "3\n5\n",
-    );
+/// The slice's one check of a program: the counters balance and AddressSanitizer is clean.
+fn assert_balanced_and_clean(label: &str, program: &str, expected: &str, strings: bool) {
+    assert_balanced_program(label, program, expected, strings);
+    assert_asan_clean_program(label, program, expected);
 }
 
 /// The assignment shapes a resume function must keep sound once the old value is released: the
@@ -186,12 +143,6 @@ function entrypoint() -> Nothing {
 }
 ";
 
-#[test]
-fn reassign_shapes_in_a_resume_function_balance_and_stay_asan_clean() {
-    assert_balanced_program("reassign_shapes", REASSIGN_SHAPES, "1\n2\n5\n3\n", true);
-    assert_asan_clean_program("reassign_shapes_asan", REASSIGN_SHAPES, "1\n2\n5\n3\n");
-}
-
 /// A map and a channel reassigned across a `wait`: the other frame-backed kinds a resume function
 /// releases at an assignment.
 const REASSIGN_MAP_AND_CHANNEL: &str = "
@@ -214,13 +165,45 @@ function entrypoint() -> Nothing {
 }
 ";
 
-#[test]
-fn reassign_a_map_and_a_channel_in_a_resume_function() {
-    assert_balanced_program(
-        "reassign_map_channel",
-        REASSIGN_MAP_AND_CHANNEL,
-        "2\n",
-        false,
-    );
-    assert_asan_clean_program("reassign_map_channel_asan", REASSIGN_MAP_AND_CHANNEL, "2\n");
+/// One named test per producer of the `slice 2 resume-function release` run unit; each case balances counters and runs under AddressSanitizer at both optimization levels.
+macro_rules! s2_high_case {
+    ($($case_name:ident => $case_body:block)+) => { $(
+        // bug: a statement temporary staged across a wait or a local reassigned in a resume function is leaked or freed twice, silently at exit 0 | tier: High
+        #[test]
+        fn $case_name() $case_body
+    )+ };
+}
+
+s2_high_case! {
+    // case: case: an array and a string temporary passed to a suspending callee that keeps them across its own `wait` must survive the wait and be released at the end of their statement (a frame slot, not an entry-block slot)
+    wait_statement_temporary_array_and_string_are_released => {
+        assert_balanced_and_clean("wait_statement_temporary", TEMPORARY_ACROSS_WAIT, "3\n4\n", true);
+    }
+    wait_statement_temporary_in_a_loop_is_released_once_per_iteration => {
+        assert_balanced_and_clean(
+            "wait_statement_temporary_loop",
+            TEMPORARY_ACROSS_WAIT_IN_LOOP,
+            "9\n",
+            false,
+        );
+    }
+    reassign_releases_the_old_array_and_string_in_a_resume_function => {
+        assert_balanced_and_clean(
+            "reassign_in_resume_function",
+            REASSIGN_ARRAY_AND_STRING,
+            "3\n5\n",
+            true,
+        );
+    }
+    reassign_shapes_in_a_resume_function_balance_and_stay_asan_clean => {
+        assert_balanced_and_clean("reassign_shapes", REASSIGN_SHAPES, "1\n2\n5\n3\n", true);
+    }
+    reassign_a_map_and_a_channel_in_a_resume_function => {
+        assert_balanced_and_clean(
+            "reassign_map_channel",
+            REASSIGN_MAP_AND_CHANNEL,
+            "2\n",
+            false,
+        );
+    }
 }
