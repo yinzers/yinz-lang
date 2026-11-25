@@ -545,6 +545,14 @@ pub fn assert_asan_clean_and_prints(fixture_name: &str, no_optimize: bool, expec
     );
 }
 
+/// `assert_asan_clean_and_prints` at -O2 and at -O0 at once, for the fixtures that allocate nothing
+/// a counter could balance (the ASan verdict is their whole check).
+pub fn assert_asan_clean_and_prints_at_both_levels(fixture_name: &str, expected_stdout: &str) {
+    at_both_optimization_levels(|no_optimize| {
+        assert_asan_clean_and_prints(fixture_name, no_optimize, expected_stdout);
+    });
+}
+
 /// Run two independent checks at once and return both results. Each call builds into its own temp
 /// directory and runs its own process (module header), so two checks share nothing; running them
 /// in turn made one test as slow as their sum (`.claude/rules/test-parallelism.md`). A panic in
