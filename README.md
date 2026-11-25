@@ -70,6 +70,8 @@ This produces the compiler binary at `target/release/ynz`. Run again whenever yo
 
 The bind mount `.:/work` keeps `target/` readable on the host.
 
+The suite runs with `cargo nextest`, configured in [`.config/nextest.toml`](.config/nextest.toml). A test is in the *nightly lane* when its function name starts with `nightly_` (wall-clock timing, benchmarks, soak, load and the ASan and leak sweeps). The default profile and the `ci` profile leave those tests out (`.config/nextest.toml:16-17`, `.config/nextest.toml:22-23`); the scheduled [`nightly.yml`](.github/workflows/nightly.yml) workflow runs them under the `nightly` profile (`.github/workflows/nightly.yml:67-70`, `.config/nextest.toml:47-49`). Per PR, [`ci.yml`](.github/workflows/ci.yml) archives the test binaries once (`.github/workflows/ci.yml:155-156`) and runs them over four `--partition count:<i>/4` runners (`.github/workflows/ci.yml:219-224`), with the two corpus sweeps of `cross_impl_consistency` on runners of their own (`.github/workflows/ci.yml:266-271`). Plain `cargo test --workspace -- --skip nightly_` leaves them out too (`.config/nextest.toml:10`).
+
 ```bash
 # Start the dev container (background)
 docker compose up -d dev
@@ -79,7 +81,8 @@ docker compose run --rm dev cargo build --workspace
 docker compose run --rm dev cargo build -p ynz-driver
 docker compose run --rm dev cargo build -p ynz-driver --release
 docker compose run --rm dev cargo build -p ynz-lsp --release
-docker compose run --rm dev cargo test --workspace
+docker compose run --rm dev cargo nextest run --workspace   # the per-PR suite; leaves out the nightly_ tests
+docker compose run --rm dev cargo nextest run --workspace --ignore-default-filter -E 'test(/(^|::)nightly_/)'   # the nightly lane only
 docker compose run --rm dev cargo clippy --workspace -- -D warnings
 docker compose run --rm dev cargo fmt --all
 docker compose run --rm dev cargo run -p ynz-pascalcase-codemod -- --help   # rename old lowercase built-in types (int, map, ...) to PascalCase, in type positions only, across any tree
