@@ -1,17 +1,21 @@
 // R3 matrix — CROSS-SAFELY cell: a `give`-param GENERIC callee. The closed silent-skip
 // gap must NOT over-reject: a generic `give` (ownership transfer) is safe and stays legal.
+// The spawner prints the label itself and the task prints nothing, so the output order never
+// depends on how fast the task runs (a fixed sleep raced the task's print under load). The task
+// cannot signal back through a channel: a generic callee that suspends fails in codegen
+// (`sm bg: resume fn not found`), so the task only reads the value it was given.
 shape Report {
   label: String
   total: Int
 }
 
 function stash<T>(give item: Report) -> Nothing {
-  print(item.label)
+  let total = item.total
 }
 
 function entrypoint() -> Nothing {
   let r: Report = { label: `q3`, total: 42 }
+  print(r.label)
   background stash<Report>(r)
-  sleepBlocking(60)
   print(`cross-give-generic-done`)
 }

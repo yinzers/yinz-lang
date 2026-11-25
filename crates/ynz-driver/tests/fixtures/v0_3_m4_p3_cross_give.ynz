@@ -1,17 +1,21 @@
 // R3 matrix — CROSS-SAFELY cell: a `give`-param callee (ownership transfer). The task
 // owns the value outright; nothing dangles. No false reject.
+// The spawner waits for the task's message before it prints, so the order never depends on how
+// fast the task runs (a fixed sleep raced the task under load).
 shape Report {
   label: String
   total: Int
 }
 
-function archive(give report: Report) -> Nothing {
+function archive(give report: Report, printed: Channel<Int>) -> Nothing {
   print(report.label)
+  printed.send(1)
 }
 
 function entrypoint() -> Nothing {
   let r: Report = { label: `q3`, total: 42 }
-  background archive(r)
-  sleepBlocking(60)
+  let printed: Channel<Int> = Channel<Int>(1)
+  background archive(r, printed)
+  let wasPrinted = printed.receive()
   print(`cross-give-done`)
 }
