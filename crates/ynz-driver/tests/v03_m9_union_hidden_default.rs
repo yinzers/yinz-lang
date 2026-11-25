@@ -1,195 +1,72 @@
 //! v0.3-M9 C1e rework (#421): a plain value that lands in a UNION-typed shape field through a
-//! hidden default must keep its variant tag, wrapped at the one coercion point. Tier: High (data
-//! integrity / memory safety). Also holds the guard that keeps an index store of a plain variant
-//! out of codegen, and the two refusals a hidden default's type check raises.
+//! hidden default must keep its variant tag, wrapped at the one coercion point, in the declaring
+//! module and in an importing one (data integrity / memory safety). Also holds the guard that
+//! keeps an index store of a plain variant out of codegen, and the refusals a hidden default's
+//! type check raises.
 //!
 //! The container stores `add` / `map.set` are #423's (a frame envelope cannot live in a
 //! container): their fixtures and tests are at `feat/v0-3-m9-c1e-rework-containers@56b4986`.
 //!
-//! Count: 14 tests = 2 run fixtures x 4 runs + 6 compile-only guards, past the ~8 a High-tier
-//! unit gets without a written reason. The two fixtures are not copies: `non_shape` is the
-//! minimal red case (a raw int where the envelope pointer belongs); `per_instance` is what the
-//! heap re-home of the default must keep true (two instances never share one envelope, and a
-//! parent's default reaches a child built in a loop). The 4 runs per fixture are plain vs ASan
-//! (a misread often prints plausible output; only the sanitizer sees the out-of-bounds read)
-//! and -O0 vs -O2 (the optimizer can mask a misread). The 6 guards compile only.
-//!
-//! One named test per case: each fixture runs at two optimization levels, plainly (the VALUE)
-//! and under AddressSanitizer (the MEMORY ACCESS), kept apart so a failure says which is wrong.
+//! The run table has one fixture per path a default takes, each run as shipped (the VALUE) and
+//! under AddressSanitizer (the MEMORY ACCESS) at -O0 and -O2: a misread often prints plausible
+//! output and only the sanitizer sees the out-of-bounds read, and the optimizer can mask a
+//! misread. Imported fixtures are multi-module projects (a directory). The refusal table
+//! compiles only.
 
 mod support;
 
-use support::{
-    assert_asan_clean_and_prints as assert_asan_clean, assert_fixture_prints as assert_prints,
-};
+use support::{assert_prints_and_asan_clean_at_both_levels, assert_refused_with};
 
-const WHAT: &str = "a hidden default entering a union-typed field must carry its \
-                    own variant tag";
-
-macro_rules! hidden_default_tests {
-    ($fixture:expr, $stdout:expr, $optimized:ident, $no_optimize:ident, $asan_optimized:ident, $asan_no_optimize:ident) => {
+/// One named test per path a hidden default takes of the `hidden default of a union-typed field
+/// (feature run, integrity)` run unit.
+macro_rules! hidden_default_run_high_case {
+    ($($case_name:ident, $fixture:literal, $expected_stdout:literal;)+) => { $(
+        // bug: a hidden default entering a field is skipped, shared between instances, dead after its frame or stored without its variant tag, so the field reads back 0, a null envelope (SIGSEGV), another instance's value or the wrong variant | tier: High
         #[test]
-        fn $optimized() {
-            // WHY: the field read back must be the variant its default stored.
-            assert_prints($fixture, false, $stdout, WHAT);
+        fn $case_name() {
+            assert_prints_and_asan_clean_at_both_levels(
+                $fixture,
+                $expected_stdout,
+                "a hidden default entering a field must keep its value and its own variant tag",
+            );
         }
+    )+ };
+}
 
+hidden_default_run_high_case! {
+    // case: hidden default `extra: Big | int = 4096` landed as the raw int where the envelope pointer belongs (SIGSEGV at 0x1000)
+    a_non_shape_default_in_a_union_field_is_wrapped, "v0_3_m9_union_hidden_default_non_shape.ynz", "other\nend\n";
+    // case: a hidden union default re-homed out of the initializer was shared, dead or dropped (another instance's slot changed, a stack envelope outlived its frame, an inherited default went missing)
+    a_union_default_is_per_instance, "v0_3_m9_union_hidden_default_per_instance.ynz", "big replacement\nint\nint\nint\nint\nint\n";
+    // case: an IMPORTED shape's defaults were skipped (the importer looked for the declaration only in its own source): an `int` default read 0 and a union default was a null envelope pointer
+    an_imported_shape_keeps_its_hidden_defaults, "v0_3_m9_union_hidden_default_imported", "5\nother\nend\n";
+    // case: the child's initializer applies its parent's defaults too (union one included); `extends` cannot cross files today, so parent and child share the declaring module
+    an_imported_child_applies_its_parents_defaults, "v0_3_m9_union_hidden_default_inherited_imported", "5\n7\nother\nend\n";
+    // case: two modules each declare a DIFFERENT shape `Thing`: both defined `ynz_defaults<shape:Thing>` (a duplicate-symbol link failure), and a call into the other module's same-named initializer would write that shape's layout into this one
+    same_named_shapes_of_two_modules_keep_their_own_defaults, "v0_3_m9_union_hidden_default_same_name_shapes", "11a\n11a\n22b\n";
+}
+
+/// One named test per refused path of the `hidden default and union store refusal (typeck
+/// accept/reject)` typeck unit.
+macro_rules! hidden_default_refusal_high_case {
+    ($($case_name:ident, $fixture:literal, $refusal:literal;)+) => { $(
+        // bug: typeck accepts a hidden default or an element store that does not fit its slot, so the build ends in codegen's internal error or the program SIGSEGVs reading a raw value as the envelope pointer | tier: High
         #[test]
-        fn $no_optimize() {
-            // WHY: same defect at -O0, where no optimizer can mask the misread.
-            assert_prints($fixture, true, $stdout, WHAT);
+        fn $case_name() {
+            assert_refused_with($fixture, &[$refusal]);
         }
-
-        #[test]
-        fn $asan_optimized() {
-            // WHY: a bare value read as a 16-byte envelope is out of bounds; plausible output
-            // can hide it, so the sanitizer verdict stands alone.
-            assert_asan_clean($fixture, false, $stdout);
-        }
-
-        #[test]
-        fn $asan_no_optimize() {
-            // WHY: same out-of-bounds envelope read at -O0.
-            assert_asan_clean($fixture, true, $stdout);
-        }
-    };
+    )+ };
 }
 
-#[test]
-fn v03_m9_union_container_index_set_plain_variant_is_refused() {
-    // Regression guard (no hole found): typeck compares an index store against the element type
-    // strictly, so `things[0] = big` into `array<Thing>` never reaches codegen as a bare store.
-    // If that refusal is ever relaxed to accept a variant, the store must wrap through the one
-    // coercion point and this test becomes a run fixture. Tier: High.
-    let compiled = support::compile("v0_3_m9_union_container_index_set_refused.ynz");
-    assert!(
-        !compiled.success,
-        "a plain variant index-stored into a union element compiled:\n{}",
-        compiled.diagnostics
-    );
-    assert!(
-        compiled
-            .diagnostics
-            .contains("This value is `Big`, but the array holds `Tiny | Big`"),
-        "refusal text changed:\n{}",
-        compiled.diagnostics
-    );
-    assert!(
-        !compiled.diagnostics.contains("compiler bug"),
-        "{}",
-        compiled.diagnostics
-    );
-}
-
-// Bug: hidden default `extra: Big | int = 4096` landed as the raw int where the envelope pointer
-// belongs (SIGSEGV at 0x1000). Tier: High.
-hidden_default_tests!(
-    "v0_3_m9_union_hidden_default_non_shape.ynz",
-    "other\nend\n",
-    v03_m9_union_hidden_default_optimized,
-    v03_m9_union_hidden_default_no_optimize,
-    v03_m9_union_hidden_default_asan_optimized,
-    v03_m9_union_hidden_default_asan_no_optimize
-);
-
-/// `fixture_name` must fail `ynz build` with `refusal` in its diagnostics, and never with the
-/// internal "compiler bug" / "failed to produce machine code" box.
-fn assert_build_refused(fixture_name: &str, refusal: &str) {
-    let compiled = support::compile(fixture_name);
-    assert!(
-        !compiled.success,
-        "{fixture_name} compiled:\n{}",
-        compiled.diagnostics
-    );
-    assert!(
-        compiled.diagnostics.contains(refusal),
-        "{fixture_name}: refusal must contain `{refusal}`; got:\n{}",
-        compiled.diagnostics
-    );
-    for internal_error in ["compiler bug", "failed to produce machine code"] {
-        assert!(
-            !compiled.diagnostics.contains(internal_error),
-            "{fixture_name}: a user-reachable refusal must not be `{internal_error}`; got:\n{}",
-            compiled.diagnostics
-        );
-    }
-}
-
-#[test]
-fn v03_m9_union_hidden_default_wrong_type_is_refused() {
-    // Bug: `hidden extra: string = 4096` was never checked against its annotation, compiled, and
-    // SIGSEGVed reading the raw int as a string. Tier: High.
-    assert_build_refused(
-        "v0_3_m9_union_hidden_default_string_refused.ynz",
-        "Hidden field `extra` expects `String`, but its default is `Int`",
-    );
-}
-
-#[test]
-fn v03_m9_union_hidden_default_shape_literal_into_union_is_refused() {
-    // Bug: a shape-literal default into a union-typed hidden field stopped the build with the
-    // internal "struct literal with non-shape type Error" instead of a teaching diagnostic.
-    // Tier: High.
-    assert_build_refused(
-        "v0_3_m9_union_hidden_default_shape_literal_refused.ynz",
-        "A shape value `{ ... }` cannot produce a `Tiny | Big` value",
-    );
-}
-
-// Bug: a hidden union default re-homed out of the initializer was shared, dead or dropped (another
-// instance's slot changed, a stack envelope outlived its frame, an inherited default went missing).
-// Tier: High.
-hidden_default_tests!(
-    "v0_3_m9_union_hidden_default_per_instance.ynz",
-    "big replacement\nint\nint\nint\nint\nint\n",
-    v03_m9_union_hidden_default_per_instance_optimized,
-    v03_m9_union_hidden_default_per_instance_no_optimize,
-    v03_m9_union_hidden_default_per_instance_asan_optimized,
-    v03_m9_union_hidden_default_per_instance_asan_no_optimize
-);
-
-#[test]
-fn v03_m9_union_hidden_default_unknown_variant_reports_only_the_unknown_type() {
-    // Bug: the default was checked against `Big | unknown`, adding "Hidden field `extra` expects
-    // `Big | unknown`" after the real error, naming a type the user never wrote. Tier: Medium.
-    let compiled = support::compile("v0_3_m9_union_hidden_default_unknown_variant.ynz");
-    assert!(
-        !compiled.success,
-        "an unknown union variant compiled:\n{}",
-        compiled.diagnostics
-    );
-    assert!(
-        compiled
-            .diagnostics
-            .contains("`Missing` is not a known type"),
-        "the unknown type must be reported; got:\n{}",
-        compiled.diagnostics
-    );
-    assert!(
-        !compiled.diagnostics.contains("Hidden field")
-            && !compiled.diagnostics.contains("unknown`"),
-        "the default must not be checked against a broken type; got:\n{}",
-        compiled.diagnostics
-    );
-}
-
-#[test]
-fn v03_m9_union_hidden_default_unknown_generic_variant_is_refused() {
-    // Bug: `Nope<int>` resolved to an unreported error type, the default check skipped a union
-    // holding one, and the program compiled and SIGSEGVed reading the raw int 4096 as the
-    // envelope pointer. Tier: High.
-    assert_build_refused(
-        "v0_3_m9_union_hidden_default_unknown_generic_variant.ynz",
-        "`Nope` is not a known type",
-    );
-}
-
-#[test]
-fn v03_m9_union_hidden_default_missing_type_argument_is_refused() {
-    // Bug: `map<int>` resolved its missing value type to an unreported error type, with the same
-    // compile-then-SIGSEGV as an unknown generic name. Tier: High.
-    assert_build_refused(
-        "v0_3_m9_union_hidden_default_missing_type_argument.ynz",
-        "`Map` takes 2 type arguments",
-    );
+hidden_default_refusal_high_case! {
+    // case: regression guard (no hole found): typeck compares an index store against the element type strictly, so `things[0] = big` into `array<Thing>` never reaches codegen as a bare store. If that refusal is relaxed, the store must wrap through the one coercion point and this becomes a run fixture
+    a_plain_variant_index_stored_into_a_union_element_is_refused, "v0_3_m9_union_container_index_set_refused.ynz", "This value is `Big`, but the array holds `Tiny | Big`";
+    // case: `hidden extra: string = 4096` was never checked against its annotation, compiled, and SIGSEGVed reading the raw int as a string
+    a_default_of_the_wrong_type_is_refused, "v0_3_m9_union_hidden_default_string_refused.ynz", "Hidden field `extra` expects `String`, but its default is `Int`";
+    // case: a shape-literal default into a union-typed hidden field stopped the build with the internal "struct literal with non-shape type Error" instead of a teaching diagnostic
+    a_shape_literal_default_into_a_union_is_refused, "v0_3_m9_union_hidden_default_shape_literal_refused.ynz", "A shape value `{ ... }` cannot produce a `Tiny | Big` value";
+    // case: `Nope<int>` resolved to an unreported error type, the default check skipped a union holding one, and the program compiled and SIGSEGVed reading the raw int 4096 as the envelope pointer
+    an_unknown_generic_variant_is_refused, "v0_3_m9_union_hidden_default_unknown_generic_variant.ynz", "`Nope` is not a known type";
+    // case: `map<int>` resolved its missing value type to an unreported error type, with the same compile-then-SIGSEGV as an unknown generic name
+    a_missing_type_argument_is_refused, "v0_3_m9_union_hidden_default_missing_type_argument.ynz", "`Map` takes 2 type arguments";
 }
