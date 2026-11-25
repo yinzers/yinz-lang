@@ -39,6 +39,7 @@ const EXPECTED_STDOUT: &str = "111\nanchor\nharbor\ndone\n";
 const WHAT_IT_GUARDS: &str = "a loop variable reloaded through ANOTHER loop's name-keyed frame \
      slot (or the collision escalated to a crash, m5_p5's SIGABRT class)";
 
+// bug: two suspending loops sharing a loop-variable name reload the second loop's variable through the first loop's name-keyed frame slot (raw garbage or heap corruption), default optimized tier | tier: High
 #[test]
 fn d5_red_suspending_loops_sharing_var_name_reload_their_own_values_default() {
     // WHY: locks the correct contract on the shipped default tier — the second loop's
@@ -47,6 +48,7 @@ fn d5_red_suspending_loops_sharing_var_name_reload_their_own_values_default() {
     assert_fixture_prints(FIXTURE, false, EXPECTED_STDOUT, WHAT_IT_GUARDS);
 }
 
+// bug: two suspending loops sharing a loop-variable name reload the second loop's variable through the first loop's name-keyed frame slot (raw garbage or heap corruption), --no-optimize tier | tier: High
 #[test]
 fn d5_red_suspending_loops_sharing_var_name_reload_their_own_values_o0() {
     // WHY: the --no-optimize escape hatch shares the identical name-keyed slot
