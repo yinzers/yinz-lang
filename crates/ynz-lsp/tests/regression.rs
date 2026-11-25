@@ -53,14 +53,12 @@ fn regression_lsp_vs_cli_divergence() {
         .parent()
         .and_then(|crates_dir| crates_dir.parent())
         .expect("crates/ynz-lsp has a workspace root two levels up");
-    // The ynz binary sits next to the test binaries' `deps` folder; build it first
-    // with `cargo build -p ynz-driver`.
-    let ynz_binary = std::env::current_exe()
-        .expect("current_exe must be readable")
-        .parent()
-        .and_then(|deps_dir| deps_dir.parent())
-        .expect("test binary sits in target/<profile>/deps")
-        .join("ynz");
+    // `ynz` belongs to ynz-driver, so cargo gives this test no CARGO_BIN_EXE for it. It is built
+    // into the same folder as `ynz-lsp`, whose path cargo does give (valid whatever the layout
+    // of the test executables, and after `nextest archive` + `--workspace-remap`, which restores
+    // the workspace's `target/<profile>/` folder). The test executable's own path is not usable:
+    // under the archive it sits in a build folder, not beside the binaries.
+    let ynz_binary = std::path::Path::new(env!("CARGO_BIN_EXE_ynz-lsp")).with_file_name("ynz");
     assert!(
         ynz_binary.exists(),
         "ynz binary not found at {}; run `cargo build -p ynz-driver` first",

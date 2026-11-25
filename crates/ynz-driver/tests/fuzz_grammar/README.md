@@ -177,10 +177,10 @@ Bounded three ways, none of them open-ended:
 
 | Bound | Value | Where |
 |---|---|---|
-| Corpus size, local default | 24 programs | `FUZZ_DEFAULT_PROGRAMS` |
-| Corpus size, CI | 96 programs | `YNZ_FUZZ_PROGRAMS` in `.github/workflows/ci.yml` |
-| Per (program × mode) liveness kill | 90s | `FUZZ_RUN_BUDGET` |
-| Whole CI job wall clock | 30 min | `timeout-minutes` on the `fuzz` job |
+| Corpus size, local default | 24 programs | `FUZZ_DEFAULT_PROGRAMS` (`crates/ynz-driver/tests/cross_impl_consistency.rs:874`) |
+| Corpus size, `fuzz` job | 96 programs | `YNZ_FUZZ_PROGRAMS` (`.github/workflows/ci.yml:338`) |
+| Per (program × mode) liveness kill | 90s | `FUZZ_RUN_BUDGET` (`crates/ynz-driver/tests/cross_impl_consistency.rs:881`) |
+| Whole `fuzz` job wall clock | 30 min | `timeout-minutes` (`.github/workflows/ci.yml:294`) |
 
 Measured on a 16-core dev container: 64 programs × 4 modes = **14.5s**; 256 programs × 4 modes
 (1,024 compile+link+execute invocations) = **60.6s**. That is ~59ms of wall clock per invocation
@@ -189,14 +189,22 @@ magnitude above the
 observed cost, per `~/.claude/rules/testing.md` — it exists to catch a hang, never to assert
 performance.
 
-The CI job is **non-blocking on first landing** (`continue-on-error: true`), with its
-promote-to-blocking trigger written beside the flag. It carries a three-part vacuity guard: zero
-programs generated, zero compiled, or zero tests matched all FAIL the step.
+The 24-program default also runs in every per-PR test partition, because
+`generated_corpus_byte_identical_across_mode_matrix` is not a `nightly_` test (the `test` job
+excludes only the two corpus sweeps, `.github/workflows/ci.yml:13` and
+`.github/workflows/ci.yml:224`). The 96-program run is the separate `fuzz` job, run with
+`cargo test`, not nextest (`.github/workflows/ci.yml:342-343`).
+
+The `fuzz` job is **non-blocking on first landing** (`continue-on-error: true`,
+`.github/workflows/ci.yml:289`), with its promote-to-blocking trigger written beside the flag
+(`.github/workflows/ci.yml:285-288`). It carries a three-part vacuity guard: zero programs
+generated, zero compiled, or zero tests matched all FAIL the step
+(`.github/workflows/ci.yml:344-346`).
 
 **A genuine finding does not get an inline fix.** It routes through the plan-amendment/FRAGO seam
 (risk R5) instead — never a silent same-round patch — until the lane has proven it does not flake
 (the thirty-consecutive-clean-runs trigger above). This is the same rule stated beside the
-`continue-on-error` flag in `.github/workflows/ci.yml`; it lives here too because a finding is
+`continue-on-error` flag (`.github/workflows/ci.yml:281-289`); it lives here too because a finding is
 usually read first from a local run, not from that CI comment.
 
 ## Replay
@@ -213,6 +221,14 @@ YNZ_FUZZ_SEED=<seed> cargo test -p ynz-driver --test cross_impl_consistency \
 # Re-run a slice:
 YNZ_FUZZ_SEED=<seed> YNZ_FUZZ_PROGRAMS=8 cargo test -p ynz-driver \
   --test cross_impl_consistency generated_corpus -- --nocapture
+```
+
+`print_generated_program` is `#[ignore]`d (`crates/ynz-driver/tests/fuzz_grammar/mod.rs:1050-1051`), so
+nextest needs `--run-ignored only` to run it:
+
+```bash
+YNZ_FUZZ_SEED=<seed> cargo nextest run -p ynz-driver --test cross_impl_consistency \
+  --run-ignored only -E 'test(print_generated_program)' --no-capture
 ```
 
 On failure the sweep **keeps** its scratch directory (it prints the path) and embeds the full
