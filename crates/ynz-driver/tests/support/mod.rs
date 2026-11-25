@@ -459,8 +459,20 @@ pub fn run_under_asan(fixture_name: &str, no_optimize: bool) -> RunOutput {
 /// the liveness watchdog. The binary is the watchdog's direct child, so a hang is killed with
 /// the program itself rather than leaving it orphaned behind a `ynz run` parent.
 pub fn run_plain(fixture_name: &str, no_optimize: bool) -> RunOutput {
+    run_plain_with_env(fixture_name, no_optimize, &[])
+}
+
+/// [`run_plain`] with extra environment variables for the compiled program (for example
+/// `YNZ_WORKER_THREADS=1`, which makes a scheduling order deterministic).
+pub fn run_plain_with_env(
+    fixture_name: &str,
+    no_optimize: bool,
+    environment: &[(&str, &str)],
+) -> RunOutput {
     let built = build(fixture_name, no_optimize);
-    run_with_watchdog(Command::new(&built.binary))
+    let mut command = Command::new(&built.binary);
+    command.envs(environment.iter().copied());
+    run_with_watchdog(command)
 }
 
 /// The shared check of the output-assertion suites: `fixture_name` exits 0 and prints exactly
