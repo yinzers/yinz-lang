@@ -61,8 +61,6 @@ The lowering is chosen per concrete T at monomorphization time. The decision is 
 
 **Why reject `Maybe<Maybe<T>>`**: allowing it forces a 2-bit tag (some-some / some-none / none); that distinction is almost never what the user meant. M5 ships the compile error; if a real use case emerges, this section gets a v0.2+ amendment.
 
-IR-snapshot tests in `crates/ynz-codegen/tests/snapshots.rs` assert each row of the table produces the expected LLVM type.
-
 ---
 
 ## `none` type inference rules
