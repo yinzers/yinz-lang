@@ -848,9 +848,10 @@ mod tests {
     /// the panic fires, and the completion delivery's drain-all wakes it; the re-poll
     /// then collects the completion value — through the panic-poisoned (and
     /// `lock_or_recover`-recovered) outbox mutex.
-    // bug: a panic inside ynz_handle_recv_poll before the waker slot is registered leaves the receiver unwoken, so the task hangs when the child completes (waker not recorded before polling) | tier: High
-    #[test]
-    fn completion_wakes_receiver_after_panic_before_slot_registration() {
+    ///
+    /// Shared body of the two cases below: `inject_panic` arms the clone hook's panic (the
+    /// panic-path case); unarmed, the same program takes `poll_recv`'s plain `Poll::Pending` arm.
+    fn assert_completion_wakes_receiver(inject_panic: bool) {
         let rt = tokio::runtime::Builder::new_current_thread()
             .build()
             .expect("rt");
@@ -873,7 +874,7 @@ mod tests {
                 shared: crate::sync::Arc::as_ptr(&(*(h as *const YnzTaskHandle)).shared),
                 registered_before_poll: AtomicBool::new(false),
                 mpsc_clone_seen: AtomicBool::new(false),
-                panic_at_mpsc_clone: AtomicBool::new(true),
+                panic_at_mpsc_clone: AtomicBool::new(inject_panic),
                 wakes: AtomicUsize::new(0),
             };
             let probe_waker = Waker::from_raw(std::task::RawWaker::new(
@@ -884,12 +885,12 @@ mod tests {
             let cx_ptr = &mut cx as *mut Context<'_> as *mut u8;
             let (mut e, mut o) = (0i64, 0i64);
             // The child hasn't run yet (current_thread runtime, nothing driven): the
-            // outbox is empty, poll_recv takes the Pending path, and the armed probe
-            // panics at the slot registration → the panic path returns Pending.
+            // outbox is empty, poll_recv takes the Pending path (and, armed, the probe
+            // panics at the slot registration → the panic path returns Pending).
             assert_eq!(
                 ynz_handle_recv_poll(h, &mut e, &mut o, cx_ptr),
                 CHANNEL_PENDING,
-                "the panic path must surface as Pending (never a crash across the C ABI)"
+                "an empty outbox must surface as Pending (a panic never crashes across the C ABI)"
             );
             assert!(
                 probe.mpsc_clone_seen.load(Ordering::SeqCst),
@@ -922,5 +923,17 @@ mod tests {
             assert_eq!((e, o), (0, 99));
             ynz_handle_free(h);
         }
+    }
+
+    // bug: a panic inside ynz_handle_recv_poll before the waker slot is registered leaves the receiver unwoken, so the task hangs when the child completes (waker not recorded before polling) | tier: High
+    #[test]
+    fn completion_wakes_receiver_after_panic_before_slot_registration() {
+        assert_completion_wakes_receiver(true);
+    }
+
+    // bug: ynz_handle_recv_poll on an empty outbox does not return Pending with the waker recorded before polling, or the child's completion does not wake it, so the receiving task hangs or reads a wrong value | tier: High
+    #[test]
+    fn completion_wakes_receiver_that_polled_an_empty_outbox() {
+        assert_completion_wakes_receiver(false);
     }
 }
