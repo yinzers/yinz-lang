@@ -254,7 +254,10 @@ pub fn run_counted_until_tasks_finish(built: &Built) -> (RunOutput, Counters) {
     run_counted_with_drain_budget(built, Some(TASK_DRAIN_BUDGET_MS))
 }
 
-fn run_counted_with_drain_budget(
+/// [`run_counted`] with the runtime's exit drain budget (`YNZ_SHUTDOWN_TIMEOUT_MS`, in ms) set when
+/// `drain_budget_ms` is `Some`. For a test whose own timing decides what the shutdown cancels
+/// (the recursion-cancellation fixtures pass a short budget so the cancel lands mid-sleep).
+pub fn run_counted_with_drain_budget(
     built: &Built,
     drain_budget_ms: Option<&str>,
 ) -> (RunOutput, Counters) {
